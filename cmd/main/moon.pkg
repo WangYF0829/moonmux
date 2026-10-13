@@ -1,0 +1,19 @@
+// cmd/main —— 命令行入口
+//
+// 这一层只做 I/O 与排版：解析出的命令执行出来，把结果打到 stdout。
+// 参数怎么解释、用法文本长什么样，全在 cli/ 里（纯逻辑、可离线断言）；
+// 容器怎么解析、怎么封装，全在 ogg/ 与 wav/ 里。
+
+import {
+  "moonmux",
+  "moonmux/cli",
+  "moonmux/ogg",
+  "moonbitlang/x/fs",
+  "moonbitlang/core/env",
+}
+
+supported_targets = "native"
+
+options(
+  "is-main": true,
+)
