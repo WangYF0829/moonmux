@@ -1,0 +1,99 @@
+// ogg_wbtest.mbt —— Ogg 容器层的白盒测试
+//
+// 覆盖三类不变量：
+// 1. CRC 算法与 RFC 3533 的参数一致（用权威校验值钉住）；
+// 2. 页的序列化与解析互为逆运算；
+// 3. 重新序列化是幂等的，字段在往返中不漂移。
+
+///|
+/// 逐字节比较两个字节序列。
+fn same_bytes(a : Bytes, b : Bytes) -> Bool {
+  if a.length() != b.length() {
+    return false
+  }
+  let mut i = 0
+  while i < a.length() {
+    if a[i] != b[i] {
+      return false
+    }
+    i = i + 1
+  }
+  true
+}
+
+///|
+/// ASCII "123456789" 在 Ogg CRC 参数下应得 0x89A1897F。
+///
+/// 该值可由 Rocksoft 模型的 CRC-32/POSIX（cksum）反推：
+/// cksum 使用同一多项式与初值，仅末尾异或 0xFFFFFFFF，
+/// 0x765E7680 ^ 0xFFFFFFFF = 0x89A1897F。
+/// 若这里失败，说明参数取错（例如误用了 zlib 的反射版本），
+/// 生成的 Ogg 文件会被所有解码器拒绝。
+test "crc32 matches RFC 3533 parameters" {
+  let data : Bytes = b"123456789"
+  assert_eq(crc32(data), (0x89A1897FU : UInt))
+}
+
+///|
+/// 空输入的 CRC 应为 0（初值为 0 且无字节可异或）。
+test "crc32 of empty input is zero" {
+  assert_eq(crc32(b""), 0U)
+}
+
+///|
+/// 单个页的往返：序列化后解析回来，关键字段应当不变。
+test "page roundtrip preserves fields" {
+  let page : Page = {
+    header_type: flag_bos(),
+    granule_position: 0L,
+    serial: 42U,
+    sequence: 7U,
+    crc: 0U,
+    segments: [3],
+    payload: b"abc",
+  }
+  let bytes = page.to_bytes()
+  match Page::parse(bytes, 0) {
+    Some((parsed, next)) => {
+      assert_eq(next, bytes.length())
+      assert_eq(parsed.serial, 42U)
+      assert_eq(parsed.sequence, 7U)
+      assert_eq(parsed.granule_position, 0L)
+      assert_eq(parsed.segments.length(), 1)
+      assert_eq(parsed.segments[0], 3)
+      assert_true(same_bytes(parsed.payload, b"abc"))
+    }
+    None => assert_true(false)
+  }
+}
+
+///|
+/// 序列化后的页必须携带非零 CRC，且再次序列化结果逐字节相同。
+test "serialization is idempotent" {
+  let page : Page = {
+    header_type: flag_eos(),
+    granule_position: 12345L,
+    serial: 99U,
+    sequence: 1U,
+    crc: 0U,
+    segments: [1, 1],
+    payload: b"xy",
+  }
+  let first = page.to_bytes()
+  match Page::parse(first, 0) {
+    Some((parsed, _)) => {
+      assert_true(parsed.crc != 0U)
+      let second = parsed.to_bytes()
+      assert_true(same_bytes(first, second))
+    }
+    None => assert_true(false)
+  }
+}
+
+///|
+/// 捕获模式识别：只有 "OggS" 才是合法页起点。
+test "capture pattern detection" {
+  assert_true(is_page_start(b"OggS", 0))
+  assert_true(!is_page_start(b"OggX", 0))
+  assert_true(!is_page_start(b"Og", 0))
+}
