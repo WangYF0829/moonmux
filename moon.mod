@@ -21,3 +21,7 @@ keywords = [
 description = "Audio container toolkit in pure MoonBit: Ogg page/packet read and write, CRC-32 verification, WAV parsing, and a demux-to-WAV transcoding pipeline"
 
 preferred_target = "native"
+
+import {
+  "moonbitlang/x@0.5.5",
+}
