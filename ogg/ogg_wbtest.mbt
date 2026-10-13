@@ -97,3 +97,34 @@ test "capture pattern detection" {
   assert_true(!is_page_start(b"OggX", 0))
   assert_true(!is_page_start(b"Og", 0))
 }
+
+///|
+/// CRC 的计算范围必须覆盖整页，**包含开头的捕获模式 "OggS"**。
+///
+/// 这个测试是被真实文件逼出来的：最初的实现把捕获模式排除在计算范围之外，
+/// 页的往返测试、序列化幂等测试全都照常通过 —— 但生成的文件与所有标准
+/// 解码器都不兼容。直到拿真实 Ogg 文件逐页重算 CRC（9/9 与 325/325 全不匹配，
+/// 改成含捕获模式后立刻全对）才暴露出来。
+///
+/// 向量：OggS | ver=0 | type=BOS | granule=0 | serial=1 | seq=0 | crc=0
+///       | nseg=1 | seg=[3] | "ABC"，共 31 字节，正确 CRC = 0x9663CDB4。
+/// 若实现退回到排除捕获模式，这里会得到 0x55CD9637。
+test "crc covers the capture pattern" {
+  let page : Page = {
+    header_type: flag_bos(),
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [3],
+    payload: b"ABC",
+  }
+  let bytes = page.to_bytes()
+  assert_eq(bytes.length(), 31)
+  // CRC 字段位于页内偏移 22，小端序
+  let crc_field = bytes[22].to_int().reinterpret_as_uint() |
+    (bytes[23].to_int().reinterpret_as_uint() << 8) |
+    (bytes[24].to_int().reinterpret_as_uint() << 16) |
+    (bytes[25].to_int().reinterpret_as_uint() << 24)
+  assert_eq(crc_field, (0x9663CDB4U : UInt))
+}

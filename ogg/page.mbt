@@ -137,9 +137,17 @@ pub fn Page::parse(data : Bytes, offset : Int) -> (Page, Int)? {
 }
 
 ///|
-/// 写入页体，即**不含捕获模式**的那部分字节。
+/// 写入捕获模式 "OggS"。
+fn write_capture(buf : Buffer) -> Unit {
+  buf.write_byte((0x4F : Byte))
+  buf.write_byte((0x67 : Byte))
+  buf.write_byte((0x67 : Byte))
+  buf.write_byte((0x53 : Byte))
+}
+
+///|
+/// 写入捕获模式之后的页体。
 ///
-/// 之所以抽成独立函数：CRC 的计算范围恰好就是这段字节。
 /// 构造第一次时 `crc` 传 0 用于计算校验值，构造第二次时传入真实值 ——
 /// 这样就不需要「先写占位再回填」，因为 `Bytes` 本身不可变。
 fn write_body(buf : Buffer, page : Page, crc : UInt) -> Unit {
@@ -158,17 +166,22 @@ fn write_body(buf : Buffer, page : Page, crc : UInt) -> Unit {
 
 ///|
 /// 把页序列化为字节，并写入正确的 CRC 校验值。
+///
+/// CRC 的计算范围是**整个页，包含开头的捕获模式 "OggS"**，
+/// 计算时 CRC 字段自身置零。
+///
+/// 这一点极易搞错，且代价很大：若把捕获模式排除在计算范围之外，
+/// 算出的校验值与所有标准解码器都不一致，生成的文件会被拒绝，
+/// 而自产自销的往返测试却完全发现不了 —— 此处已用真实文件逐页校验过。
 pub fn Page::to_bytes(self : Page) -> Bytes {
-  // 第一步：校验字段置零，算出 CRC
+  // 第一步：整页 CRC 字段置零，算出校验值
   let probe = Buffer()
+  write_capture(probe)
   write_body(probe, self, 0U)
   let checksum = crc32(probe.to_bytes())
   // 第二步：正式构造，填入真实校验值
   let out = Buffer()
-  out.write_byte((0x4F : Byte))
-  out.write_byte((0x67 : Byte))
-  out.write_byte((0x67 : Byte))
-  out.write_byte((0x53 : Byte))
+  write_capture(out)
   write_body(out, self, checksum)
   out.to_bytes()
 }
