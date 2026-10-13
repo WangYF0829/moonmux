@@ -1,0 +1,14 @@
+# MoonBit 构建产物
+_build/
+target/
+.mooncakes/
+
+# 编译输出
+*.wasm
+*.exe
+*.dll
+
+# 编辑器与系统文件
+.DS_Store
+Thumbs.db
+.vscode/
