@@ -16,5 +16,5 @@ pkg.generated.mbti
 Thumbs.db
 .vscode/
 
-# 本地 AI 助手的工作记忆（只留在本机，不进仓库）
+# 本机专用目录（只留在本机，不进仓库）
 .workbuddy/
