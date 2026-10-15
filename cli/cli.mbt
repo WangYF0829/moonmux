@@ -16,6 +16,10 @@ pub(all) enum Command {
   Demux(String, String)
   /// 把目录中的包封装成 Ogg 文件
   Mux(String, String)
+  /// 把多个 Ogg 文件首尾链接（chained）
+  Cat(Array[String], String)
+  /// 把一条链接流按链接点拆成多个 Ogg 文件
+  Split(String, String)
   /// 逐页重算 CRC，报告通过率
   Verify(String)
   /// 把 Ogg（Opus / Vorbis）转码为 WAV
@@ -34,10 +38,13 @@ pub fn usage() -> String {
   "moonmux —— MoonBit 音频容器工具\n" +
   "\n" +
   "用法:\n" +
-  "  moonmux info <file.ogg>          查看容器信息\n" +
+  "  moonmux info <file>              查看容器信息（Ogg 或 WAV）\n" +
   "  moonmux demux <file.ogg> <dir>   按逻辑流拆到目录（每流一个子目录）\n" +
   "  moonmux mux <dir> <out.ogg>      把包封装成 Ogg（子目录即逻辑流）\n" +
-  "  moonmux verify <file.ogg>        逐页校验 CRC\n" +
+  "  moonmux cat <in1.ogg> <in2.ogg> ... <out.ogg>\n" +
+  "                                  把多个 Ogg 首尾链接（chained）\n" +
+  "  moonmux split <file.ogg> <dir>   把链接流按链接点拆开（输出 part1/2…）\n" +
+  "  moonmux verify <file.ogg>        结构体检（CRC / 页序号 / BOS·EOS）\n" +
   "  moonmux to-wav <in.ogg> <out.wav> 转码为 WAV\n" +
   "  moonmux version                  打印版本\n" +
   "  moonmux help                     显示本帮助"
@@ -54,6 +61,13 @@ pub fn usage_for(topic : String) -> String {
   } else if topic == "mux" {
     "用法: moonmux mux <dir> <out.ogg>\n" +
     "  <dir> 下有子目录时，每个子目录是一条逻辑流；否则整目录是一条"
+  } else if topic == "cat" {
+    "用法: moonmux cat <in1.ogg> <in2.ogg> ... <out.ogg>\n" +
+    "  末位参数是输出文件，其余均为输入；至少两个输入"
+  } else if topic == "split" {
+    "用法: moonmux split <file.ogg> <dir>\n" +
+    "  每条物理流写成 <dir>/part1.ogg、part2.ogg……\n" +
+    "  非链接流只写出 part1.ogg，与输入逐字节相同"
   } else if topic == "verify" {
     "用法: moonmux verify <file.ogg>"
   } else if topic == "to-wav" {
@@ -105,6 +119,27 @@ pub fn parse(args : Array[String]) -> Command {
       Command::Bad(arity_msg("mux", n, 2), usage_for("mux"))
     } else {
       Command::Mux(args[1], args[2])
+    }
+  } else if sub == "cat" {
+    // cat 的输入个数不限，但至少要两个输入加一个输出
+    if n < 3 {
+      Command::Bad("cat 需要至少两个输入文件与一个输出文件", usage_for("cat"))
+    } else {
+      let inputs : Array[String] = []
+      let mut i = 1
+      while i < n {
+        inputs.push(args[i])
+        i = i + 1
+      }
+      Command::Cat(inputs, args[n])
+    }
+  } else if sub == "split" {
+    if n < 2 {
+      Command::Bad("split 需要输入文件与输出目录", usage_for("split"))
+    } else if n > 2 {
+      Command::Bad(arity_msg("split", n, 2), usage_for("split"))
+    } else {
+      Command::Split(args[1], args[2])
     }
   } else if sub == "verify" {
     if n < 1 {

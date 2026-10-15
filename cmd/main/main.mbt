@@ -19,57 +19,132 @@ fn read_all(path : String) -> Bytes? {
 }
 
 ///|
-/// `info`：报告一个 Ogg 文件的容器层信息。
+/// `info`：报告容器层信息，自动识别 Ogg 与 WAV。
 ///
 /// 只读容器结构，不解码音频 —— 因此任何格式的 Ogg（Opus、Vorbis、
-/// 甚至非音频的逻辑流）都能给出页数、包数与流号。
+/// 甚至非音频的逻辑流）都能给出页数、包数与流号；
+/// WAV 则给出声道、采样率与时长。
+/// 识别依据是文件头（`OggS` / `RIFF`），不是扩展名。
 fn run_info(path : String) -> Unit {
   match read_all(path) {
     None => ()
     Some(data) => {
-      let pages = @ogg.parse_pages(data)
-      if pages.length() == 0 {
-        println("错误: 不是合法的 Ogg 文件 —— " + path)
-        return
-      }
-      let packets = @ogg.reassemble(pages)
-      println("文件:   " + path)
-      println("字节数: " + data.length().to_string())
-      println("页数:   " + pages.length().to_string())
-      println("包数:   " + packets.length().to_string())
-      // 汇总出现过的逻辑流
-      let serials : Array[UInt] = []
-      for page in pages {
-        let mut seen = false
-        for s in serials {
-          if s == page.serial {
-            seen = true
-          }
+      if @ogg.is_page_start(data, 0) {
+        show_ogg_info(path, data)
+      } else {
+        match @wav.WavFile::parse(data) {
+          Some(f) => show_wav_info(path, data, f)
+          None => println("错误: 既不是 Ogg 也不是 WAV —— " + path)
         }
-        if !seen {
-          serials.push(page.serial)
-        }
-      }
-      println("逻辑流: " + serials.length().to_string())
-      for s in serials {
-        let mut page_count = 0
-        let mut byte_count = 0
-        for page in pages {
-          if page.serial == s {
-            page_count = page_count + 1
-            byte_count = byte_count + page.payload.length()
-          }
-        }
-        println(
-          "  serial=" +
-          s.to_string() +
-          " 页=" +
-          page_count.to_string() +
-          " 负载字节=" +
-          byte_count.to_string(),
-        )
       }
     }
+  }
+}
+
+///|
+/// 打印 Ogg 的容器信息。
+///
+/// 每条逻辑流除了页数与负载字节，还给出「末粒度」——
+/// 该流最后一次出现的粒度位置。粒度就是时间（对音频流而言即采样点数），
+/// 它是容器层能拿到的唯一时长线索；要换算成秒需要知道采样率，
+/// 那属于编码层的信息，这里不猜。
+///
+/// 物理流与逻辑流是两层：一个文件里可以串接多条物理流（链接流），
+/// 每条物理流里再交织多条逻辑流。链接流要单独说明 ——
+/// 它的页数、包数是所有段的总和，只看总数会以为是一条很长的流。
+fn show_ogg_info(path : String, data : Bytes) -> Unit {
+  let pages = @ogg.parse_pages(data)
+  if pages.length() == 0 {
+    println("错误: 不是合法的 Ogg 文件 —— " + path)
+    return
+  }
+  let packets = @ogg.reassemble(pages)
+  println("文件:   " + path)
+  println("格式:   Ogg")
+  println("字节数: " + data.length().to_string())
+  println("页数:   " + pages.length().to_string())
+  println("包数:   " + packets.length().to_string())
+  let chains = @ogg.split_chains(pages)
+  println("物理流: " + chains.length().to_string())
+  let serials = @ogg.serials_of(pages)
+  println("逻辑流: " + serials.length().to_string())
+  for s in serials {
+    let mut page_count = 0
+    let mut byte_count = 0
+    let mut last_granule : Int64 = -1L
+    let mut has_granule = false
+    for page in pages {
+      if page.serial == s {
+        page_count = page_count + 1
+        byte_count = byte_count + page.payload.length()
+        // -1 表示本页没有包结束，不代表时间
+        if page.granule_position >= 0L {
+          last_granule = page.granule_position
+          has_granule = true
+        }
+      }
+    }
+    let mut line = "  serial=" +
+      s.to_string() +
+      " 页=" +
+      page_count.to_string() +
+      " 负载字节=" +
+      byte_count.to_string()
+    if has_granule {
+      line = line + " 末粒度=" + last_granule.to_string()
+    }
+    println(line)
+  }
+  // 链接流逐段列出：段与段之间没有共享的流号，
+  // 光看总数看不出这份文件其实是好几段拼起来的
+  if chains.length() > 1 {
+    let mut ci = 0
+    while ci < chains.length() {
+      let part = chains[ci]
+      println(
+        "  第 " +
+        (ci + 1).to_string() +
+        " 段: " +
+        part.length().to_string() +
+        " 页 / " +
+        @ogg.serials_of(part).length().to_string() +
+        " 条逻辑流 / " +
+        @ogg.reassemble(part).length().to_string() +
+        " 包",
+      )
+      ci = ci + 1
+    }
+    println("  （链接流：以上各段首尾相接，段间流号互不复用）")
+  }
+}
+
+///|
+/// 打印 WAV 的容器信息。
+///
+/// 时长按帧数换算：帧数 = PCM 字节数 ÷（声道 × 位深/8），
+/// 秒 = 帧数 ÷ 采样率。全部用整数算，避免浮点把「6 秒」显示成 5.999。
+fn show_wav_info(path : String, data : Bytes, f : @wav.WavFile) -> Unit {
+  println("文件:   " + path)
+  println("格式:   WAV（RIFF/PCM）")
+  println("字节数: " + data.length().to_string())
+  println("声道:   " + f.format.channels.to_string())
+  println("采样率: " + f.format.sample_rate.to_string() + " Hz")
+  println("位深:   " + f.format.bits_per_sample.to_string() + " 位")
+  println("PCM:    " + f.data.length().to_string() + " 字节")
+  let frame_size = f.format.channels * (f.format.bits_per_sample / 8)
+  if frame_size > 0 && f.format.sample_rate > 0 {
+    let frames = f.data.length() / frame_size
+    let whole = frames / f.format.sample_rate
+    let frac = (frames % f.format.sample_rate) * 100 / f.format.sample_rate
+    println(
+      "帧数:   " +
+      frames.to_string() +
+      "（约 " +
+      whole.to_string() +
+      "." +
+      pad2(frac) +
+      " 秒）",
+    )
   }
 }
 
@@ -308,11 +383,125 @@ fn run_mux(dir : String, out : String) -> Unit {
 }
 
 ///|
-/// `verify`：逐页重算 CRC，报告通过率。
+/// `cat`：把多个 Ogg 文件首尾链接成一条物理流（chained bitstream）。
 ///
-/// 这是独立于序列化路径的再次计算：对文件里每一页的字节重算校验值，
-/// 与页头存着的 `crc` 字段比对。它是判断「文件是容器损坏还是编码问题」
-/// 的第一道分诊 —— 损坏的页会被精确指出来，而不是留到解码阶段才爆发。
+/// 链接规则在容器层 `chain` 里：流号不冲突时原样透传（字节级无损），
+/// 冲突时后一方的相撞流换新流号重新分页。这里只做 I/O 与逐个衔接，
+/// 中途有一个文件读不出或不是 Ogg，就整趟不出（半截链没有意义）。
+fn run_cat(inputs : Array[String], out : String) -> Unit {
+  let mut acc : Array[@ogg.Page] = []
+  let mut ok = true
+  let mut i = 0
+  while ok && i < inputs.length() {
+    match read_all(inputs[i]) {
+      None => ok = false
+      Some(data) => {
+        let pages = @ogg.parse_pages(data)
+        if pages.length() == 0 {
+          println("错误: 不是合法的 Ogg 文件 —— " + inputs[i])
+          ok = false
+        } else {
+          match @ogg.chain(acc, pages) {
+            Err(msg) => {
+              println("错误: 链接失败 —— " + msg)
+              ok = false
+            }
+            Ok(merged) => acc = merged
+          }
+        }
+      }
+    }
+    i = i + 1
+  }
+  if ok {
+    @fs.write_bytes_to_file(out, @ogg.serialize_pages(acc)) catch {
+      IOError(msg) => {
+        println("错误: 无法写入 " + out + " —— " + msg)
+        return
+      }
+    }
+    println(
+      "已链接 " +
+      inputs.length().to_string() +
+      " 个文件 / " +
+      acc.length().to_string() +
+      " 页 / " +
+      @ogg.serials_of(acc).length().to_string() +
+      " 条逻辑流到 " +
+      out,
+    )
+  }
+}
+
+///|
+/// `split`：把一条链接流按链接点拆成各自独立的 Ogg 文件。
+///
+/// 切分依据与重写与否全在容器层 `split_chains` 里，这里只做 I/O：
+/// 每段写成 `<dir>/part1.ogg`、`part2.ogg`…… 页对象原样沿用，
+/// 字节与 CRC 一个都不动 —— 非链接流因此得到的 part1 与输入逐字节相同。
+/// 拆开是有用的：链接流的各段互不共享流号，播放器按段重新初始化解码器，
+/// 单独取出其中一段交给下游工具时，其余段是多余的负担。
+fn run_split(src : String, dir : String) -> Unit {
+  match read_all(src) {
+    None => ()
+    Some(data) => {
+      let pages = @ogg.parse_pages(data)
+      if pages.length() == 0 {
+        println("错误: 不是合法的 Ogg 文件 —— " + src)
+        return
+      }
+      let parts = @ogg.split_chains(pages)
+      if !@fs.path_exists(dir) {
+        @fs.create_dir(dir) catch {
+          IOError(msg) => {
+            println("错误: 无法创建目录 " + dir + " —— " + msg)
+            return
+          }
+        }
+      }
+      let mut i = 0
+      let mut ok = true
+      while ok && i < parts.length() {
+        let name = dir + "/part" + (i + 1).to_string() + ".ogg"
+        @fs.write_bytes_to_file(name, @ogg.serialize_pages(parts[i])) catch {
+          IOError(msg) => {
+            println("错误: 无法写入 " + name + " —— " + msg)
+            ok = false
+          }
+        }
+        if ok {
+          println(
+            "  part" +
+            (i + 1).to_string() +
+            ".ogg  " +
+            parts[i].length().to_string() +
+            " 页 / " +
+            @ogg.serials_of(parts[i]).length().to_string() +
+            " 条逻辑流",
+          )
+        }
+        i = i + 1
+      }
+      if ok {
+        if parts.length() == 1 {
+          println(
+            "该文件不是链接流，已原样写出到 " + dir + "/part1.ogg",
+          )
+        } else {
+          println("已拆出 " + parts.length().to_string() + " 条物理流到 " + dir)
+        }
+      }
+    }
+  }
+}
+
+///|
+/// `verify`：对 Ogg 文件做完整体检。
+///
+/// CRC 逐页重算（独立于序列化路径的再计算），结构层查四件事：
+/// 段表与负载是否一致、每条流的页序号是否连续、首末页 BOS / EOS 是否到位。
+/// CRC 全绿只说明字节没坏 —— 页序号跳号意味着丢页，缺 BOS / EOS
+/// 意味着头尾被截，这些都要到播放时才出症状，这里提前指出来。
 fn run_verify(path : String) -> Unit {
   match read_all(path) {
     None => ()
@@ -331,14 +520,38 @@ fn run_verify(path : String) -> Unit {
           bad = bad + 1
         }
       }
+      let problems = @ogg.structure_problems(pages)
       println("文件:     " + path)
       println("字节数:   " + data.length().to_string())
       println("页数:     " + pages.length().to_string())
+      println("物理流:   " + @ogg.split_chains(pages).length().to_string())
+      println("逻辑流:   " + @ogg.serials_of(pages).length().to_string())
       println("CRC 通过: " + ok.to_string() + "  失败: " + bad.to_string())
-      if bad == 0 {
-        println("结论:     全部页 CRC 自洽")
+      println("结构问题: " + problems.length().to_string())
+      // 只铺前 10 条：坏了大半的文件逐条打出来只会淹没结论，
+      // 但省略要明说 —— 闷声少报等于把问题藏起来
+      let mut shown = 0
+      for p in problems {
+        if shown < 10 {
+          println("  - " + p)
+          shown = shown + 1
+        }
+      }
+      if problems.length() > 10 {
+        println(
+          "  ……另有 " +
+          (problems.length() - 10).to_string() +
+          " 处（以上为前 10 处）",
+        )
+      }
+      if bad == 0 && problems.length() == 0 {
+        println("结论:     结构完好（CRC、页序号、BOS·EOS 全部自洽）")
       } else {
-        println("结论:     有 " + bad.to_string() + " 页 CRC 不匹配，文件已损坏")
+        println(
+          "结论:     共 " +
+          (bad + problems.length()).to_string() +
+          " 处问题",
+        )
       }
     }
   }
@@ -405,6 +618,16 @@ fn pad6(n : Int) -> String {
 }
 
 ///|
+/// 把不足 10 的数补一位零。
+fn pad2(n : Int) -> String {
+  if n < 10 {
+    "0" + n.to_string()
+  } else {
+    n.to_string()
+  }
+}
+
+///|
 /// 入口：剥掉 argv[0]，其余交给 cli 解析。
 fn main {
   let argv = @env.args()
@@ -418,6 +641,8 @@ fn main {
     @cli.Command::Info(path) => run_info(path)
     @cli.Command::Demux(src, dir) => run_demux(src, dir)
     @cli.Command::Mux(dir, out) => run_mux(dir, out)
+    @cli.Command::Cat(inputs, out) => run_cat(inputs, out)
+    @cli.Command::Split(src, dir) => run_split(src, dir)
     @cli.Command::Verify(path) => run_verify(path)
     @cli.Command::ToWav(src, out) => run_towav(src, out)
     @cli.Command::Version => println(@moonmux.describe())
