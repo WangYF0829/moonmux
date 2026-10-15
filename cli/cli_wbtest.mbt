@@ -159,3 +159,67 @@ test "verify arity" {
     _ => assert_true(false)
   }
 }
+
+///|
+/// `cat` 的输入个数不限，但「至少两个输入 + 一个输出」要卡住：
+/// 少于这个数就没有「链接」可言，静默按单文件处理只会让用户误以为拼上了。
+///
+/// 末位参数是输出文件 —— 这与 `demux` / `mux` / `to-wav` 的
+/// 「输入在前、输出在后」约定一致。
+test "cat arity" {
+  match parse(["cat"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["cat", "a.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["cat", "a.ogg", "out.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["cat", "a.ogg", "b.ogg", "out.ogg"]) {
+    Command::Cat(inputs, out) => {
+      assert_eq(inputs.length(), 2)
+      assert_eq(inputs[0], "a.ogg")
+      assert_eq(inputs[1], "b.ogg")
+      assert_eq(out, "out.ogg")
+    }
+    _ => assert_true(false)
+  }
+  // 三个输入也要能收下
+  match parse(["cat", "a.ogg", "b.ogg", "c.ogg", "out.ogg"]) {
+    Command::Cat(inputs, out) => {
+      assert_eq(inputs.length(), 3)
+      assert_eq(inputs[2], "c.ogg")
+      assert_eq(out, "out.ogg")
+    }
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// `split` 是 `cat` 的逆操作，参数形态与 `demux` 一致（输入 + 输出目录）。
+test "split arity" {
+  match parse(["split"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["split", "a.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["split", "a.ogg", "outdir"]) {
+    Command::Split(a, b) => {
+      assert_eq(a, "a.ogg")
+      assert_eq(b, "outdir")
+    }
+    _ => assert_true(false)
+  }
+  // 多给参数照旧要报错
+  match parse(["split", "a.ogg", "outdir", "extra"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}
