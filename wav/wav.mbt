@@ -32,12 +32,16 @@ fn rd_u16(data : Bytes, offset : Int) -> Int {
 }
 
 ///|
-/// 小端读取 32 位无符号整数。
-fn rd_u32(data : Bytes, offset : Int) -> Int {
-  data[offset].to_int() |
-  (data[offset + 1].to_int() << 8) |
-  (data[offset + 2].to_int() << 16) |
-  (data[offset + 3].to_int() << 24)
+/// 小端读取 32 位无符号整数，以 Int64 返回。
+///
+/// 必须用 64 位承接：MoonBit 的 `Int` 是 32 位有符号，
+/// 长度字段的最高位一旦置 1（如 0x80000000），用 `Int` 读出来就是负数，
+/// 会绕过「块声明长度超出实际数据」的边界检查，把损坏文件静默当成空数据放行。
+fn rd_u32(data : Bytes, offset : Int) -> Int64 {
+  data[offset].to_int().to_int64() |
+  (data[offset + 1].to_int().to_int64() << 8) |
+  (data[offset + 2].to_int().to_int64() << 16) |
+  (data[offset + 3].to_int().to_int64() << 24)
 }
 
 ///|
@@ -67,38 +71,55 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
   if !tag_is(bytes, 8, 0x57, 0x41, 0x56, 0x45) {
     return None
   }
+  // RIFF 长度字段 = 文件总长 - 8。此前这个字段被完全忽略，
+  // 于是「长度字段被改坏」或「文件被截断」的文件照样能解析通过，
+  // 交给下游当作合法音频。这里至少挡住截断这一类。
+  let riff_size = rd_u32(bytes, 4)
+  if riff_size < 4L {
+    return None
+  }
+  if riff_size + 8L > bytes.length().to_int64() {
+    return None
+  }
   let mut pos = 12
   let mut format : WavFormat? = None
   let mut pcm : Bytes? = None
   while pos + 8 <= bytes.length() {
     let size = rd_u32(bytes, pos + 4)
     let body = pos + 8
-    if body + size > bytes.length() {
+    if body.to_int64() + size > bytes.length().to_int64() {
       // 块声明的长度超出实际数据，视为损坏
       return None
     }
     if tag_is(bytes, pos, 0x66, 0x6D, 0x74, 0x20) {
       // "fmt "
-      if size < 16 {
+      if size < 16L {
         return None
       }
       let channels = rd_u16(bytes, body + 2)
-      let sample_rate = rd_u32(bytes, body + 4)
+      let sample_rate = rd_u32(bytes, body + 4).to_int()
       let bits_per_sample = rd_u16(bytes, body + 14)
+      // 声道数、采样率、位深为 0 都不是可用的音频格式。
+      // 放过去的话，下游按 block_align = 0 去切帧会得到无穷循环或空结果。
+      if channels == 0 || sample_rate == 0 || bits_per_sample == 0 {
+        return None
+      }
       format = Some({ channels, sample_rate, bits_per_sample })
     } else if tag_is(bytes, pos, 0x64, 0x61, 0x74, 0x61) {
-      // "data"
+      // "data"。经过上面的边界检查后 size 必然小于等于文件长度，
+      // 此时转回 Int 是安全的。
+      let n = size.to_int()
       let acc = Buffer()
       let mut i = 0
-      while i < size {
+      while i < n {
         acc.write_byte(bytes[body + i])
         i = i + 1
       }
       pcm = Some(acc.to_bytes())
     }
     // 块对齐到偶数字节
-    pos = body + size
-    if size % 2 == 1 {
+    pos = body + size.to_int()
+    if size % 2L == 1L {
       pos = pos + 1
     }
   }

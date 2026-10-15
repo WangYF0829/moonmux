@@ -87,3 +87,75 @@ test "version and help take no arguments" {
     _ => assert_true(false)
   }
 }
+
+///|
+/// 多余的参数必须被报错，而不是静默忽略。
+///
+/// 这是同类入口最常见的 bug，也是本项目设计文档点名要钉住的一类：
+/// 用户以为自己改了参数，程序却按默认行为跑完，结果与预期不符却无任何提示。
+test "extra arguments are rejected, not ignored" {
+  match parse(["info", "a.ogg", "extra"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["demux", "a.ogg", "dir", "extra"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["mux", "dir", "out.ogg", "extra"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["version", "junk"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["help", "junk"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// `to-wav` 子命令的参数个数。
+test "to-wav arity" {
+  match parse(["to-wav"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["to-wav", "a.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["to-wav", "a.ogg", "b.wav"]) {
+    Command::ToWav(a, b) => {
+      assert_eq(a, "a.ogg")
+      assert_eq(b, "b.wav")
+    }
+    _ => assert_true(false)
+  }
+  match parse(["to-wav", "a.ogg", "b.wav", "c"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// `verify` 子命令的参数个数。
+test "verify arity" {
+  match parse(["verify"]) {
+    Command::Bad(msg, usage) => {
+      assert_true(msg.length() > 0)
+      assert_true(usage.length() > 0)
+    }
+    _ => assert_true(false)
+  }
+  match parse(["verify", "a.ogg"]) {
+    Command::Verify(p) => assert_eq(p, "a.ogg")
+    _ => assert_true(false)
+  }
+  match parse(["verify", "a.ogg", "b.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}

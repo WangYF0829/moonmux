@@ -128,3 +128,80 @@ test "crc covers the capture pattern" {
     (bytes[25].to_int().reinterpret_as_uint() << 24)
   assert_eq(crc_field, (0x9663CDB4U : UInt))
 }
+
+///|
+/// 独立的 CRC 校验路径：`expected_crc` 算出的值必须与序列化时写入的一致。
+test "expected_crc matches the stored crc" {
+  let page : Page = {
+    header_type: 0,
+    granule_position: 999L,
+    serial: 12345U,
+    sequence: 8U,
+    crc: 0U,
+    segments: [4],
+    payload: b"data",
+  }
+  let bytes = page.to_bytes()
+  match Page::parse(bytes, 0) {
+    Some((parsed, _)) => {
+      assert_eq(parsed.expected_crc(), parsed.crc)
+      assert_true(page_crc_ok(parsed))
+    }
+    None => assert_true(false)
+  }
+}
+
+///|
+/// 负载被改动一个字节后，`page_crc_ok` 必须报否 ——
+/// 这正是 `verify` 命令据以定位损坏页的判据。
+test "page_crc_ok rejects tampered payload" {
+  let page : Page = {
+    header_type: 0,
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [3],
+    payload: b"abc",
+  }
+  let parsed = match Page::parse(page.to_bytes(), 0) {
+    Some((p, _)) => p
+    None => page
+  }
+  assert_true(page_crc_ok(parsed))
+  // 沿用原有 crc 字段，但负载换了一个字节
+  let tampered : Page = {
+    header_type: 0,
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 0U,
+    crc: parsed.crc,
+    segments: [3],
+    payload: b"abd",
+  }
+  assert_true(!page_crc_ok(tampered))
+}
+
+///|
+/// 调用方传入负偏移时必须安全拒绝，而不是索引到负数位置直接崩掉。
+test "negative offset is rejected safely" {
+  assert_true(!is_page_start(b"OggS", -1))
+  assert_true(!is_page_start(b"", -100))
+  match Page::parse(b"OggS", -1) {
+    None => assert_true(true)
+    Some(_) => assert_true(false)
+  }
+  let page : Page = {
+    header_type: 0,
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [3],
+    payload: b"abc",
+  }
+  match Page::parse(page.to_bytes(), -7) {
+    None => assert_true(true)
+    Some(_) => assert_true(false)
+  }
+}

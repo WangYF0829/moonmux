@@ -60,3 +60,62 @@ test "format fields survive mono 8-bit" {
     None => assert_true(false)
   }
 }
+
+///|
+/// RIFF 长度字段声称的尺寸超出文件实际长度时必须拒绝。
+///
+/// 修复前这个字段被完全忽略：把它改成 0xFFFFFFFF 也照样解析通过。
+test "reject wav whose riff size exceeds the file" {
+  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 16 }
+  let good = encode_wav(fmt, b"abcdefgh")
+  let buf = Buffer()
+  let mut i = 0
+  while i < good.length() {
+    if i >= 4 && i < 8 {
+      buf.write_byte((0xFF : Byte))
+    } else {
+      buf.write_byte(good[i])
+    }
+    i = i + 1
+  }
+  match WavFile::parse(buf.to_bytes()) {
+    None => assert_true(true)
+    Some(_) => assert_true(false)
+  }
+}
+
+///|
+/// 声道数、采样率、位深为 0 不是可用格式，应当拒绝。
+test "reject wav with zero format fields" {
+  let bad : WavFormat = { channels: 0, sample_rate: 0, bits_per_sample: 0 }
+  match WavFile::parse(encode_wav(bad, b"\x00\x00")) {
+    None => assert_true(true)
+    Some(_) => assert_true(false)
+  }
+}
+
+///|
+/// 块长度字段的高位被置 1 时必须拒绝，而不是当成负数放行。
+///
+/// 修复前 `rd_u32` 用 32 位有符号 `Int` 读长度：0x80000000 读出来是负数，
+/// 「声明长度超出实际数据」的检查被绕过，copy 循环直接跳过，
+/// 最后返回一个 data 为空的「合法」文件 —— 静默的错误接受。
+test "reject wav whose data chunk size sets the sign bit" {
+  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 16 }
+  let good = encode_wav(fmt, b"abcdefgh")
+  // data 块长度字段在偏移 40..44，篡改为 0x80000000（小端）
+  let buf = Buffer()
+  let mut i = 0
+  while i < good.length() {
+    if i == 43 {
+      buf.write_byte((0x80 : Byte))
+    } else {
+      buf.write_byte(good[i])
+    }
+    i = i + 1
+  }
+  match WavFile::parse(buf.to_bytes()) {
+    None => assert_true(true)
+    Some(_) => assert_true(false)
+  }
+}
