@@ -41,3 +41,13 @@ pub fn crc32(data : Bytes) -> UInt {
 pub fn verify_page(page_bytes : Bytes, expected : UInt) -> Bool {
   crc32(page_bytes) == expected
 }
+
+///|
+/// 校验一个已解析的页：页里存着的 `crc` 字段是否与重算结果一致。
+///
+/// 这是独立于序列化路径的再次计算。用自产自销的往返测试，
+/// 「写出去的页其实不合规」是发现不了的 —— 只有拿外部文件、
+/// 或对已有字节重算一遍，才能证伪。
+pub fn page_crc_ok(page : Page) -> Bool {
+  page.expected_crc() == page.crc
+}

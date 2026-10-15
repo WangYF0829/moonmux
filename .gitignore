@@ -3,6 +3,9 @@ _build/
 target/
 .mooncakes/
 
+# 工具链生成的包接口快照（每次构建都会重新生成）
+pkg.generated.mbti
+
 # 编译输出
 *.wasm
 *.exe
@@ -12,3 +15,6 @@ target/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# 本地 AI 助手的工作记忆（只留在本机，不进仓库）
+.workbuddy/

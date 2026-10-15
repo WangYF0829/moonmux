@@ -71,7 +71,11 @@ fn read_u64_le(data : Bytes, offset : Int) -> UInt64 {
 
 ///|
 /// 判断 `offset` 处是否为 Ogg 页的捕获模式 "OggS"。
+///
+/// `offset` 来自调用方，必须先挡掉负值 —— 否则 `offset + 4 <= 长度`
+/// 这类上界检查拦不住它，索引到负数会在运行时直接崩掉。
 pub fn is_page_start(data : Bytes, offset : Int) -> Bool {
+  offset >= 0 &&
   offset + 4 <= data.length() &&
   data[offset].to_int() == 0x4F &&
   data[offset + 1].to_int() == 0x67 &&
@@ -165,23 +169,27 @@ fn write_body(buf : Buffer, page : Page, crc : UInt) -> Unit {
 }
 
 ///|
-/// 把页序列化为字节，并写入正确的 CRC 校验值。
-///
-/// CRC 的计算范围是**整个页，包含开头的捕获模式 "OggS"**，
+/// 重算一页应有的 CRC 校验值：范围覆盖**整个页，包含开头的捕获模式 "OggS"**，
 /// 计算时 CRC 字段自身置零。
 ///
 /// 这一点极易搞错，且代价很大：若把捕获模式排除在计算范围之外，
 /// 算出的校验值与所有标准解码器都不一致，生成的文件会被拒绝，
 /// 而自产自销的往返测试却完全发现不了 —— 此处已用真实文件逐页校验过。
-pub fn Page::to_bytes(self : Page) -> Bytes {
-  // 第一步：整页 CRC 字段置零，算出校验值
+///
+/// 只算不写，因此可以用来**校验**从外部拿到的文件：
+/// 把结果与该页里存着的 `crc` 字段比较即可（见 `page_crc_ok`）。
+pub fn Page::expected_crc(self : Page) -> UInt {
   let probe = Buffer()
   write_capture(probe)
   write_body(probe, self, 0U)
-  let checksum = crc32(probe.to_bytes())
-  // 第二步：正式构造，填入真实校验值
+  crc32(probe.to_bytes())
+}
+
+///|
+/// 把页序列化为字节，并写入正确的 CRC 校验值。
+pub fn Page::to_bytes(self : Page) -> Bytes {
   let out = Buffer()
   write_capture(out)
-  write_body(out, self, checksum)
+  write_body(out, self, self.expected_crc())
   out.to_bytes()
 }

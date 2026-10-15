@@ -24,11 +24,12 @@ moonmux 补的就是最后两行。
 
 | 模块 | 内容 | 状态 |
 |---|---|---|
-| `ogg/` | Ogg 页、段、包的解析与序列化；Ogg 专用 CRC-32 校验 | 开发中 |
-| `wav/` | WAV（RIFF/PCM）读写 | 规划中 |
-| `cmd/main/` | 命令行工具：`info`、`demux`、`mux` | 规划中 |
+| `ogg/` | Ogg 页、段、包的解析与序列化；Ogg 专用 CRC-32 校验；多逻辑流的分组与交织 | 已完成 |
+| `wav/` | WAV（RIFF/PCM）读写 | 已完成 |
+| `pipeline/` | Ogg（Opus / Vorbis）→ WAV 转码管线 | 已完成 |
+| `cmd/main/` | 命令行工具：`info`、`demux`、`mux`、`verify`、`to-wav` | 已完成 |
 
-设计上刻意**不依赖任何三方包**：容器格式的正确性应当能被独立验证，不该被解码器的缺陷掩盖。解码环节留给生态中已有的解码器，通过转码管线对接。
+**容器层（`ogg/`、`wav/`）不依赖任何三方包**：容器格式的正确性应当能被独立验证，不该被解码器的缺陷掩盖。解码环节留给生态中已有的纯 MoonBit 解码器（`LL728/moonopus`、`LL728/moonvorbis`），通过 `pipeline/` 对接 —— 三方依赖被隔离在这一层，不在容器层。
 
 ## 构建与测试
 
@@ -53,17 +54,31 @@ moon test
 
 ## 使用
 
-命令行工具规划中的用法：
+命令行工具的用法：
 
 ```sh
-# 查看容器信息（流数、页数、包数、时长）
+# 查看容器信息（流数、页数、包数、负载字节）
 moonmux info input.ogg
 
-# 解复用：把包拆出来
+# 逐页校验 CRC，报告通过率（判断是容器损坏还是编码问题）
+moonmux verify input.ogg
+
+# 解复用：按逻辑流拆出包，每条流一个子目录（s1/、s2/……）
 moonmux demux input.ogg ./packets/
 
 # 复用：把包重新封装成 Ogg
+#   目录里有子目录 → 每个子目录一条逻辑流，按 Ogg 规则交织（BOS 页置顶、数据页按粒度升序）
+#   目录里没有子目录 → 整个目录一条逻辑流
 moonmux mux ./packets/ output.ogg
+
+# 转码：Ogg（Opus / Vorbis）→ WAV（16 位 PCM）
+moonmux to-wav input.ogg output.wav
+```
+
+构建命令行工具需要 native 后端（MSVC）：
+
+```sh
+moon build --target native
 ```
 
 ## 项目结构
@@ -74,11 +89,16 @@ moonmux/
 ├── moon.pkg           根包
 ├── moonmux.mbt        模块级描述
 ├── ogg/               Ogg 容器
-│   ├── crc.mbt        CRC-32（RFC 3533 参数）
+│   ├── crc.mbt        CRC-32（RFC 3533 参数）与页校验
 │   ├── page.mbt       页的解析与序列化
-│   └── packet.mbt     包重组
+│   ├── packet.mbt     包重组与页切分
+│   ├── mux.mbt        多逻辑流的分组与交织
+│   └── stream.mbt     字节流 ↔ 页序列
 ├── wav/               WAV 容器
+├── pipeline/          转码管线（唯一引入三方解码器的包）
+├── cli/               命令行参数解析（纯逻辑）
 ├── cmd/main/          命令行入口
+├── testdata/          真实音频样本
 └── docs/design.md     设计说明
 ```
 
@@ -91,7 +111,16 @@ moonmux/
 
 ## 开发状态
 
-本项目为 2026 MoonBit 黑客松十月赛参赛作品，开发中。当前进度与后续计划见 `docs/design.md`。
+本项目为 2026 MoonBit 黑客松十月赛参赛作品，开发中。
+
+已可用：Ogg 容器读写（含多逻辑流的分组与交织写出）、WAV 读写、
+Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测），
+`info` / `demux` / `mux` / `verify` / `to-wav` 五个子命令，
+49 个测试通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+双逻辑流交织—还原往返验证与转码验证。
+
+尚未完成：MP4 / ISOBMFF 的封装；WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器）。
+详见 `docs/design.md`。
 
 ## 许可证
 
