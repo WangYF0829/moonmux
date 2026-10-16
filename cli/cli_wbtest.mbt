@@ -223,3 +223,70 @@ test "split arity" {
     _ => assert_true(false)
   }
 }
+
+///|
+/// `extract` 的参数个数，以及序号参数必须是正整数。
+///
+/// 序号写错（`0`、`-1`、`1.0`、`one`、空串）时必须在**解析阶段**就报错，
+/// 而不是拿一个莫名其妙的数去取流、再报出「找不到第 0 条逻辑流」——
+/// 后者把「参数写错了」说成「文件不对」，是最难查的一类误导。
+test "extract arity and positive index" {
+  match parse(["extract"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["extract", "a.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["extract", "a.ogg", "2"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["extract", "a.ogg", "2", "out.ogg"]) {
+    Command::Extract(src, n, out) => {
+      assert_eq(src, "a.ogg")
+      assert_eq(n, 2)
+      assert_eq(out, "out.ogg")
+    }
+    _ => assert_true(false)
+  }
+  // 多位数也要收下
+  match parse(["extract", "a.ogg", "12", "out.ogg"]) {
+    Command::Extract(_, n, _) => assert_eq(n, 12)
+    _ => assert_true(false)
+  }
+  // 非正整数一律在解析阶段拒绝，并说明实际收到了什么
+  for bad in ["0", "-1", "1.0", "one", "01x", "+2", "1 2"] {
+    match parse(["extract", "a.ogg", bad, "out.ogg"]) {
+      Command::Bad(msg, _) => assert_true(msg.contains(bad))
+      _ => assert_true(false)
+    }
+  }
+  // 空串单独断言：报错里确实带上了那个空的位置，只是没法用「包含空串」来验
+  match parse(["extract", "a.ogg", "", "out.ogg"]) {
+    Command::Bad(msg, _) => assert_true(msg.length() > 0)
+    _ => assert_true(false)
+  }
+  match parse(["extract", "a.ogg", "1", "out.ogg", "extra"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// `dump` 只吃一个文件参数。
+test "dump arity" {
+  match parse(["dump"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["dump", "a.ogg"]) {
+    Command::Dump(p) => assert_eq(p, "a.ogg")
+    _ => assert_true(false)
+  }
+  match parse(["dump", "a.ogg", "b.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}

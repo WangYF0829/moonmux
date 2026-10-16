@@ -76,3 +76,73 @@ test "ogg_to_wav returns an error for unknown codec" {
     _ => assert_true(false)
   }
 }
+
+///|
+/// 识别看的是**逻辑流**而不是「文件里的第一个包」。
+///
+/// 多流文件的第一条流未必是音频（Ogg Skeleton 的骨架流就排在前面），
+/// 只看第一个包会把它认成音频格式然后解码失败。
+test "detect skips non-audio streams and finds the audio one" {
+  let built = @ogg.mux_streams([
+    {
+      serial: 1U,
+      packets: [{ data: b"fishead", granule_position: 0L, serial: 1U }],
+    },
+    {
+      serial: 2U,
+      packets: [{ data: b"OpusHead", granule_position: 0L, serial: 2U }],
+    },
+  ])
+  let pages = match built {
+    Ok(p) => p
+    Err(_) => []
+  }
+  match detect(@ogg.serialize_pages(pages)) {
+    Ok(Codec::Opus) => assert_true(true)
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// 一条流的首包不是音频标识包时，转码要在报错里点明是**哪一段**。
+///
+/// 链接流的失败必须能定位到段 —— 「第 3 段没有音频流」和
+/// 「这个文件没有音频流」对使用者来说是两个完全不同的问题。
+test "ogg_to_wav names the segment without an audio stream" {
+  let blob = page_with(b"RandomJunk")
+  match ogg_to_wav(blob) {
+    Err(msg) => {
+      assert_true(msg.contains("第 1 段"))
+      assert_true(msg.contains("OpusHead"))
+    }
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// 抽流交给解码器之前，页是一条不多一条不少的 —— 用容器层复核一遍。
+///
+/// 这条钉住的是「转码前先抽成单流」这一步：若抽流时把别的流的页
+/// 也带了进去，解码器就会看到不属于自己的包。
+test "the stream handed to the decoder holds only that stream" {
+  let built = @ogg.mux_streams([
+    {
+      serial: 4U,
+      packets: [{ data: b"OpusHead", granule_position: 0L, serial: 4U }],
+    },
+    {
+      serial: 5U,
+      packets: [{ data: b"\x01vorbis", granule_position: 0L, serial: 5U }],
+    },
+  ])
+  let pages = match built {
+    Ok(p) => p
+    Err(_) => []
+  }
+  let taken = @ogg.stream_pages(pages, 4U)
+  assert_eq(@ogg.serials_of(taken).length(), 1)
+  assert_eq(taken[0].serial, 4U)
+  let reparsed = @ogg.parse_pages(@ogg.serialize_pages(taken))
+  assert_eq(@ogg.structure_problems(reparsed).length(), 0)
+  assert_eq(@ogg.reassemble(reparsed)[0].data.length(), 8)
+}
