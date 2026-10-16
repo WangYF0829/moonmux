@@ -251,3 +251,56 @@ test "serialized pages pass independent crc check" {
     assert_true(page_crc_ok(p))
   }
 }
+
+///|
+/// 一页内的多个包，只有**最后一个**携带该页的粒度位置。
+///
+/// RFC 3533 规定页头的 granule 属于本页最后一个完整结束的包，同页其余包的
+/// 粒度是 -1。曾经把页的值复制给每一个包 —— 那样在重新分页时，这些包会
+/// 各自带出同一个粒度，页数与时间轴双双失真，而错误在本文件内部看不出来，
+/// 只有把它们重新封装成页之后才暴露。
+test "only the last packet on a page carries the granule" {
+  let page : Page = {
+    header_type: flag_bos(),
+    granule_position: 100L,
+    serial: 1U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [1, 1, 1],
+    payload: b"abc",
+  }
+  let packets = reassemble([page])
+  assert_eq(packets.length(), 3)
+  assert_eq(packets[0].granule_position, -1L)
+  assert_eq(packets[1].granule_position, -1L)
+  assert_eq(packets[2].granule_position, 100L)
+}
+
+///|
+/// 多页之间粒度不串台：每页的粒度只落在该页最后一个结束的包上，
+/// 既不下放到同页靠前的包，也不越过页边界。
+test "granules do not leak across pages" {
+  let p1 : Page = {
+    header_type: flag_bos(),
+    granule_position: 10L,
+    serial: 1U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [1, 1],
+    payload: b"ab",
+  }
+  let p2 : Page = {
+    header_type: (0x00 : Byte),
+    granule_position: 20L,
+    serial: 1U,
+    sequence: 1U,
+    crc: 0U,
+    segments: [1],
+    payload: b"c",
+  }
+  let packets = reassemble([p1, p2])
+  assert_eq(packets.length(), 3)
+  assert_eq(packets[0].granule_position, -1L)
+  assert_eq(packets[1].granule_position, 10L)
+  assert_eq(packets[2].granule_position, 20L)
+}

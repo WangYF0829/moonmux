@@ -67,6 +67,8 @@ pub fn reassemble(pages : Array[Page]) -> Array[Packet] {
       acc.reset()
     } else {
       let mut offset = 0
+      // 本页最后一个「完整结束」的包在 packets 中的下标；-1 表示本页没有包结束
+      let mut last_ended : Int = -1
       for seg in page.segments {
         let mut i = 0
         while i < seg {
@@ -78,10 +80,23 @@ pub fn reassemble(pages : Array[Page]) -> Array[Packet] {
         if seg < 255 {
           packets.push({
             data: acc.to_bytes(),
-            granule_position: page.granule_position,
+            granule_position: -1L,
             serial: page.serial,
           })
+          last_ended = packets.length() - 1
           acc.reset()
+        }
+      }
+      // RFC 3533：页头的粒度位置只属于本页**最后一个完整结束的包**，
+      // 同页其余包的粒度都是 -1（未携带）。曾经这里把页的值复制给页内每个包，
+      // 后果是重新分页时这些包各自带出同一个粒度，页数与时间轴双双失真 ——
+      // 而且它在本文件内部看不出来，只有把包重新封装成页之后才暴露。
+      if last_ended >= 0 {
+        let ended = packets[last_ended]
+        packets[last_ended] = {
+          data: ended.data,
+          granule_position: page.granule_position,
+          serial: ended.serial,
         }
       }
     }
