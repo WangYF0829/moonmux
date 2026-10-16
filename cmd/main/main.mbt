@@ -45,9 +45,13 @@ fn run_info(path : String) -> Unit {
 /// 打印 Ogg 的容器信息。
 ///
 /// 每条逻辑流除了页数与负载字节，还给出「末粒度」——
-/// 该流最后一次出现的粒度位置。粒度就是时间（对音频流而言即采样点数），
-/// 它是容器层能拿到的唯一时长线索；要换算成秒需要知道采样率，
-/// 那属于编码层的信息，这里不猜。
+/// 该流最后一次出现的粒度位置。粒度就是时间（对音频流而言即采样点数）。
+///
+/// 是音频流（首包是 OpusHead 或 Vorbis 识别头）时，再读标识头给出
+/// 编码、声道、采样率，并按首末粒度换算成时长（秒）——
+/// 头部字段的解析在 codec/，换算公式（减首粒度、减 pre-skip）也在那一层，
+/// 这里只做显示。链接流各段的时间轴相互独立，但流号各段不复用，
+/// 所以逐流统计天然就是逐段的。
 ///
 /// 物理流与逻辑流是两层：一个文件里可以串接多条物理流（链接流），
 /// 每条物理流里再交织多条逻辑流。链接流要单独说明 ——
@@ -73,6 +77,7 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
     let s = serials[si]
     let mut page_count = 0
     let mut byte_count = 0
+    let mut first_granule : Int64 = -1L
     let mut last_granule : Int64 = -1L
     let mut has_granule = false
     for page in pages {
@@ -81,6 +86,9 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
         byte_count = byte_count + page.payload.length()
         // -1 表示本页没有包结束，不代表时间
         if page.granule_position >= 0L {
+          if !has_granule {
+            first_granule = page.granule_position
+          }
           last_granule = page.granule_position
           has_granule = true
         }
@@ -99,6 +107,37 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
       line = line + " 末粒度=" + last_granule.to_string()
     }
     println(line)
+    // 音频流：读标识头给出编码、声道、采样率与时长。
+    // 不是音频流（Skeleton、视频轨等）就不打这一行。
+    match first_packet_of(packets, s) {
+      Some(head) =>
+        match @codec.parse_audio_header(head) {
+          Some(info) => {
+            let mut detail = "      " +
+              info.codec +
+              "  声道=" +
+              info.channels.to_string() +
+              "  采样率=" +
+              info.sample_rate.to_string() +
+              " Hz"
+            if has_granule {
+              // 时长按整数百分之一秒舍入显示，不走浮点打印，
+              // 避免把 6 秒显示成 5.9999999
+              let secs = @codec.duration_seconds(info, first_granule, last_granule)
+              let hundredths = (secs * 100.0 + 0.5).to_int64()
+              detail = detail +
+                "  时长=" +
+                (hundredths / 100L).to_string() +
+                "." +
+                pad2((hundredths % 100L).to_int()) +
+                " 秒"
+            }
+            println(detail)
+          }
+          None => ()
+        }
+      None => ()
+    }
     si = si + 1
   }
   // 链接流逐段列出：段与段之间没有共享的流号，
@@ -122,6 +161,17 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
     }
     println("  （链接流：以上各段首尾相接，段间流号互不复用）")
   }
+}
+
+///|
+/// 取一条逻辑流的第一个包（标识头所在）；没有包则 None。
+fn first_packet_of(packets : Array[@ogg.Packet], serial : UInt) -> Bytes? {
+  for p in packets {
+    if p.serial == serial {
+      return Some(p.data)
+    }
+  }
+  None
 }
 
 ///|
@@ -162,7 +212,8 @@ fn show_wav_info(path : String, data : Bytes, f : @wav.WavFile) -> Unit {
 /// 分组是必要的：包文件本身不带流号，若把所有流平铺进同一个目录，
 /// 重新封装时就无法再把它们分开 —— 多逻辑流文件会因此不可逆地退化成单流。
 ///
-/// 每条流原有的流号会打在输出里（重新封装时不沿用，见 `run_mux`）。
+/// 每条流原有的流号与逐包粒度写进 `manifest.txt`（重新封装时据此还原，
+/// 见 `read_manifest`）。
 fn run_demux(src : String, dir : String) -> Unit {
   match read_all(src) {
     None => ()
@@ -212,10 +263,18 @@ fn run_demux(src : String, dir : String) -> Unit {
         // 每行一个值，顺序与 packet_%06d.bin 一一对应。-1 表示该包在原文件里
         // 不携带粒度（RFC 3533：只有页内最后一个完整结束的包才携带），
         // 它必须与「粒度真的是 0」区分开。
+        //
+        // 清单头部另记一条 `# serial=` —— 流的原始流号。没有它，往返后的
+        // 文件流号会被重新编号成 1，与原文件对不上（拆包工具按 serial 索引时
+        // 找不到东西）。放在注释行里是为了双向兼容：旧版读者跳过 # 行，
+        // 旧版清单在新版里按「未记录」处理。
         // 用字符串拼接，不用 Buffer::write_utf8 —— 后者把 String 当作
         // UTF-16 码元序列处理，ASCII 会被两两重组（"# m" 变成 "‣潭"），
         // 写出来的清单全是乱码。同一个坑 cli/cli.mbt 已经用注释标记过。
-        let mut manifest = "# moonmux manifest v1\n# granulepos\n"
+        let manifest_header = "# moonmux manifest v1\n# granulepos\n# serial=" +
+          streams[si].serial.to_string() +
+          "\n"
+        let mut manifest = manifest_header
         let mut gi = 0
         while gi < group.length() {
           manifest = manifest + group[gi].granule_position.to_string() + "\n"
@@ -300,9 +359,15 @@ fn subdirs_in(dir : String) -> Result[Array[String], String] {
 
 ///|
 /// 把字符串按换行切成行。
+///
+/// 用 StringBuilder 而不是 Buffer::write_char —— 后者已标记弃用，
+/// 且语义是 UTF-16LE 写字节：现在靠「写与读都是 UTF-16LE」的对称性
+/// 恰好不出错，但官方明确说未来的破坏性发布会改成 UTF-8 语义，
+/// 到那一天清单会被静默写坏。这份文件里的注释已经因为同一个坑
+/// 放弃过 Buffer::write_utf8，不该在切行时再踩一次。
 fn split_lines(s : String) -> Array[String] {
   let out : Array[String] = []
-  let buf = Buffer()
+  let buf = StringBuilder()
   let mut i = 0
   while i < s.length() {
     match s.get_char(i) {
@@ -317,7 +382,7 @@ fn split_lines(s : String) -> Array[String] {
     }
     i = i + 1
   }
-  if buf.length() > 0 {
+  if !buf.is_empty() {
     out.push(buf.to_string())
   }
   out
@@ -362,32 +427,67 @@ fn parse_i64(s : String) -> Int64 {
 }
 
 ///|
-/// 读取某个流目录下的粒度清单，返回逐包的粒度值。
+/// 一份流目录清单的内容：原有流号（若记录）+ 逐包粒度。
+struct Manifest {
+  serial : UInt?
+  granules : Array[Int64]
+}
+
+///|
+/// 字符串是否以给定前缀开头（逐字符比对）。
+fn starts_with_str(s : String, prefix : String) -> Bool {
+  if s.length() < prefix.length() {
+    return false
+  }
+  let mut i = 0
+  let mut same = true
+  while i < prefix.length() {
+    match (s.get_char(i), prefix.get_char(i)) {
+      (Some(a), Some(b)) =>
+        if a.to_int() != b.to_int() {
+          same = false
+        }
+      _ => same = false
+    }
+    i = i + 1
+  }
+  same
+}
+
+///|
+/// 读取某个流目录下的清单，返回原有流号与逐包粒度。
 ///
-/// 没有清单（旧目录、或手工准备的包目录）时返回空数组，调用方据此退回
-/// 「粒度全部为 0」的旧行为 —— 这是刻意的向后兼容：清单是新增的，
-/// 不能让以前的目录布局失效。
-fn read_manifest(sub : String) -> Array[Int64] {
+/// 没有清单（旧目录、或手工准备的包目录）时返回空记录，调用方据此退回
+/// 「流号按 1、2、3 重新编号、粒度全部为 0」的旧行为 —— 这是刻意的向后
+/// 兼容：清单是新增的，不能让以前的目录布局失效。
+///
+/// 清单里 `# serial=` 一行是可选的：老清单没有它，新清单必有。
+/// 流号字段是 32 位，读回时按 32 位截断（`to_uint64().to_uint()`），
+/// 与页头里的字段宽度一致。
+fn read_manifest(sub : String) -> Manifest {
   let path = sub + "/manifest.txt"
+  let granules : Array[Int64] = []
+  let mut serial : UInt? = None
   if !@fs.path_exists(path) {
-    return []
+    return { serial, granules }
   }
   let text = @fs.read_file_to_string(path) catch {
-    IOError(_) => return []
+    IOError(_) => return { serial, granules }
   }
-  let out : Array[Int64] = []
   for line in split_lines(text) {
-    if line.length() > 0 {
+    if starts_with_str(line, "# serial=") {
+      serial = Some(parse_i64(line.substring(start=9)).to_uint64().to_uint())
+    } else if line.length() > 0 {
       match line.get_char(0) {
         Some(c) =>
           if c.to_int() != 35 {
-            out.push(parse_i64(line))
+            granules.push(parse_i64(line))
           }
         None => ()
       }
     }
   }
-  out
+  { serial, granules }
 }
 
 ///|
@@ -412,9 +512,9 @@ fn granule_at(granules : Array[Int64], i : Int) -> Int64 {
 /// 两种布局混在一起时直接报错而不是挑一种：无论选哪一种都会漏掉另一半数据，
 /// 而这种遗漏在产出的文件里看不出来 —— 文件照样能解析，只是少了一条流。
 ///
-/// 流号在封装时重新编号为 1、2、3……，不沿用原文件的流号：
-/// 包文件里不带流号，目录布局只表达了「有几条流、各自有哪些包」。
-/// 原流号在 `demux` 的输出里已经给出。
+/// 流号与粒度由清单还原：清单是 `demux` 写出的，记录了原文件的流号与
+/// 逐包粒度；没有清单的手工目录退回旧行为（流号按 1、2、3 编号、粒度为 0）。
+/// 清单有 serial 时沿用原流号，两条流若因此撞号，`mux_streams` 会如实报错。
 fn plan_mux(dir : String) -> Result[MuxPlan, String] {
   let subs = match subdirs_in(dir) {
     Ok(v) => v
@@ -438,7 +538,11 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
   }
   if subs.length() == 0 {
     // 单条逻辑流
-    let granules = read_manifest(dir)
+    let manifest = read_manifest(dir)
+    let serial = match manifest.serial {
+      Some(s) => s
+      None => 1U
+    }
     let packets : Array[@ogg.Packet] = []
     let mut gi = 0
     for n in loose {
@@ -447,13 +551,13 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
       }
       packets.push({
         data,
-        granule_position: granule_at(granules, gi),
-        serial: 1U,
+        granule_position: granule_at(manifest.granules, gi),
+        serial,
       })
       gi = gi + 1
     }
     Ok({
-      pages: @ogg.paginate(packets, 1U),
+      pages: @ogg.paginate(packets, serial),
       packets: packets.length(),
       streams: 1,
     })
@@ -473,8 +577,11 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
           "子目录 " + subs[si] + " 中没有包文件 —— 空逻辑流无法封装",
         )
       }
-      let serial = (si + 1).reinterpret_as_uint()
-      let granules = read_manifest(sub)
+      let manifest = read_manifest(sub)
+      let serial = match manifest.serial {
+        Some(s) => s
+        None => (si + 1).reinterpret_as_uint()
+      }
       let packets : Array[@ogg.Packet] = []
       let mut gi = 0
       for n in names {
@@ -483,7 +590,7 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
         }
         packets.push({
           data,
-          granule_position: granule_at(granules, gi),
+          granule_position: granule_at(manifest.granules, gi),
           serial,
         })
         gi = gi + 1

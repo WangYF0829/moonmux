@@ -9,6 +9,7 @@ import {
   "moonmux/cli",
   "moonmux/ogg",
   "moonmux/wav",
+  "moonmux/codec",
   "moonmux/pipeline",
   "moonbitlang/x/fs",
   "moonbitlang/core/env",
