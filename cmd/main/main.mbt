@@ -205,6 +205,28 @@ fn run_demux(src : String, dir : String) -> Unit {
           }
           i = i + 1
         }
+        // 粒度清单。包文件里没有时间信息，而时间信息正是 Ogg 区别于
+        // 「一堆裸包」的地方：不写这份清单，重新封装出来的每一页粒度都是 0，
+        // 时长归零、无法 seek、时间戳全错。
+        //
+        // 每行一个值，顺序与 packet_%06d.bin 一一对应。-1 表示该包在原文件里
+        // 不携带粒度（RFC 3533：只有页内最后一个完整结束的包才携带），
+        // 它必须与「粒度真的是 0」区分开。
+        // 用字符串拼接，不用 Buffer::write_utf8 —— 后者把 String 当作
+        // UTF-16 码元序列处理，ASCII 会被两两重组（"# m" 变成 "‣潭"），
+        // 写出来的清单全是乱码。同一个坑 cli/cli.mbt 已经用注释标记过。
+        let mut manifest = "# moonmux manifest v1\n# granulepos\n"
+        let mut gi = 0
+        while gi < group.length() {
+          manifest = manifest + group[gi].granule_position.to_string() + "\n"
+          gi = gi + 1
+        }
+        @fs.write_string_to_file(sub + "/manifest.txt", manifest) catch {
+          IOError(msg) => {
+            println("错误: 无法写入清单 " + sub + "/manifest.txt —— " + msg)
+            return
+          }
+        }
         println(
           "  s" +
           (si + 1).to_string() +
@@ -246,7 +268,10 @@ fn files_in(dir : String) -> Result[Array[String], String] {
     let isf = @fs.is_file(dir + "/" + e) catch {
       _ => false
     }
-    if isf {
+    // manifest.txt 描述包，本身不是包。漏掉这一句会让它被当成最后一个包
+    // 读进来：封装出的文件多一个包、末页粒度取到清单之外的默认值 0 ——
+    // 症状与「粒度根本没修」一模一样，极易误判。
+    if isf && e != "manifest.txt" {
       names.push(e)
     }
   }
@@ -271,6 +296,111 @@ fn subdirs_in(dir : String) -> Result[Array[String], String] {
   }
   names.sort()
   Ok(names)
+}
+
+///|
+/// 把字符串按换行切成行。
+fn split_lines(s : String) -> Array[String] {
+  let out : Array[String] = []
+  let buf = Buffer()
+  let mut i = 0
+  while i < s.length() {
+    match s.get_char(i) {
+      Some(ch) =>
+        if ch.to_int() == 10 {
+          out.push(buf.to_string())
+          buf.reset()
+        } else {
+          buf.write_char(ch)
+        }
+      None => ()
+    }
+    i = i + 1
+  }
+  if buf.length() > 0 {
+    out.push(buf.to_string())
+  }
+  out
+}
+
+///|
+/// 解析十进制整数，允许一个前导负号。
+///
+/// 非数字字符一律跳过而不是报错：清单是本工具自己写的，出现杂字符只可能是
+/// 被人手工编辑过，此时按「这里没有数字」处理比让整个封装失败更合理。
+fn parse_i64(s : String) -> Int64 {
+  let mut i = 0
+  let mut neg = false
+  if s.length() > 0 {
+    match s.get_char(0) {
+      Some(c) =>
+        if c.to_int() == 45 {
+          neg = true
+          i = 1
+        }
+      None => ()
+    }
+  }
+  let mut v : Int64 = 0L
+  while i < s.length() {
+    match s.get_char(i) {
+      Some(c) => {
+        let d = c.to_int() - 48
+        if d >= 0 && d <= 9 {
+          v = v * 10L + d.to_int64()
+        }
+      }
+      None => ()
+    }
+    i = i + 1
+  }
+  if neg {
+    -v
+  } else {
+    v
+  }
+}
+
+///|
+/// 读取某个流目录下的粒度清单，返回逐包的粒度值。
+///
+/// 没有清单（旧目录、或手工准备的包目录）时返回空数组，调用方据此退回
+/// 「粒度全部为 0」的旧行为 —— 这是刻意的向后兼容：清单是新增的，
+/// 不能让以前的目录布局失效。
+fn read_manifest(sub : String) -> Array[Int64] {
+  let path = sub + "/manifest.txt"
+  if !@fs.path_exists(path) {
+    return []
+  }
+  let text = @fs.read_file_to_string(path) catch {
+    IOError(_) => return []
+  }
+  let out : Array[Int64] = []
+  for line in split_lines(text) {
+    if line.length() > 0 {
+      match line.get_char(0) {
+        Some(c) =>
+          if c.to_int() != 35 {
+            out.push(parse_i64(line))
+          }
+        None => ()
+      }
+    }
+  }
+  out
+}
+
+///|
+/// 取清单中第 `i` 个粒度值。
+///
+/// 清单缺失、或比包数短时返回 0 —— 与新增清单之前的行为一致，
+/// 这样旧目录仍能封装，只是时间信息无从恢复。
+fn granule_at(granules : Array[Int64], i : Int) -> Int64 {
+  if i < granules.length() {
+    granules[i]
+  } else {
+    0L
+  }
 }
 
 ///|
@@ -308,13 +438,19 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
   }
   if subs.length() == 0 {
     // 单条逻辑流
+    let granules = read_manifest(dir)
     let packets : Array[@ogg.Packet] = []
+    let mut gi = 0
     for n in loose {
       let data = @fs.read_file_to_bytes(dir + "/" + n) catch {
         IOError(msg) => return Err("无法读取包文件 " + n + " —— " + msg)
       }
-      // 包文件里不带粒度位置信息，统一写 0
-      packets.push({ data, granule_position: 0L, serial: 1U })
+      packets.push({
+        data,
+        granule_position: granule_at(granules, gi),
+        serial: 1U,
+      })
+      gi = gi + 1
     }
     Ok({
       pages: @ogg.paginate(packets, 1U),
@@ -338,12 +474,19 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
         )
       }
       let serial = (si + 1).reinterpret_as_uint()
+      let granules = read_manifest(sub)
       let packets : Array[@ogg.Packet] = []
+      let mut gi = 0
       for n in names {
         let data = @fs.read_file_to_bytes(sub + "/" + n) catch {
           IOError(msg) => return Err("无法读取包文件 " + n + " —— " + msg)
         }
-        packets.push({ data, granule_position: 0L, serial })
+        packets.push({
+          data,
+          granule_position: granule_at(granules, gi),
+          serial,
+        })
+        gi = gi + 1
       }
       total = total + packets.length()
       streams.push({ serial, packets })
