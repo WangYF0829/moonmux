@@ -68,7 +68,9 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
   println("物理流: " + chains.length().to_string())
   let serials = @ogg.serials_of(pages)
   println("逻辑流: " + serials.length().to_string())
-  for s in serials {
+  let mut si = 0
+  while si < serials.length() {
+    let s = serials[si]
     let mut page_count = 0
     let mut byte_count = 0
     let mut last_granule : Int64 = -1L
@@ -84,7 +86,10 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
         }
       }
     }
-    let mut line = "  serial=" +
+    // 序号是给 `extract` 用的选择符，打出来才不用手工数
+    let mut line = "  " +
+      (si + 1).to_string() +
+      ") serial=" +
       s.to_string() +
       " 页=" +
       page_count.to_string() +
@@ -94,6 +99,7 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
       line = line + " 末粒度=" + last_granule.to_string()
     }
     println(line)
+    si = si + 1
   }
   // 链接流逐段列出：段与段之间没有共享的流号，
   // 光看总数看不出这份文件其实是好几段拼起来的
@@ -496,6 +502,80 @@ fn run_split(src : String, dir : String) -> Unit {
 }
 
 ///|
+/// `extract`：抽出一条逻辑流，写成独立的 Ogg 文件。
+///
+/// 抽流是筛选而不是重写（见容器层的 `stream_pages`）：页级原样透传，
+/// 因此产物与输入里属于该流的那几页逐字节相同，可以拿去做对账。
+/// 选择符是 1 起算的逻辑流序号，与 `info` 列出的顺序一致。
+///
+/// 与 `demux` 的分工：`demux` 拆到**包**（丢掉页边界与粒度位置，
+/// 适合拿去处理音频数据），`extract` 抽到**流**（保持页级原样，
+/// 适合把文件里的某一条轨道单独取出来用）。
+fn run_extract(src : String, index : Int, out : String) -> Unit {
+  match read_all(src) {
+    None => ()
+    Some(data) => {
+      let pages = @ogg.parse_pages(data)
+      if pages.length() == 0 {
+        println("错误: 不是合法的 Ogg 文件 —— " + src)
+        return
+      }
+      let serial = match @ogg.serial_at(pages, index) {
+        Ok(s) => s
+        Err(msg) => {
+          println("错误: " + msg)
+          return
+        }
+      }
+      let stream = @ogg.stream_pages(pages, serial)
+      @fs.write_bytes_to_file(out, @ogg.serialize_pages(stream)) catch {
+        IOError(msg) => {
+          println("错误: 无法写入 " + out + " —— " + msg)
+          return
+        }
+      }
+      println(
+        "已抽出第 " +
+        index.to_string() +
+        " 条逻辑流（serial=" +
+        serial.to_string() +
+        "）：" +
+        stream.length().to_string() +
+        " 页 / " +
+        @ogg.reassemble(stream).length().to_string() +
+        " 包 → " +
+        out,
+      )
+    }
+  }
+}
+
+///|
+/// `dump`：把页级结构摊成一张表。
+///
+/// `info` 给汇总、`verify` 给结论，这张表给的是**页本身长什么样** ——
+/// `verify` 报出「serial=2 页序号从 202 跳到 204」之后，
+/// 要接着看的就是 200 号附近那几页。偏移列可以直接和十六进制编辑器对照。
+fn run_dump(path : String) -> Unit {
+  match read_all(path) {
+    None => ()
+    Some(data) => {
+      let pages = @ogg.parse_pages(data)
+      if pages.length() == 0 {
+        println("错误: 不是合法的 Ogg 文件 —— " + path)
+        return
+      }
+      println("文件: " + path)
+      println("页数: " + pages.length().to_string())
+      println(@ogg.page_table_header())
+      for line in @ogg.describe_pages(pages) {
+        println(line)
+      }
+    }
+  }
+}
+
+///|
 /// `verify`：对 Ogg 文件做完整体检。
 ///
 /// CRC 逐页重算（独立于序列化路径的再计算），结构层查四件事：
@@ -563,10 +643,26 @@ fn run_verify(path : String) -> Unit {
 /// 这一层只做 I/O：识别与解码都在 `pipeline/` 里，WAV 编码在 `wav/` 里。
 /// 解码失败时如实把原因打出来 —— 解码器的能力是有范围的，
 /// 把一个「超出范围」的流说清楚，好过写出一个安静的空文件。
+///
+/// 输入可能同时含多条逻辑流与多段链接流，而 WAV 里只装得下一条音轨。
+/// 转码取每段的第一条可识别音频流；输入不是单流时先把这件事说清楚，
+/// 免得用户以为文件里的其余轨道也进了 WAV。
 fn run_towav(src : String, out : String) -> Unit {
   match read_all(src) {
     None => ()
     Some(data) => {
+      let pages = @ogg.parse_pages(data)
+      let streams = @ogg.serials_of(pages)
+      let chains = @ogg.split_chains(pages)
+      if streams.length() > 1 || chains.length() > 1 {
+        println(
+          "提示: 输入含 " +
+          chains.length().to_string() +
+          " 条物理流 / " +
+          streams.length().to_string() +
+          " 条逻辑流，只转码每段的第一条可识别音频流",
+        )
+      }
       match @pipeline.ogg_to_wav(data) {
         Err(msg) => println("错误: 转码失败 —— " + msg)
         Ok(wav) => {
@@ -643,6 +739,8 @@ fn main {
     @cli.Command::Mux(dir, out) => run_mux(dir, out)
     @cli.Command::Cat(inputs, out) => run_cat(inputs, out)
     @cli.Command::Split(src, dir) => run_split(src, dir)
+    @cli.Command::Extract(src, index, out) => run_extract(src, index, out)
+    @cli.Command::Dump(path) => run_dump(path)
     @cli.Command::Verify(path) => run_verify(path)
     @cli.Command::ToWav(src, out) => run_towav(src, out)
     @cli.Command::Version => println(@moonmux.describe())

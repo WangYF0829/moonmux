@@ -20,6 +20,10 @@ pub(all) enum Command {
   Cat(Array[String], String)
   /// 把一条链接流按链接点拆成多个 Ogg 文件
   Split(String, String)
+  /// 抽出第 n 条逻辑流，写成独立的 Ogg 文件
+  Extract(String, Int, String)
+  /// 转储页级结构
+  Dump(String)
   /// 逐页重算 CRC，报告通过率
   Verify(String)
   /// 把 Ogg（Opus / Vorbis）转码为 WAV
@@ -44,6 +48,9 @@ pub fn usage() -> String {
   "  moonmux cat <in1.ogg> <in2.ogg> ... <out.ogg>\n" +
   "                                  把多个 Ogg 首尾链接（chained）\n" +
   "  moonmux split <file.ogg> <dir>   把链接流按链接点拆开（输出 part1/2…）\n" +
+  "  moonmux extract <file.ogg> <n> <out.ogg>\n" +
+  "                                  抽出第 n 条逻辑流（序号见 info）\n" +
+  "  moonmux dump <file.ogg>          转储页级结构（偏移/流号/页序/粒度/标志）\n" +
   "  moonmux verify <file.ogg>        结构体检（CRC / 页序号 / BOS·EOS）\n" +
   "  moonmux to-wav <in.ogg> <out.wav> 转码为 WAV\n" +
   "  moonmux version                  打印版本\n" +
@@ -68,6 +75,13 @@ pub fn usage_for(topic : String) -> String {
     "用法: moonmux split <file.ogg> <dir>\n" +
     "  每条物理流写成 <dir>/part1.ogg、part2.ogg……\n" +
     "  非链接流只写出 part1.ogg，与输入逐字节相同"
+  } else if topic == "extract" {
+    "用法: moonmux extract <file.ogg> <n> <out.ogg>\n" +
+    "  <n> 是 1 起算的逻辑流序号，与 info 列出的顺序一致\n" +
+    "  抽出的文件与该流在输入里的那几页逐字节相同"
+  } else if topic == "dump" {
+    "用法: moonmux dump <file.ogg>\n" +
+    "  逐页列出偏移、流号、页序、粒度位置、头标志、段数与负载字节"
   } else if topic == "verify" {
     "用法: moonmux verify <file.ogg>"
   } else if topic == "to-wav" {
@@ -85,6 +99,43 @@ pub fn usage_for(topic : String) -> String {
 /// 参数个数不符时的统一报错文本。`got` / `want` 均不含子命令本身。
 fn arity_msg(sub : String, got : Int, want : Int) -> String {
   sub + " 需要 " + want.to_string() + " 个参数，实际给了 " + got.to_string() + " 个"
+}
+
+///|
+/// 解析一个正整数参数：只认十进制数字，且必须大于 0。
+///
+/// 刻意不接受 `+1`、`01`、`1.0`、`0`、`-1` 这些写法 —— 逻辑流序号没有
+/// 「+1」或「第 0 条」这种说法，收下它们只会让错误延后到取流时才暴露，
+/// 而且报出来的会是别的错（找不到流），不是「参数写错了」。
+///
+/// 手写而不引 `strconv`：这一层至今不引任何包，而这里要的语义比
+/// 通用解析窄得多，窄语义自己写反而更清楚。
+fn parse_positive(s : String) -> Int? {
+  if s.length() == 0 {
+    return None
+  }
+  let mut n = 0
+  let mut i = 0
+  while i < s.length() {
+    // 逐**字符**取，不用 `to_bytes()` —— 后者给出的是 UTF-16 码元
+    // （每字符两字节，ASCII 的高位字节是 0），按它逐字节判数字会全判错。
+    match s.get_char(i) {
+      Some(c) => {
+        let d = c.to_int()
+        if d < 48 || d > 57 {
+          return None
+        }
+        n = n * 10 + (d - 48)
+      }
+      None => return None
+    }
+    i = i + 1
+  }
+  if n <= 0 {
+    None
+  } else {
+    Some(n)
+  }
 }
 
 ///|
@@ -140,6 +191,32 @@ pub fn parse(args : Array[String]) -> Command {
       Command::Bad(arity_msg("split", n, 2), usage_for("split"))
     } else {
       Command::Split(args[1], args[2])
+    }
+  } else if sub == "extract" {
+    if n < 3 {
+      Command::Bad(
+        "extract 需要输入文件、逻辑流序号与输出文件",
+        usage_for("extract"),
+      )
+    } else if n > 3 {
+      Command::Bad(arity_msg("extract", n, 3), usage_for("extract"))
+    } else {
+      match parse_positive(args[2]) {
+        None =>
+          Command::Bad(
+            "extract 的逻辑流序号必须是正整数，实际是「" + args[2] + "」",
+            usage_for("extract"),
+          )
+        Some(k) => Command::Extract(args[1], k, args[3])
+      }
+    }
+  } else if sub == "dump" {
+    if n < 1 {
+      Command::Bad("dump 需要一个 Ogg 文件路径", usage_for("dump"))
+    } else if n > 1 {
+      Command::Bad(arity_msg("dump", n, 1), usage_for("dump"))
+    } else {
+      Command::Dump(args[1])
     }
   } else if sub == "verify" {
     if n < 1 {
