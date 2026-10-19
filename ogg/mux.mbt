@@ -60,15 +60,30 @@ pub fn group_by_stream(packets : Array[Packet]) -> Array[LogicalStream] {
 }
 
 ///|
-/// 把多条逻辑流交织成一列页。
+/// 把多条逻辑流交织成一列页（一包一页）。
+///
+/// 等价于 `mux_streams_sized(streams, 0)` —— 阈值 0 时退回 `paginate`
+/// 的原有语义。需要按目标页大小攒页时用 `mux_streams_sized`。
+pub fn mux_streams(streams : Array[LogicalStream]) -> Result[Array[Page], String] {
+  mux_streams_sized(streams, 0)
+}
+
+///|
+/// 把多条逻辑流交织成一列页，按 `target` 字节攒页。
 ///
 /// 每条流先各自分页（页序号各自从 0 编号，首末页各自打 BOS / EOS），
 /// 再分两阶段输出：先出所有 BOS 页，再按粒度位置做 k 路归并。
 ///
+/// `target` 传给 `paginate_sized`：> 0 时按目标大小攒页（BOS 页仍独占），
+/// 0 时与 `mux_streams` 完全一致。
+///
 /// 唯一的失败情形是两条流用了同一个流号 —— 对 `reassemble` 来说
 /// 相同 serial 就是同一条流，拆出来的包会被粘在一起。
 /// 静默接受只会把错误推迟到解码阶段爆发，所以在这里就拒绝。
-pub fn mux_streams(streams : Array[LogicalStream]) -> Result[Array[Page], String] {
+pub fn mux_streams_sized(
+  streams : Array[LogicalStream],
+  target : Int,
+) -> Result[Array[Page], String] {
   let mut i = 0
   while i < streams.length() {
     let mut j = i + 1
@@ -84,7 +99,7 @@ pub fn mux_streams(streams : Array[LogicalStream]) -> Result[Array[Page], String
   }
   let per : Array[Array[Page]] = []
   for st in streams {
-    per.push(paginate(st.packets, st.serial))
+    per.push(paginate_sized(st.packets, st.serial, target))
   }
   // `cursors` 是每条流下一个待取页的下标，`carries` 是该流上一条已知的粒度
   let cursors : Array[Int] = []

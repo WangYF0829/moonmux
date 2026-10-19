@@ -63,11 +63,27 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
     return
   }
   let packets = @ogg.reassemble(pages)
+  let consumed = {
+    let mut n = 0
+    for p in pages {
+      n = n + 27 + p.segments.length() + p.payload.length()
+    }
+    n
+  }
   println("文件:   " + path)
   println("格式:   Ogg")
   println("字节数: " + data.length().to_string())
   println("页数:   " + pages.length().to_string())
   println("包数:   " + packets.length().to_string())
+  if consumed < data.length() {
+    println(
+      "注意:   只解析到偏移 " +
+      consumed.to_string() +
+      "（文件共 " +
+      data.length().to_string() +
+      " 字节），后面可能还有损坏数据 —— 用 verify 查看跳过区间",
+    )
+  }
   let chains = @ogg.split_chains(pages)
   println("物理流: " + chains.length().to_string())
   let serials = @ogg.serials_of(pages)
@@ -225,6 +241,47 @@ fn run_demux(src : String, dir : String) -> Unit {
       }
       let packets = @ogg.reassemble(pages)
       let streams = @ogg.group_by_stream(packets)
+      // 严格解析只到坏点为止：少给了多少要说清楚，不能让人以为拆完了
+      let consumed = {
+        let mut n = 0
+        for p in pages {
+          n = n + 27 + p.segments.length() + p.payload.length()
+        }
+        n
+      }
+      if consumed < data.length() {
+        println(
+          "注意: 只解析到偏移 " +
+          consumed.to_string() +
+          "（文件共 " +
+          data.length().to_string() +
+          " 字节），后面的数据未能解析，可能被截断或损坏 —— 用 verify 查看",
+        )
+      }
+      // 复用非空目录会静默混入上一次的包：mux 会照单全收，
+      // 而清单只覆盖新文件 —— 产物内容错乱、verify 却全绿。
+      // 这类错误只能靠入口挡住，容器层看不出来。
+      if @fs.path_exists(dir) {
+        let existing = @fs.read_dir(dir) catch {
+          IOError(_) => []
+        }
+        if existing.length() > 0 {
+          println(
+            "错误: 输出目录已存在且非空 —— " +
+            dir +
+            "\n  请换一个新目录，或先清空它（复用目录会混入上一次的包，且无法自动分辨）",
+          )
+          return
+        }
+      }
+      if @ogg.split_chains(pages).length() > 1 {
+        println(
+          "注意: 输入是链接流（" +
+          @ogg.split_chains(pages).length().to_string() +
+          " 段）。demux 的目录布局不表达链接边界，再 mux 会把多段压成一条物理流；" +
+          "要保真请先用 split 拆开。",
+        )
+      }
       if !@fs.path_exists(dir) {
         @fs.create_dir(dir) catch {
           IOError(msg) => {
@@ -273,6 +330,8 @@ fn run_demux(src : String, dir : String) -> Unit {
         // 写出来的清单全是乱码。同一个坑 cli/cli.mbt 已经用注释标记过。
         let manifest_header = "# moonmux manifest v1\n# granulepos\n# serial=" +
           streams[si].serial.to_string() +
+          "\n# packets=" +
+          group.length().to_string() +
           "\n"
         let mut manifest = manifest_header
         let mut gi = 0
@@ -330,7 +389,9 @@ fn files_in(dir : String) -> Result[Array[String], String] {
     // manifest.txt 描述包，本身不是包。漏掉这一句会让它被当成最后一个包
     // 读进来：封装出的文件多一个包、末页粒度取到清单之外的默认值 0 ——
     // 症状与「粒度根本没修」一模一样，极易误判。
-    if isf && e != "manifest.txt" {
+    // 只收自己写出的包文件：目录里的 .DS_Store、Thumbs.db、
+    // 手工笔记之类不能被当成包读进容器（读进去就是一个垃圾包）
+    if isf && starts_with_str(e, "packet_") && ends_with_str(e, ".bin") {
       names.push(e)
     }
   }
@@ -430,6 +491,7 @@ fn parse_i64(s : String) -> Int64 {
 /// 一份流目录清单的内容：原有流号（若记录）+ 逐包粒度。
 struct Manifest {
   serial : UInt?
+  packets : Int?
   granules : Array[Int64]
 }
 
@@ -455,6 +517,28 @@ fn starts_with_str(s : String, prefix : String) -> Bool {
 }
 
 ///|
+/// 字符串是否以给定后缀结尾。
+fn ends_with_str(s : String, suffix : String) -> Bool {
+  if s.length() < suffix.length() {
+    return false
+  }
+  let offset = s.length() - suffix.length()
+  let mut i = 0
+  let mut same = true
+  while i < suffix.length() {
+    match (s.get_char(offset + i), suffix.get_char(i)) {
+      (Some(a), Some(b)) =>
+        if a.to_int() != b.to_int() {
+          same = false
+        }
+      _ => same = false
+    }
+    i = i + 1
+  }
+  same
+}
+
+///|
 /// 读取某个流目录下的清单，返回原有流号与逐包粒度。
 ///
 /// 没有清单（旧目录、或手工准备的包目录）时返回空记录，调用方据此退回
@@ -468,15 +552,18 @@ fn read_manifest(sub : String) -> Manifest {
   let path = sub + "/manifest.txt"
   let granules : Array[Int64] = []
   let mut serial : UInt? = None
+  let mut packets : Int? = None
   if !@fs.path_exists(path) {
-    return { serial, granules }
+    return { serial, packets, granules }
   }
   let text = @fs.read_file_to_string(path) catch {
-    IOError(_) => return { serial, granules }
+    IOError(_) => return { serial, packets, granules }
   }
   for line in split_lines(text) {
     if starts_with_str(line, "# serial=") {
-      serial = Some(parse_i64(line.substring(start=9)).to_uint64().to_uint())
+      serial = Some(parse_i64(line[9:].to_owned()).reinterpret_as_uint64().to_uint())
+    } else if starts_with_str(line, "# packets=") {
+      packets = Some(parse_i64(line[10:].to_owned()).to_int())
     } else if line.length() > 0 {
       match line.get_char(0) {
         Some(c) =>
@@ -487,7 +574,7 @@ fn read_manifest(sub : String) -> Manifest {
       }
     }
   }
-  { serial, granules }
+  { serial, packets, granules }
 }
 
 ///|
@@ -503,6 +590,9 @@ fn granule_at(granules : Array[Int64], i : Int) -> Int64 {
   }
 }
 
+///|
+/// 封装时使用容器层的默认目标页大小（4096，见 `ogg.DEFAULT_PAGE_TARGET`）。
+///
 ///|
 /// 按目录布局决定封装方式，产出要写出的页。
 ///
@@ -557,7 +647,7 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
       gi = gi + 1
     }
     Ok({
-      pages: @ogg.paginate(packets, serial),
+      pages: @ogg.paginate_sized(packets, serial, @ogg.DEFAULT_PAGE_TARGET),
       packets: packets.length(),
       streams: 1,
     })
@@ -578,6 +668,21 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
         )
       }
       let manifest = read_manifest(sub)
+      match manifest.packets {
+        Some(n) =>
+          if n != names.length() {
+            return Err(
+              "子目录 " +
+              subs[si] +
+              " 的清单声明 " +
+              n.to_string() +
+              " 个包，实际有 " +
+              names.length().to_string() +
+              " 个 —— 目录可能被改动过或复用了",
+            )
+          }
+        None => ()
+      }
       let serial = match manifest.serial {
         Some(s) => s
         None => (si + 1).reinterpret_as_uint()
@@ -600,7 +705,7 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
       si = si + 1
     }
     // 交织规则（BOS 页置顶、按粒度升序）全在容器层，这里不碰
-    match @ogg.mux_streams(streams) {
+    match @ogg.mux_streams_sized(streams, @ogg.DEFAULT_PAGE_TARGET) {
       Err(m) => Err(m)
       Ok(pages) => Ok({ pages, packets: total, streams: streams.length() })
     }
@@ -817,9 +922,307 @@ fn run_dump(path : String) -> Unit {
       }
       println("文件: " + path)
       println("页数: " + pages.length().to_string())
+      // dump 用严格解析（遇到坏页即停）：这里不静默少给，明说到底读了多少
+      let consumed = {
+        let mut n = 0
+        for p in pages {
+          n = n + 27 + p.segments.length() + p.payload.length()
+        }
+        n
+      }
+      if consumed < data.length() {
+        println(
+          "注意:   只解析到偏移 " +
+          consumed.to_string() +
+          "（文件共 " +
+          data.length().to_string() +
+          " 字节），后面可能还有损坏数据 —— 用 verify 查看跳过区间",
+        )
+      }
       println(@ogg.page_table_header())
       for line in @ogg.describe_pages(pages) {
         println(line)
+      }
+    }
+  }
+}
+
+///|
+/// 找出一条音频流的注释包：返回（流号、种类、注释）。
+///
+/// 判据是「首个包能解析成 OpusHead / Vorbis 识别头」——
+/// 多流文件里第一条流未必是音频（Skeleton、视频轨），所以要逐流试。
+/// 找不到就如实说清楚，而不是打印一份空注释列表。
+fn find_comment(
+  pages : Array[@ogg.Page],
+) -> Result[(UInt, @codec.CommentKind, @codec.Comment), String] {
+  let serials = @ogg.serials_of(pages)
+  if serials.length() == 0 {
+    return Err("文件里没有任何逻辑流")
+  }
+  let mut i = 0
+  while i < serials.length() {
+    let serial = serials[i]
+    let packets = @ogg.reassemble(@ogg.stream_pages(pages, serial))
+    if packets.length() >= 2 {
+      match @codec.parse_audio_header(packets[0].data) {
+        Some(_) =>
+          match @codec.parse_comment(packets[1].data) {
+            Ok(parsed) => return Ok((serial, parsed.0, parsed.1))
+            Err(msg) =>
+              return Err(
+                "第 " +
+                (i + 1).to_string() +
+                " 条逻辑流的注释包解析失败：" +
+                msg,
+              )
+          }
+        None => ()
+      }
+    }
+    i = i + 1
+  }
+  Err("文件里没有可识别的音频流，或该流没有注释包")
+}
+
+///|
+/// `tags`：列出注释。
+fn run_tags(path : String) -> Unit {
+  match read_all(path) {
+    None => ()
+    Some(data) => {
+      let pages = @ogg.parse_pages(data)
+      if pages.length() == 0 {
+        println("错误: 不是合法的 Ogg 文件 —— " + path)
+        return
+      }
+      match find_comment(pages) {
+        Err(msg) => println("错误: " + msg)
+        Ok(found) => {
+          let (serial, kind, comment) = found
+          let codec_name = match kind {
+            @codec.CommentKind::Opus => "Opus"
+            @codec.CommentKind::Vorbis => "Vorbis"
+          }
+          println("文件:   " + path)
+          println("编码:   " + codec_name)
+          println("流号:   " + serial.to_string())
+          println("vendor: " + comment.vendor)
+          println("注释:   " + comment.tags.length().to_string() + " 条")
+          for t in comment.tags {
+            println("  " + t.key + "=" + t.value)
+          }
+        }
+      }
+    }
+  }
+}
+
+///|
+/// `tag`：改写注释并写入新文件。
+///
+/// 只替换注释包，音频页原样保留。为了让页布局也尽量不动，
+/// 新包会被填充到与旧包等长（填充是尾随零字节，两种编码都允许）——
+/// 这样连页序号都不用重编号，产物只有那一页的字节不同。
+/// 注释变长时补不下，则重写该包所在的页并给同流后续页重编号。
+fn run_tag(src : String, out : String, assignments : Array[String]) -> Unit {
+  match read_all(src) {
+    None => ()
+    Some(data) => {
+      let pages = @ogg.parse_pages(data)
+      if pages.length() == 0 {
+        println("错误: 不是合法的 Ogg 文件 —— " + src)
+        return
+      }
+      let found = match find_comment(pages) {
+        Ok(f) => f
+        Err(msg) => {
+          println("错误: " + msg)
+          return
+        }
+      }
+      let serial = found.0
+      let kind = found.1
+      let mut comment = found.2
+      for a in assignments {
+        match a.find("=") {
+          Some(at) => {
+            let key = a[0:at].to_owned()
+            let value = a[at + 1:].to_owned()
+            if !@codec.valid_key(key) {
+              println(
+                "错误: 非法的键「" +
+                key +
+                "」（只能是可打印 ASCII，且不含 '='）",
+              )
+              return
+            }
+            if value.length() == 0 {
+              comment = @codec.remove_tag(comment, key)
+            } else {
+              comment = @codec.set_tag(comment, key, value)
+            }
+          }
+          None => ()
+        }
+      }
+      let old_packets = @ogg.reassemble(@ogg.stream_pages(pages, serial))
+      let old_len = old_packets[1].data.length()
+      let plain = @codec.encode_comment(kind, comment, 0)
+      // 填充只在 Vorbis 上做。RFC 7845 §5.2 允许 OpusTags 后跟零填充
+      // （首字节最低位为 0 时可当填充丢弃），但本项目转码链路用的
+      // moonopus 会把尾随字节判成「trailing bytes after comments」而拒收 ——
+      // 于是打上标签的文件反而转不了码。这里选择让自家链路能读回：
+      // Opus 不填充、宁可让页序号重编号；Vorbis 的注释在单独一页、
+      // moonvorbis 也接受尾随零，填充照用，删键后文件大小可以一个字节不变。
+      let pad_ok = match kind {
+        @codec.CommentKind::Vorbis => true
+        @codec.CommentKind::Opus => false
+      }
+      let padding = if pad_ok && plain.length() < old_len {
+        old_len - plain.length()
+      } else {
+        0
+      }
+      let packet = @codec.encode_comment(kind, comment, padding)
+      let updated = match @ogg.replace_packet(pages, serial, 1, packet) {
+        Ok(p) => p
+        Err(msg) => {
+          println("错误: " + msg)
+          return
+        }
+      }
+      let blob = @ogg.serialize_pages(updated)
+      @fs.write_bytes_to_file(out, blob) catch {
+        IOError(msg) => {
+          println("错误: 无法写入 " + out + " —— " + msg)
+          return
+        }
+      }
+      // 回读自检：写出去的东西必须自己还能解析、结构还得自洽
+      let written = @ogg.parse_pages(blob)
+      let problems = @ogg.structure_problems(written)
+      let crc_bad = {
+        let mut n = 0
+        for p in written {
+          if !@ogg.page_crc_ok(p) {
+            n = n + 1
+          }
+        }
+        n
+      }
+      println(
+        "已写出 " +
+        out +
+        "：注释 " +
+        comment.tags.length().to_string() +
+        " 条，填充 " +
+        padding.to_string() +
+        " 字节，" +
+        pages.length().to_string() +
+        " 页 → " +
+        written.length().to_string() +
+        " 页，CRC 失败 " +
+        crc_bad.to_string() +
+        "，结构问题 " +
+        problems.length().to_string(),
+      )
+    }
+  }
+}
+
+///|
+/// 找出第一条音频流：返回（流号、头参数、首个真粒度、末个真粒度）。
+fn audio_stream_info(
+  pages : Array[@ogg.Page],
+) -> Result[(UInt, @codec.AudioInfo, Int64, Int64), String] {
+  let serials = @ogg.serials_of(pages)
+  let mut i = 0
+  while i < serials.length() {
+    let serial = serials[i]
+    let stream = @ogg.stream_pages(pages, serial)
+    let packets = @ogg.reassemble(stream)
+    if packets.length() > 0 {
+      match @codec.parse_audio_header(packets[0].data) {
+        Some(info) => {
+          let mut first : Int64 = 0L
+          let mut last : Int64 = 0L
+          let mut seen = false
+          for p in stream {
+            if p.granule_position >= 0L {
+              if !seen {
+                first = p.granule_position
+                seen = true
+              }
+              last = p.granule_position
+            }
+          }
+          return Ok((serial, info, first, last))
+        }
+        None => ()
+      }
+    }
+    i = i + 1
+  }
+  Err("文件里没有可识别的音频流")
+}
+
+///|
+/// `seek`：按时间（毫秒）定位到页。
+///
+/// 容器层返回「不晚于目标时间的最后一个页」，这里负责把毫秒换算成 granule
+/// （需要采样率与 pre-skip）。我们不解码，所以不做 pre-roll，
+/// 只把落点与「解码时要提前多少」一起打出来 —— 那是调用方的事。
+fn run_seek(path : String, ms : Int) -> Unit {
+  match read_all(path) {
+    None => ()
+    Some(data) => {
+      let pages = @ogg.parse_pages(data)
+      if pages.length() == 0 {
+        println("错误: 不是合法的 Ogg 文件 —— " + path)
+        return
+      }
+      let found = match audio_stream_info(pages) {
+        Ok(f) => f
+        Err(msg) => {
+          println("错误: " + msg)
+          return
+        }
+      }
+      let serial = found.0
+      let head = found.1
+      let first = found.2
+      let target = first +
+        head.pre_skip.to_int64() +
+        (ms.to_int64() * head.sample_rate.to_int64()) / 1000L
+      match @ogg.seek_granule(pages, serial, target) {
+        None => println("错误: 该流没有可用的粒度路标（所有页的 granule 都是 -1）")
+        Some(p) => {
+          let rel = p.granule - first - head.pre_skip.to_int64()
+          let landed = if rel > 0L {
+            rel.to_double() / head.sample_rate.to_double()
+          } else {
+            0.0
+          }
+          let hundredths = (landed * 100.0 + 0.5).to_int64()
+          println("文件:     " + path)
+          println("目标:     " + ms.to_string() + " ms")
+          println("流号:     " + serial.to_string())
+          println("页下标:   " + p.page_index.to_string())
+          println("字节偏移: " + p.byte_offset.to_string())
+          println("页序号:   " + p.sequence.to_string())
+          println("granule:  " + p.granule.to_string())
+          println(
+            "落点时间: " +
+            (hundredths / 100L).to_string() +
+            "." +
+            pad2((hundredths % 100L).to_int()) +
+            " 秒",
+          )
+          if head.codec == "Opus" {
+            println("提示:     解码需从该页再提前 80 ms 开始并丢弃输出（RFC 7845 §4.6 pre-roll）")
+          }
+        }
       }
     }
   }
@@ -836,10 +1239,13 @@ fn run_verify(path : String) -> Unit {
   match read_all(path) {
     None => ()
     Some(data) => {
-      let pages = @ogg.parse_pages(data)
+      // 容错解析：坏页跳过并记录下来，而不是撞到第一个坏点就停 ——
+      // verify 的价值在于说清「坏在哪、坏掉多少、后面还剩多少」。
+      let (pages, gaps) = @ogg.parse_pages_lenient(data)
       if pages.length() == 0 {
         println("错误: 不是合法的 Ogg 文件 —— " + path)
-        return
+        // 输入根本读不出页也是失败：CI 不能把它当成「通过」
+        @sys.exit(1)
       }
       let mut ok = 0
       let mut bad = 0
@@ -850,38 +1256,91 @@ fn run_verify(path : String) -> Unit {
           bad = bad + 1
         }
       }
-      let problems = @ogg.structure_problems(pages)
+      // 无法同步的区间是硬错误：那一段数据连页边界都没有
+      let findings : Array[@ogg.Finding] = []
+      for gap in gaps {
+        findings.push({
+          severity: @ogg.Severity::Error,
+          message: "偏移 " +
+            gap.offset.to_string() +
+            " 处跳过 " +
+            gap.bytes.to_string() +
+            " 字节（无法同步到有效页：坏页、插入的垃圾或被截断）",
+        })
+      }
+      // CRC 失败同样是 error：字节坏了，不是「可疑形态」
+      for page in pages {
+        if !@ogg.page_crc_ok(page) {
+          findings.push({
+            severity: @ogg.Severity::Error,
+            message: "serial=" +
+              page.serial.to_string() +
+              " sequence=" +
+              page.sequence.to_string() +
+              " CRC 校验失败（页内容已损坏）",
+          })
+        }
+      }
+      for f in @ogg.structure_findings(pages) {
+        findings.push(f)
+      }
+      let mut errors = 0
+      let mut warnings = 0
+      for f in findings {
+        match f.severity {
+          @ogg.Severity::Error => errors = errors + 1
+          @ogg.Severity::Warning => warnings = warnings + 1
+          @ogg.Severity::Info => ()
+        }
+      }
       println("文件:     " + path)
       println("字节数:   " + data.length().to_string())
       println("页数:     " + pages.length().to_string())
       println("物理流:   " + @ogg.split_chains(pages).length().to_string())
       println("逻辑流:   " + @ogg.serials_of(pages).length().to_string())
       println("CRC 通过: " + ok.to_string() + "  失败: " + bad.to_string())
-      println("结构问题: " + problems.length().to_string())
+      println(
+        "结构问题: " +
+        findings.length().to_string() +
+        "（error " +
+        errors.to_string() +
+        " / warn " +
+        warnings.to_string() +
+        "）",
+      )
       // 只铺前 10 条：坏了大半的文件逐条打出来只会淹没结论，
       // 但省略要明说 —— 闷声少报等于把问题藏起来
       let mut shown = 0
-      for p in problems {
+      for f in findings {
         if shown < 10 {
-          println("  - " + p)
+          println("  [" + @ogg.severity_label(f.severity) + "] " + f.message)
           shown = shown + 1
         }
       }
-      if problems.length() > 10 {
+      if findings.length() > 10 {
         println(
           "  ……另有 " +
-          (problems.length() - 10).to_string() +
+          (findings.length() - 10).to_string() +
           " 处（以上为前 10 处）",
         )
       }
-      if bad == 0 && problems.length() == 0 {
-        println("结论:     结构完好（CRC、页序号、BOS·EOS 全部自洽）")
+      if bad == 0 && findings.length() == 0 {
+        println("结论:     结构完好（CRC、页序号、BOS·EOS、粒度全部自洽）")
       } else {
         println(
-          "结论:     共 " +
-          (bad + problems.length()).to_string() +
-          " 处问题",
+          "结论:     " +
+          errors.to_string() +
+          " 个 error / " +
+          warnings.to_string() +
+          " 个 warn / " +
+          bad.to_string() +
+          " 页 CRC 失败",
         )
+      }
+      // 退出码只反映 error：CI 不该因为「末页缺 EOS」这种可疑形态红掉，
+      // 但缺 BOS、页序号断裂这类直接不可解码的问题必须让流水线失败。
+      if errors > 0 || bad > 0 {
+        @sys.exit(1)
       }
     }
   }
@@ -991,6 +1450,9 @@ fn main {
     @cli.Command::Split(src, dir) => run_split(src, dir)
     @cli.Command::Extract(src, index, out) => run_extract(src, index, out)
     @cli.Command::Dump(path) => run_dump(path)
+    @cli.Command::Tags(path) => run_tags(path)
+    @cli.Command::TagWrite(src, out, assigns) => run_tag(src, out, assigns)
+    @cli.Command::Seek(path, ms) => run_seek(path, ms)
     @cli.Command::Verify(path) => run_verify(path)
     @cli.Command::ToWav(src, out) => run_towav(src, out)
     @cli.Command::Version => println(@moonmux.describe())

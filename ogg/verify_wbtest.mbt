@@ -160,3 +160,131 @@ test "segment table mismatch is reported" {
   assert_eq(problems.length(), 1)
   assert_eq(problems[0], "serial=1 sequence=0 段表声明 4 字节，实际负载 3 字节")
 }
+
+///|
+/// 造一页：段表按负载长度生成（负载 < 255 时本页有包结束）。
+fn mk_page(
+  serial : UInt,
+  seq : UInt,
+  granule : Int64,
+  header : Byte,
+  payload : Bytes,
+) -> Page {
+  {
+    header_type: header,
+    granule_position: granule,
+    serial,
+    sequence: seq,
+    crc: 0U,
+    segments: [payload.length()],
+    payload,
+  }
+}
+
+///|
+/// 粒度倒流必须报 error：时间轴断了，播放器会跳回过去。
+test "granule going backwards is an error" {
+  let pages : Array[Page] = [
+    mk_page(1U, 0U, 100L, flag_bos(), b"a"),
+    mk_page(1U, 1U, 50L, (0x00 : Byte), b"b"),
+    mk_page(1U, 2U, 200L, flag_eos(), b"c"),
+  ]
+  let findings = structure_findings(pages)
+  assert_eq(findings.length(), 1)
+  match findings[0].severity {
+    Severity::Error => assert_true(findings[0].message.contains("粒度回退"))
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// 没有包结束的页带着粒度 → warn（-1 才表示「本页没有包结束」）。
+test "granule on a page without packet completion is a warning" {
+  let pages : Array[Page] = [
+    mk_page(1U, 0U, 5L, flag_bos() | flag_eos(), repeat_byte((0x41 : Byte), 255)),
+  ]
+  let findings = structure_findings(pages)
+  assert_eq(findings.length(), 1)
+  match findings[0].severity {
+    Severity::Warning => assert_true(findings[0].message.contains("应为 -1"))
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// 有包结束却写 -1 → warn。
+test "missing granule where packets complete is a warning" {
+  let pages : Array[Page] = [
+    mk_page(1U, 0U, -1L, flag_bos() | flag_eos(), b"x"),
+  ]
+  let findings = structure_findings(pages)
+  assert_eq(findings.length(), 1)
+  match findings[0].severity {
+    Severity::Warning => assert_true(findings[0].message.contains("粒度却是 -1"))
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// 多出来的 BOS 页 → error（一条流只应有一个开头）。
+test "duplicate BOS pages are an error" {
+  let pages : Array[Page] = [
+    mk_page(1U, 0U, 0L, flag_bos(), b"a"),
+    mk_page(1U, 1U, 10L, flag_bos(), b"b"),
+    mk_page(1U, 2U, 20L, flag_eos(), b"c"),
+  ]
+  let findings = structure_findings(pages)
+  assert_eq(findings.length(), 1)
+  match findings[0].severity {
+    Severity::Error => assert_true(findings[0].message.contains("2 个 BOS"))
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// EOS 之后还有页 → error；重复 EOS 也算 error。
+test "pages after EOS and duplicate EOS are errors" {
+  let pages : Array[Page] = [
+    mk_page(1U, 0U, 0L, flag_bos(), b"a"),
+    mk_page(1U, 1U, 10L, flag_eos(), b"b"),
+    mk_page(1U, 2U, 20L, flag_eos(), b"c"),
+  ]
+  let findings = structure_findings(pages)
+  assert_true(findings.length() >= 2)
+  let mut saw_dup = false
+  let mut saw_after = false
+  for f in findings {
+    match f.severity {
+      Severity::Error => {
+        if f.message.contains("2 个 EOS") {
+          saw_dup = true
+        }
+        if f.message.contains("EOS 之后") {
+          saw_after = true
+        }
+      }
+      _ => ()
+    }
+  }
+  assert_true(saw_dup)
+  assert_true(saw_after)
+}
+
+///|
+/// 严重程度的文字标记就是命令行要打的那三个词。
+test "severity labels" {
+  assert_eq(severity_label(Severity::Info), "info")
+  assert_eq(severity_label(Severity::Warning), "warn")
+  assert_eq(severity_label(Severity::Error), "error")
+}
+
+///|
+/// 一份完好的文件不该产生任何 findings（包括 info 级）。
+test "clean stream has no findings at all" {
+  let packets : Array[Packet] = [
+    { data: b"a", granule_position: 0L, serial: 1U },
+    { data: b"b", granule_position: 9L, serial: 1U },
+  ]
+  let findings = structure_findings(paginate(packets, 1U))
+  assert_eq(findings.length(), 0)
+}

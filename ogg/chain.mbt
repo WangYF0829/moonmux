@@ -98,7 +98,10 @@ pub fn chain(first : Array[Page], second : Array[Page]) -> Result[Array[Page], S
     }
     remapped.push({ serial, packets: st.packets })
   }
-  match mux_streams(remapped) {
+  // 用按大小攒页而不是一包一页：重组的包只有「原页最后一个包」带真粒度，
+  // 一包一页会让中间那些页的粒度全变成 -1（时间轴断掉）。
+  // 按原页边界攒页则每页的最后一包都带真粒度，时间轴一格不差。
+  match mux_streams_sized(remapped, DEFAULT_PAGE_TARGET) {
     Err(msg) => Err(msg)
     Ok(pages) => {
       let out : Array[Page] = []

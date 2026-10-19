@@ -8,4 +8,5 @@
 // 这里只解析头部那几个字节，不做解码、不碰音频数据。
 
 import {
+  "moonbitlang/core/encoding/utf8",
 }

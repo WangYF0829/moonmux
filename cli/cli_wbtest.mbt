@@ -290,3 +290,93 @@ test "dump arity" {
     _ => assert_true(false)
   }
 }
+
+///|
+/// `tags` 只吃一个文件参数。
+test "tags arity" {
+  match parse(["tags"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["tags", "a.ogg"]) {
+    Command::Tags(p) => assert_eq(p, "a.ogg")
+    _ => assert_true(false)
+  }
+  match parse(["tags", "a.ogg", "b"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// `tag` 至少要「输入 + 输出 + 一个 KEY=VALUE」，且每个赋值必须带 '='。
+///
+/// 写成 `TITLEX`（忘了等号）时必须在解析阶段报错并指出是哪个参数 ——
+/// 静默忽略会让用户以为标签已经改了。
+test "tag arity and assignment syntax" {
+  match parse(["tag"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["tag", "a.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["tag", "a.ogg", "b.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["tag", "a.ogg", "b.ogg", "TITLE=x"]) {
+    Command::TagWrite(a, b, xs) => {
+      assert_eq(a, "a.ogg")
+      assert_eq(b, "b.ogg")
+      assert_eq(xs.length(), 1)
+      assert_eq(xs[0], "TITLE=x")
+    }
+    _ => assert_true(false)
+  }
+  match parse(["tag", "a.ogg", "b.ogg", "TITLE=x", "ARTIST=y"]) {
+    Command::TagWrite(_, _, xs) => assert_eq(xs.length(), 2)
+    _ => assert_true(false)
+  }
+  match parse(["tag", "a.ogg", "b.ogg", "TITLEX"]) {
+    Command::Bad(msg, _) => assert_true(msg.contains("TITLEX"))
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// `seek` 需要文件与毫秒数，毫秒必须是非负整数（0 合法）。
+test "seek arity and millisecond argument" {
+  match parse(["seek"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["seek", "a.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["seek", "a.ogg", "3500"]) {
+    Command::Seek(p, ms) => {
+      assert_eq(p, "a.ogg")
+      assert_eq(ms, 3500)
+    }
+    _ => assert_true(false)
+  }
+  // 0 毫秒是合法的
+  match parse(["seek", "a.ogg", "0"]) {
+    Command::Seek(_, ms) => assert_eq(ms, 0)
+    _ => assert_true(false)
+  }
+  // 非数字、负号、小数都要拒绝
+  for bad in ["-1", "1.5", "abc"] {
+    match parse(["seek", "a.ogg", bad]) {
+      Command::Bad(msg, _) => assert_true(msg.contains(bad))
+      _ => assert_true(false)
+    }
+  }
+  match parse(["seek", "a.ogg", "1", "extra"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}

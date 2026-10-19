@@ -13,6 +13,7 @@ import {
   "moonmux/pipeline",
   "moonbitlang/x/fs",
   "moonbitlang/core/env",
+  "moonbitlang/x/sys",
 }
 
 supported_targets = "native"

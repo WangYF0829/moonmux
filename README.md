@@ -6,7 +6,9 @@
 
 ## 为什么做这个
 
-截至 2026 年 10 月，MoonBit 生态已经有一批纯 MoonBit 编写的音频解码器（Opus、Vorbis、MP3、WAV 等），也有播放管线，但**没有任何一个包能把解码结果写回容器文件**。解出来的数据只能进内存、进扬声器，出不了文件。
+截至 2026 年 10 月，MoonBit 生态已经有一批纯 MoonBit 编写的音频解码器（Opus、Vorbis、MP3、WAV 等），也有播放管线，但**没有一个可独立复用的容器库**：解码器各自在包内附带一份仅供自己使用的 Ogg 代码，外部取不到，而且普遍只读。解出来的 PCM 能存成 WAV，却没法重新封装回 Ogg。
+
+（边界说清楚：本项目补的是「**读写已有压缩包**」这一环 —— 把包重新封装成合规的 Ogg、读写注释、定位与诊断。**不做 PCM → Ogg 的编码器**，那需要 Opus / Vorbis 编码器本体，不在本项目范围；解码产物落盘走 `to-wav`。）
 
 这不是「没人想到」，而是价值链的最后一环空缺：
 
@@ -24,10 +26,11 @@ moonmux 补的就是最后两行。
 
 | 模块 | 内容 | 状态 |
 |---|---|---|
-| `ogg/` | Ogg 页、段、包的解析与序列化；Ogg 专用 CRC-32 校验；多逻辑流的分组与交织；物理流的链接与拆分；结构体检 | 已完成 |
+| `ogg/` | 页 / 段 / 包解析与序列化；Ogg 专用 CRC-32；多逻辑流交织；物理流链接与拆分；按大小攒页；granule 二分定位；结构体检（分级 + 坏页重同步）；页级补丁 | 已完成 |
+| `codec/` | 编解码头解析（OpusHead / Vorbis ID）、时长换算、VorbisComment / OpusTags 读写 | 已完成 |
 | `wav/` | WAV（RIFF/PCM）读写 | 已完成 |
 | `pipeline/` | Ogg（Opus / Vorbis）→ WAV 转码管线 | 已完成 |
-| `cmd/main/` | 命令行工具：`info`、`demux`、`mux`、`cat`、`split`、`verify`、`to-wav` | 已完成 |
+| `cmd/main/` | 命令行工具：`info`、`demux`、`mux`、`cat`、`split`、`extract`、`dump`、`tags`、`tag`、`seek`、`verify`、`to-wav` | 已完成 |
 
 **容器层（`ogg/`、`wav/`）不依赖任何三方包**：容器格式的正确性应当能被独立验证，不该被解码器的缺陷掩盖。解码环节留给生态中已有的纯 MoonBit 解码器（`LL728/moonopus`、`LL728/moonvorbis`），通过 `pipeline/` 对接 —— 三方依赖被隔离在这一层，不在容器层。
 
@@ -58,10 +61,11 @@ moon test
 
 ```sh
 # 查看容器信息（自动识别 Ogg 与 WAV）
-#   Ogg：格式、流号、页数、包数、负载字节、各流末粒度
+#   Ogg：格式、流号、页数、包数、负载字节、各流末粒度；能识别音频流时再给编码/声道/采样率/时长
 #   WAV：声道、采样率、位深、PCM 字节数、帧数与时长
 moonmux info input.ogg
 moonmux info input.wav
+#   注：时长为「末粒度 − 首粒度 − pre-skip」，对裁剪过的流是上界（见 docs/design.md）
 
 # 结构体检：逐页 CRC + 页序号连续性 + BOS / EOS 完备性 + 段表一致性
 #   用于判断文件是容器损坏还是编码问题，并给出损坏的具体位置
@@ -82,6 +86,19 @@ moonmux cat a.ogg b.ogg c.ogg output.ogg
 # 拆分：把链接流按链接点切回各自独立的 Ogg 文件（输出 part1.ogg、part2.ogg……）
 #   页原样沿用，字节与 CRC 一字节不改 —— 非链接流得到的 part1 与输入完全相同
 moonmux split chained.ogg ./parts/
+
+# 抽流：把第 n 条逻辑流单独取出来（页级原样，可与输入逐字节对账）
+moonmux extract input.ogg 2 single.ogg
+
+# 页级转储：偏移 / 流号 / 页序 / 粒度 / 标志 / 段数 / 负载
+moonmux dump input.ogg
+
+# 注释：读取与改写（KEY= 表示删除该键）
+moonmux tags input.ogg
+moonmux tag input.ogg tagged.ogg TITLE=月光 ARTIST=王轶凡
+
+# 定位：按毫秒找到不晚于该时刻的页（打印页下标与字节偏移）
+moonmux seek input.ogg 2500
 
 # 转码：Ogg（Opus / Vorbis）→ WAV（16 位 PCM）
 moonmux to-wav input.ogg output.wav
@@ -129,8 +146,8 @@ moonmux/
 
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测），
-`info` / `demux` / `mux` / `cat` / `split` / `verify` / `to-wav` 七个子命令，
-70 个测试通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+`info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` 十二个子命令，
+147 个测试通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）与转码验证。
 
 尚未完成：MP4 / ISOBMFF 的封装；WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器）。

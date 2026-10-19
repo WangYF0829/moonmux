@@ -253,6 +253,104 @@ test "serialized pages pass independent crc check" {
 }
 
 ///|
+/// 目标为 0 时 `paginate_sized` 必须与 `paginate` 完全一致。
+///
+/// 这条是向后兼容的闸门：`cat` / `split` 的字节透传依赖 `paginate`
+/// 的原语义，任何「顺手改默认行为」的改动都会在这里变红。
+test "paginate_sized with zero target matches paginate" {
+  let packets : Array[Packet] = [
+    { data: b"abc", granule_position: 0L, serial: 4U },
+    { data: repeat_byte((0x41 : Byte), 700), granule_position: 5L, serial: 4U },
+    { data: b"de", granule_position: 6L, serial: 4U },
+  ]
+  let legacy = paginate(packets, 4U)
+  let sized = paginate_sized(packets, 4U, 0)
+  assert_eq(sized.length(), legacy.length())
+  let mut i = 0
+  while i < legacy.length() {
+    assert_eq(sized[i].sequence, legacy[i].sequence)
+    assert_eq(sized[i].granule_position, legacy[i].granule_position)
+    assert_eq(sized[i].header_type, legacy[i].header_type)
+    assert_eq(sized[i].segments.length(), legacy[i].segments.length())
+    i = i + 1
+  }
+}
+
+///|
+/// 小包按目标大小攒页，首页只放第一个包。
+test "paginate_sized packs small packets up to the target" {
+  let packets : Array[Packet] = []
+  let mut i = 0
+  while i < 10 {
+    packets.push({
+      data: repeat_byte((0x41 : Byte), 1000),
+      granule_position: i.to_int64(),
+      serial: 1U,
+    })
+    i = i + 1
+  }
+  let pages = paginate_sized(packets, 1U, 4096)
+  // 一包一页要 10 页；按 4 KiB 攒应显著更少
+  assert_true(pages.length() < 10)
+  assert_true(pages.length() >= 3)
+  // 首页只有第一个包（4 个段：255+255+255+235）
+  assert_eq(pages[0].segments.length(), 4)
+  // 段总数必须与包数据总量对得上（没丢也没重复）
+  let mut total = 0
+  for p in pages {
+    for seg in p.segments {
+      total = total + seg
+    }
+  }
+  assert_eq(total, 10 * 1000)
+  // 结构自洽
+  let reparsed = parse_pages(serialize_pages(pages))
+  assert_eq(structure_problems(reparsed).length(), 0)
+  assert_eq(reassemble(reparsed).length(), 10)
+}
+
+///|
+/// 页边界只能落在携带真粒度的包之后 —— 不能把一个原页劈开。
+///
+/// 反例：若把 a、b 单独攒成页、c 另起一页，那张页就有包结束却没有粒度
+/// （-1），播放器的时钟会在那里断掉。
+test "paginate_sized never splits an original page" {
+  let packets : Array[Packet] = [
+    { data: b"hdr", granule_position: 0L, serial: 1U },
+    { data: b"a", granule_position: -1L, serial: 1U },
+    { data: b"b", granule_position: -1L, serial: 1U },
+    { data: b"c", granule_position: 48000L, serial: 1U },
+  ]
+  let pages = paginate_sized(packets, 1U, 4096)
+  assert_eq(pages.length(), 2)
+  // 第一页是标识包独占的 BOS 页
+  assert_eq(pages[0].granule_position, 0L)
+  assert_eq(pages[0].segments.length(), 1)
+  // 第二页把 a、b、c 一起装下，粒度取最后一个包的 48000
+  assert_eq(pages[1].segments.length(), 3)
+  assert_eq(pages[1].granule_position, 48000L)
+  assert_true((pages[1].header_type.to_int() & flag_eos().to_int()) != 0)
+}
+
+///|
+/// 单页装不下的超长包仍要跨页，续页带 continued、粒度只写在末页。
+test "paginate_sized keeps oversized packets spanning pages" {
+  let n = 255 * 255 + 1
+  let packets : Array[Packet] = [
+    { data: repeat_byte((0x41 : Byte), n), granule_position: 7L, serial: 9U },
+  ]
+  let pages = paginate_sized(packets, 9U, 4096)
+  assert_eq(pages.length(), 2)
+  assert_true((pages[1].header_type.to_int() & flag_continued().to_int()) != 0)
+  assert_eq(pages[0].granule_position, -1L)
+  assert_eq(pages[1].granule_position, 7L)
+  // 重组回来一字不差
+  let restored = reassemble(parse_pages(serialize_pages(pages)))
+  assert_eq(restored.length(), 1)
+  assert_eq(restored[0].data.length(), n)
+}
+
+///|
 /// 一页内的多个包，只有**最后一个**携带该页的粒度位置。
 ///
 /// RFC 3533 规定页头的 granule 属于本页最后一个完整结束的包，同页其余包的
@@ -303,4 +401,70 @@ test "granules do not leak across pages" {
   assert_eq(packets[0].granule_position, -1L)
   assert_eq(packets[1].granule_position, 10L)
   assert_eq(packets[2].granule_position, 20L)
+}
+
+///|
+/// 超长包夹在其它包中间时，不能把 paginate 自带的 BOS / EOS 带进来。
+///
+/// 回归：曾经把 `paginate(head)` 的页原样收下，结果一条流出现多个 BOS、
+/// EOS 之后还有页 —— 自己 mux 出来的文件被自己的 verify 判三个 error。
+test "an oversized packet in the middle keeps a single BOS and EOS" {
+  let big = repeat_byte((0x42 : Byte), 65025 + 500)
+  let packets : Array[Packet] = [
+    { data: b"id", granule_position: 0L, serial: 4U },
+    { data: big, granule_position: 1000L, serial: 4U },
+    { data: b"tail", granule_position: 2000L, serial: 4U },
+  ]
+  let pages = paginate_sized(packets, 4U, 4096)
+  let mut bos = 0
+  let mut eos = 0
+  for p in pages {
+    if (p.header_type.to_int() & flag_bos().to_int()) != 0 {
+      bos = bos + 1
+    }
+    if (p.header_type.to_int() & flag_eos().to_int()) != 0 {
+      eos = eos + 1
+    }
+  }
+  assert_eq(bos, 1)
+  assert_eq(eos, 1)
+  // 首尾必须真的是第一条与最后一条
+  assert_true((pages[0].header_type.to_int() & flag_bos().to_int()) != 0)
+  assert_true((pages[pages.length() - 1].header_type.to_int() & flag_eos().to_int()) != 0)
+  // 结构体检必须全绿，且能重组回三个包
+  let reparsed = parse_pages(serialize_pages(pages))
+  assert_eq(structure_findings(reparsed).length(), 0)
+  assert_eq(reassemble(reparsed).length(), 3)
+}
+
+///|
+/// 超长包在首位／末位时同样只能有一个 BOS 与一个 EOS。
+test "oversized packet at either end keeps flags unique" {
+  let big = repeat_byte((0x43 : Byte), 65025 + 100)
+  let first_case : Array[Packet] = [
+    { data: big, granule_position: 0L, serial: 6U },
+    { data: b"x", granule_position: 500L, serial: 6U },
+  ]
+  let last_case : Array[Packet] = [
+    { data: b"y", granule_position: 0L, serial: 7U },
+    { data: big, granule_position: 900L, serial: 7U },
+  ]
+  for packets in [first_case, last_case] {
+    let serial = packets[0].serial
+    let pages = paginate_sized(packets, serial, 4096)
+    let reparsed = parse_pages(serialize_pages(pages))
+    assert_eq(structure_findings(reparsed).length(), 0)
+    let mut bos = 0
+    let mut eos = 0
+    for p in reparsed {
+      if (p.header_type.to_int() & flag_bos().to_int()) != 0 {
+        bos = bos + 1
+      }
+      if (p.header_type.to_int() & flag_eos().to_int()) != 0 {
+        eos = eos + 1
+      }
+    }
+    assert_eq(bos, 1)
+    assert_eq(eos, 1)
+  }
 }

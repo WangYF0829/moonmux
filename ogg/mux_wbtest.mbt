@@ -216,3 +216,35 @@ test "no streams yields no pages" {
     Err(_) => assert_true(false)
   }
 }
+
+///|
+/// 按目标大小攒页时，所有 BOS 页仍必须排在最前面。
+///
+/// 攒页只改变「每页装几个包」，不改变交织规则：解码器在解任何数据之前
+/// 仍要先读到每条流的头包。这条把两件事钉在一起。
+test "mux_streams_sized keeps every BOS page first" {
+  let pa : Array[Packet] = []
+  let pb : Array[Packet] = []
+  let mut i = 0
+  while i < 5 {
+    let g = i.to_int64() * 960L
+    pa.push({ data: repeat_byte((0x41 : Byte), 1200), granule_position: g, serial: 1U })
+    pb.push({ data: repeat_byte((0x42 : Byte), 1200), granule_position: g, serial: 2U })
+    i = i + 1
+  }
+  let built = mux_streams_sized([
+    { serial: 1U, packets: pa },
+    { serial: 2U, packets: pb },
+  ], 4096)
+  let pages = match built {
+    Ok(p) => p
+    Err(_) => []
+  }
+  assert_true(pages.length() > 2)
+  assert_true((pages[0].header_type.to_int() & flag_bos().to_int()) != 0)
+  assert_true((pages[1].header_type.to_int() & flag_bos().to_int()) != 0)
+  assert_eq(serials_of(pages).length(), 2)
+  let reparsed = parse_pages(serialize_pages(pages))
+  assert_eq(structure_problems(reparsed).length(), 0)
+  assert_eq(reassemble(reparsed).length(), 10)
+}

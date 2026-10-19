@@ -101,7 +101,9 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
       let bits_per_sample = rd_u16(bytes, body + 14)
       // 声道数、采样率、位深为 0 都不是可用的音频格式。
       // 放过去的话，下游按 block_align = 0 去切帧会得到无穷循环或空结果。
-      if channels == 0 || sample_rate == 0 || bits_per_sample == 0 {
+      // 用 <= 0 而不是 == 0：u32 高位为 1 的字段读进有符号 Int 是负数，
+      // 只挡 0 会让「采样率 -1 Hz」一路走到显示层。
+      if channels <= 0 || sample_rate <= 0 || bits_per_sample <= 0 {
         return None
       }
       format = Some({ channels, sample_rate, bits_per_sample })

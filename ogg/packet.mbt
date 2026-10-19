@@ -203,3 +203,208 @@ pub fn paginate(packets : Array[Packet], serial : UInt) -> Array[Page] {
   }
   pages
 }
+
+///|
+/// 一个包会占几个段。
+fn seg_count(p : Packet) -> Int {
+  segments_for(p.data.length()).length()
+}
+
+///|
+/// 一组包的负载字节数。
+fn group_bytes(group : Array[Packet]) -> Int {
+  let mut n = 0
+  for p in group {
+    n = n + p.data.length()
+  }
+  n
+}
+
+///|
+/// 一组包的段数。
+fn group_segs(group : Array[Packet]) -> Int {
+  let mut n = 0
+  for p in group {
+    n = n + seg_count(p)
+  }
+  n
+}
+
+///|
+/// 默认的目标页大小（字节）。
+///
+/// 4096 是 libogg 写死的阈值，也是 mutagen `from_packets` 的默认值 ——
+/// 生态里的事实标准。需要别的值时把参数传进来，不要改这个常量。
+pub const DEFAULT_PAGE_TARGET : Int = 4096
+
+///|
+/// 按目标页大小重新分页 —— 「攒够再出页」，而不是一包一页。
+///
+/// `paginate` 一包一页，页数等于包数。一个 6 秒的 Opus 文件因此会从 9 页涨到
+/// 303 页、体积多付约 12%：每页都有 27 字节固定头 + 段表，而标准编码器
+/// （libogg、mutagen 的默认值都是 4 KiB）会把多个包攒进一页。
+///
+/// 合并页有一条硬约束：**页边界只能落在携带真粒度（≥ 0）的包之后**。
+/// 粒度属于「本页最后一个结束的包」，换个说法 —— 原文件里的真粒度恰好标出
+/// 了它自己的页边界。以这些包为界切组，再把相邻组攒成更大的页，
+/// 新页的最后一包必然带着真粒度，时间轴因此一格不差。
+/// 反过来，若不管粒度随便攒，中间页的粒度就成了 -1，而页里明明有包结束，
+/// 播放器的时钟会在那里断掉。
+///
+/// 没有真粒度（手工准备的包目录、旧清单）时每个包自成一组，退化为纯粹的
+/// 按大小打包 —— 此时本来就没有时间信息可保。
+///
+/// 两处特殊处理：
+/// - **第一组独占 BOS 页**。RFC 7845 §3 要求首页只放标识头，
+///   把 OpusTags 甚至音频包塞进 BOS 页会被解码器拒绝。
+/// - **单组超过一页容量**（手工目录里的超长包）时交回 `paginate` 逐包分页，
+///   续页带 continued 标志，粒度只写在末页。
+///
+/// `target` ≤ 0 时与 `paginate` 完全一致 —— 默认行为不变，
+/// `cat` / `split` 依赖的字节透传特性不受影响。
+pub fn paginate_sized(packets : Array[Packet], serial : UInt, target : Int) -> Array[Page] {
+  if packets.length() == 0 || target <= 0 {
+    return paginate(packets, serial)
+  }
+  let limit = if target > 65025 { 65025 } else { target }
+  // 是否存在真粒度：决定「按原页边界切组」还是「逐包成组」
+  let mut timing = false
+  for p in packets {
+    if p.granule_position >= 0L {
+      timing = true
+    }
+  }
+  // 按原页边界切组：携带真粒度的包是它所在原页的最后一个包
+  let split_groups : Array[Array[Packet]] = []
+  let mut start = 0
+  let mut i = 0
+  while i < packets.length() {
+    let end_here = !timing || packets[i].granule_position >= 0L
+    if end_here {
+      let g : Array[Packet] = []
+      let mut k = start
+      while k <= i {
+        g.push(packets[k])
+        k = k + 1
+      }
+      split_groups.push(g)
+      start = i + 1
+    }
+    i = i + 1
+  }
+  if start < packets.length() {
+    let g : Array[Packet] = []
+    let mut k = start
+    while k < packets.length() {
+      g.push(packets[k])
+      k = k + 1
+    }
+    split_groups.push(g)
+  }
+  let raw : Array[Page] = []
+  let mut last_known : Int64 = -1L
+  let mut gi = 0
+  while gi < split_groups.length() {
+    let head = split_groups[gi]
+    // 单组就超出单页容量（超长包）→ 交回 paginate 逐包分页。
+    // **必须清掉它自带的 BOS / EOS**：paginate 把这一组当成一条独立的流，
+    // 会在组首页打 BOS、组末页打 EOS；而这一组往往只是整条流中间的一段，
+    // 原样收下就会出现「一条流多个 BOS」「EOS 之后还有页」——
+    // 产物过不了自己的 verify（真实缺陷，已由回归测试钉住）。
+    if group_segs(head) > 255 || group_bytes(head) > 65025 {
+      let strip = 255 - flag_bos().to_int() - flag_eos().to_int()
+      for q in paginate(head, serial) {
+        raw.push({
+          header_type: (q.header_type.to_int() & strip).to_byte(),
+          granule_position: q.granule_position,
+          serial: q.serial,
+          sequence: q.sequence,
+          crc: q.crc,
+          segments: q.segments,
+          payload: q.payload,
+        })
+      }
+      gi = gi + 1
+      continue
+    }
+    let mut end = gi + 1
+    if gi > 0 {
+      let mut size = group_bytes(head)
+      let mut segs = group_segs(head)
+      while end < split_groups.length() {
+        let gs = group_bytes(split_groups[end])
+        let gg = group_segs(split_groups[end])
+        // 合并的判据是「**加进来**会不会超过目标」，不是「当前是否已超」。
+        // 后者会让一页在超过目标后还继续吞下下一个整页（例如把 61 字节的
+        // OpusTags 页和一个 9.8 KB 的音频页并成一页），页数虽少一页，
+        // 但页布局就与原文件对不上了 —— 往返对账时看不出错，只是字节不同。
+        //
+        // 单组本身超过目标时仍然独占一页：拆组就等于把原页劈开，
+        // 中间那页会「有包结束却没有粒度」，时间轴当场断掉。
+        if size + gs > limit || segs + gg > 255 {
+          break
+        }
+        size = size + gs
+        segs = segs + gg
+        end = end + 1
+      }
+    }
+    let segs : Array[Int] = []
+    let buf = Buffer()
+    let mut granule : Int64 = -1L
+    let mut k = gi
+    while k < end {
+      for p in split_groups[k] {
+        for s in segments_for(p.data.length()) {
+          segs.push(s)
+        }
+        buf.write_bytes(p.data.exact_view())
+        granule = p.granule_position
+      }
+      k = k + 1
+    }
+    // 页里有包结束就必须给一个真粒度。末组可能没有（被截断的流），
+    // 此时沿用上一个已知值：粒度只要求单调不减，往前带一格是安全的近似，
+    // 写 -1 反而与「本页有包结束」自相矛盾。
+    if granule >= 0L {
+      last_known = granule
+    } else if segs.length() > 0 && last_known >= 0L {
+      granule = last_known
+    }
+    raw.push({
+      header_type: (0x00 : Byte),
+      granule_position: granule,
+      serial,
+      sequence: 0U,
+      crc: 0U,
+      segments: segs,
+      payload: buf.to_bytes(),
+    })
+    gi = end
+  }
+  // 统一编号并打 BOS / EOS；超长包组里中间页的 continued 标志已由
+  // paginate 带上，这里只做按位或，不覆盖
+  let out : Array[Page] = []
+  let mut i2 = 0
+  while i2 < raw.length() {
+    let p = raw[i2]
+    let mut header = p.header_type
+    if i2 == 0 {
+      header = header | flag_bos()
+    }
+    if i2 == raw.length() - 1 {
+      header = header | flag_eos()
+    }
+    out.push({
+      header_type: header,
+      granule_position: p.granule_position,
+      serial,
+      sequence: i2.reinterpret_as_uint(),
+      crc: 0U,
+      segments: p.segments,
+      payload: p.payload,
+    })
+    i2 = i2 + 1
+  }
+  out
+}

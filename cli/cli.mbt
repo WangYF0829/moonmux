@@ -24,6 +24,12 @@ pub(all) enum Command {
   Extract(String, Int, String)
   /// 转储页级结构
   Dump(String)
+  /// 列出注释（vendor + KEY=VALUE）
+  Tags(String)
+  /// 改写注释并写入新文件（KEY= 表示删除该键）
+  TagWrite(String, String, Array[String])
+  /// 按时间（毫秒）定位到页
+  Seek(String, Int)
   /// 逐页重算 CRC，报告通过率
   Verify(String)
   /// 把 Ogg（Opus / Vorbis）转码为 WAV
@@ -51,6 +57,10 @@ pub fn usage() -> String {
   "  moonmux extract <file.ogg> <n> <out.ogg>\n" +
   "                                  抽出第 n 条逻辑流（序号见 info）\n" +
   "  moonmux dump <file.ogg>          转储页级结构（偏移/流号/页序/粒度/标志）\n" +
+  "  moonmux tags <file.ogg>          列出注释（vendor + KEY=VALUE）\n" +
+  "  moonmux tag <in.ogg> <out.ogg> KEY=VALUE ...\n" +
+  "                                  改写注释，未指定的键原样保留；KEY= 表示删除\n" +
+  "  moonmux seek <file.ogg> <ms>     按时间（毫秒）定位到页\n" +
   "  moonmux verify <file.ogg>        结构体检（CRC / 页序号 / BOS·EOS）\n" +
   "  moonmux to-wav <in.ogg> <out.wav> 转码为 WAV\n" +
   "  moonmux version                  打印版本\n" +
@@ -82,6 +92,16 @@ pub fn usage_for(topic : String) -> String {
   } else if topic == "dump" {
     "用法: moonmux dump <file.ogg>\n" +
     "  逐页列出偏移、流号、页序、粒度位置、头标志、段数与负载字节"
+  } else if topic == "tags" {
+    "用法: moonmux tags <file.ogg>"
+  } else if topic == "tag" {
+    "用法: moonmux tag <in.ogg> <out.ogg> KEY=VALUE ...\n" +
+    "  只改注释包，音频页原样保留；未指定的键不变\n" +
+    "  写成 KEY= 表示删除该键；值里可以有 '='"
+  } else if topic == "seek" {
+    "用法: moonmux seek <file.ogg> <毫秒>\n" +
+    "  打印不晚于目标时间的最后一个页：页下标、字节偏移、该页时间\n" +
+    "  Opus 解码侧还需提前 80 ms 开始解码（RFC 7845 §4.6 的 pre-roll）"
   } else if topic == "verify" {
     "用法: moonmux verify <file.ogg>"
   } else if topic == "to-wav" {
@@ -110,7 +130,7 @@ fn arity_msg(sub : String, got : Int, want : Int) -> String {
 ///
 /// 手写而不引 `strconv`：这一层至今不引任何包，而这里要的语义比
 /// 通用解析窄得多，窄语义自己写反而更清楚。
-fn parse_positive(s : String) -> Int? {
+fn parse_uint(s : String) -> Int? {
   if s.length() == 0 {
     return None
   }
@@ -131,10 +151,19 @@ fn parse_positive(s : String) -> Int? {
     }
     i = i + 1
   }
-  if n <= 0 {
-    None
-  } else {
-    Some(n)
+  Some(n)
+}
+
+///|
+/// 解析一个正整数参数（不允许 0）。
+fn parse_positive(s : String) -> Int? {
+  match parse_uint(s) {
+    Some(n) => if n > 0 {
+      Some(n)
+    } else {
+      None
+    }
+    None => None
   }
 }
 
@@ -217,6 +246,59 @@ pub fn parse(args : Array[String]) -> Command {
       Command::Bad(arity_msg("dump", n, 1), usage_for("dump"))
     } else {
       Command::Dump(args[1])
+    }
+  } else if sub == "tags" {
+    if n < 1 {
+      Command::Bad("tags 需要一个 Ogg 文件路径", usage_for("tags"))
+    } else if n > 1 {
+      Command::Bad(arity_msg("tags", n, 1), usage_for("tags"))
+    } else {
+      Command::Tags(args[1])
+    }
+  } else if sub == "tag" {
+    // 至少「输入 + 输出 + 一个 KEY=VALUE」
+    if n < 3 {
+      Command::Bad(
+        "tag 需要输入文件、输出文件与至少一个 KEY=VALUE",
+        usage_for("tag"),
+      )
+    } else {
+      let assignments : Array[String] = []
+      let mut i = 3
+      let mut bad : String? = None
+      while i < args.length() {
+        match args[i].find("=") {
+          Some(_) => assignments.push(args[i])
+          None =>
+            if bad is None {
+              bad = Some(args[i])
+            }
+        }
+        i = i + 1
+      }
+      match bad {
+        Some(text) =>
+          Command::Bad(
+            "tag 的参数必须写成 KEY=VALUE，实际收到「" + text + "」",
+            usage_for("tag"),
+          )
+        None => Command::TagWrite(args[1], args[2], assignments)
+      }
+    }
+  } else if sub == "seek" {
+    if n < 2 {
+      Command::Bad("seek 需要文件路径与毫秒数", usage_for("seek"))
+    } else if n > 2 {
+      Command::Bad(arity_msg("seek", n, 2), usage_for("seek"))
+    } else {
+      match parse_uint(args[2]) {
+        None =>
+          Command::Bad(
+            "seek 的时间必须是毫秒整数，实际是「" + args[2] + "」",
+            usage_for("seek"),
+          )
+        Some(ms) => Command::Seek(args[1], ms)
+      }
     }
   } else if sub == "verify" {
     if n < 1 {
