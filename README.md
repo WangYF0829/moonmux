@@ -28,11 +28,26 @@ moonmux 补的就是最后两行。
 |---|---|---|
 | `ogg/` | 页 / 段 / 包解析与序列化；Ogg 专用 CRC-32；多逻辑流交织；物理流链接与拆分；按大小攒页；granule 二分定位；结构体检（分级 + 坏页重同步）；页级补丁 | 已完成 |
 | `codec/` | 编解码头解析（OpusHead / Vorbis ID）、时长换算、VorbisComment / OpusTags 读写 | 已完成 |
+| `manifest/` | `demux`/`mux` 的流目录清单（流号、包数、链序号、逐包粒度）的解析与生成 | 已完成 |
 | `wav/` | WAV（RIFF/PCM）读写 | 已完成 |
 | `pipeline/` | Ogg（Opus / Vorbis）→ WAV 转码管线 | 已完成 |
 | `cmd/main/` | 命令行工具：`info`、`demux`、`mux`、`cat`、`split`、`extract`、`dump`、`tags`、`tag`、`seek`、`verify`、`to-wav` | 已完成 |
 
 **容器层（`ogg/`、`wav/`）不依赖任何三方包**：容器格式的正确性应当能被独立验证，不该被解码器的缺陷掩盖。解码环节留给生态中已有的纯 MoonBit 解码器（`LL728/moonopus`、`LL728/moonvorbis`），通过 `pipeline/` 对接 —— 三方依赖被隔离在这一层，不在容器层。
+
+## 退出码约定
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 成功 |
+| `1` | 数据校验未通过（输入不是合法 Ogg、被截断、清单与目录不符、`verify` 的 error / CRC 失败） |
+| `2` | 用法或 I/O 错误（参数错、文件读不到、拒绝覆盖非空目录等） |
+
+脚本与 CI 可直接据此判断，不必 grep 中文输出。
+
+**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。
+
+**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（26 项，覆盖往返、退出码、截断与清单异常）。
 
 ## 构建与测试
 
@@ -97,8 +112,10 @@ moonmux dump input.ogg
 moonmux tags input.ogg
 moonmux tag input.ogg tagged.ogg TITLE=月光 ARTIST=王轶凡
 
-# 定位：按毫秒找到不晚于该时刻的页（打印页下标与字节偏移）
+# 定位：按毫秒找到不晚于该时刻的页（打印页下标、字节偏移与该页起始时间）
+#   链接流可用第 3 个参数指定第几段（默认第 1 段）
 moonmux seek input.ogg 2500
+moonmux seek chained.ogg 500 2
 
 # 转码：Ogg（Opus / Vorbis）→ WAV（16 位 PCM）
 moonmux to-wav input.ogg output.wav
@@ -147,7 +164,7 @@ moonmux/
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测），
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` 十二个子命令，
-147 个测试通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+180 个测试通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）与转码验证。
 
 尚未完成：MP4 / ISOBMFF 的封装；WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器）。

@@ -58,8 +58,39 @@ fn has_completion(page : Page) -> Bool {
 
 ///|
 /// 对一列页做结构体检，逐条给出带严重程度的问题；空数组表示全部通过。
+///
+/// 先按物理流（链）分段再按 serial 分组：chained 文件的两段是彼此独立的
+/// 逻辑流集合，**即使两段复用同一个 serial 也不该合并统计** ——
+/// 合并会让页序号看起来"从 1 退回 0"、出现两个 EOS，全是假阳性。
 pub fn structure_findings(pages : Array[Page]) -> Array[Finding] {
   let findings : Array[Finding] = []
+  let chains = split_chains(pages)
+  // 跨段流号重复是硬错误（RFC 3533 §4：同一物理流内必须全局唯一）。
+  // 读取端会把两段当成同一条流，页序号与包都错乱。
+  let seen : Array[UInt] = []
+  for chain in chains {
+    for s in serials_of(chain) {
+      if has_serial(seen, s) {
+        findings.push({
+          severity: Severity::Error,
+          message: "serial=" +
+            s.to_string() +
+            " 在多段物理流中重复（RFC 3533 §4 要求全局唯一）",
+        })
+      } else {
+        seen.push(s)
+      }
+    }
+  }
+  for chain in chains {
+    chain_findings(chain, findings)
+  }
+  findings
+}
+
+///|
+/// 单段（一条物理流）内的检查；结果追加到 `findings`。
+fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
   // 按流分组（保持首次出现顺序），记录各流页下标
   let serials : Array[UInt] = []
   let members : Array[Array[Int]] = []
@@ -129,6 +160,32 @@ pub fn structure_findings(pages : Array[Page]) -> Array[Finding] {
       members[idx].push(i)
     }
     i = i + 1
+  }
+  // BOS 页必须全部排在本段的非 BOS 页之前（RFC 3533 §4）。
+  // 第二个流的头包如果落在数据页之后，标准解码器在解第一条数据时
+  // 还没看到它的头 —— 这类文件结构自洽但播不了。
+  let mut first_data = -1
+  let mut bi = 0
+  while bi < pages.length() {
+    if !is_bos(pages[bi]) {
+      first_data = bi
+      break
+    }
+    bi = bi + 1
+  }
+  if first_data >= 0 {
+    let mut li = first_data + 1
+    while li < pages.length() {
+      if is_bos(pages[li]) {
+        findings.push({
+          severity: Severity::Error,
+          message: "serial=" +
+            pages[li].serial.to_string() +
+            " 的 BOS 页出现在数据页之后（所有 BOS 必须排在最前）",
+        })
+      }
+      li = li + 1
+    }
   }
   // 逐条流检查
   let mut t = 0
@@ -278,7 +335,6 @@ pub fn structure_findings(pages : Array[Page]) -> Array[Finding] {
     }
     t = t + 1
   }
-  findings
 }
 
 ///|

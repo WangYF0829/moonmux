@@ -104,3 +104,42 @@ fn point_at(pages : Array[Page], offsets : Array[Int], page_index : Int) -> Seek
     granule: page.granule_position,
   }
 }
+
+///|
+/// 一条流里第 `header_packets` 个包（0 基）**开始**在哪一页。
+///
+/// 对 Opus 是 2（OpusHead + OpusTags）、Vorbis 是 3（ID + comment + setup），
+/// 也就是首个音频页。`seek 0` 应该落在这里，而不是停在粒度同样是 0 的
+/// 头部页上 —— 头部页不能直接解码。
+///
+/// 注意「开始」而不是「结束」：首个音频包可能跨页，若返回它结束的那页，
+/// 调用方会从 continued 包中间开始解码。找不到时返回 None，
+/// 由调用方决定退回哪个落点。
+pub fn first_audio_page(
+  pages : Array[Page],
+  serial : UInt,
+  header_packets : Int,
+) -> Int? {
+  let mut completed = 0
+  let mut i = 0
+  while i < pages.length() {
+    let page = pages[i]
+    if page.serial == serial {
+      // 页首是续包时，本页第一个段不是一个新包的开始
+      let mut starts_here = (page.header_type.to_int() & flag_continued().to_int()) == 0
+      for seg in page.segments {
+        if starts_here && completed == header_packets {
+          return Some(i)
+        }
+        if seg < 255 {
+          completed = completed + 1
+          starts_here = true
+        } else {
+          starts_here = false
+        }
+      }
+    }
+    i = i + 1
+  }
+  None
+}

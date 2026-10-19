@@ -54,66 +54,76 @@ pub fn chain(first : Array[Page], second : Array[Page]) -> Result[Array[Page], S
   if second.length() == 0 {
     return Ok(first)
   }
+  let out : Array[Page] = []
+  for p in first {
+    out.push(p)
+  }
+  // 已占用的流号随追加增长；`second` 可能本身就是 chained 的，
+  // 必须**逐段**处理：一次性 reassemble 会把它的段边界抹掉，
+  // 链接结果就从「A + (B 的第 1 段) + (B 的第 2 段)」变成「A + B 全部交织」。
   let used = serials_of(first)
-  let second_serials = serials_of(second)
-  let mut clash = false
-  for s in second_serials {
-    if has_serial(used, s) {
-      clash = true
+  for seg in split_chains(second) {
+    let seg_serials = serials_of(seg)
+    let mut clash = false
+    for s in seg_serials {
+      if has_serial(used, s) {
+        clash = true
+      }
     }
-  }
-  if !clash {
-    let out : Array[Page] = []
-    for p in first {
-      out.push(p)
-    }
-    for p in second {
-      out.push(p)
-    }
-    return Ok(out)
-  }
-  // 有流号相撞：换新流号后重新分页。
-  // 新流号从双方所有流号的最大值往上递增，保证与两边都不冲突。
-  let mut max_serial : UInt = 0U
-  for s in used {
-    if s > max_serial {
-      max_serial = s
-    }
-  }
-  for s in second_serials {
-    if s > max_serial {
-      max_serial = s
-    }
-  }
-  let streams = group_by_stream(reassemble(second))
-  let mut next = max_serial + 1U
-  let remapped : Array[LogicalStream] = []
-  for st in streams {
-    let serial = if has_serial(used, st.serial) {
-      let fresh = next
-      next = next + 1U
-      fresh
+    if !clash {
+      // 不冲突：整段原样透传，字节级无损
+      for p in seg {
+        out.push(p)
+      }
+      for s in seg_serials {
+        used.push(s)
+      }
     } else {
-      st.serial
-    }
-    remapped.push({ serial, packets: st.packets })
-  }
-  // 用按大小攒页而不是一包一页：重组的包只有「原页最后一个包」带真粒度，
-  // 一包一页会让中间那些页的粒度全变成 -1（时间轴断掉）。
-  // 按原页边界攒页则每页的最后一包都带真粒度，时间轴一格不差。
-  match mux_streams_sized(remapped, DEFAULT_PAGE_TARGET) {
-    Err(msg) => Err(msg)
-    Ok(pages) => {
-      let out : Array[Page] = []
-      for p in first {
-        out.push(p)
+      // 这一段有流号相撞：只给相撞的流换号，然后按原页边界重新分页
+      let mut max_serial : UInt = 0U
+      for s in used {
+        if s > max_serial {
+          max_serial = s
+        }
       }
-      for p in pages {
-        out.push(p)
+      for s in seg_serials {
+        if s > max_serial {
+          max_serial = s
+        }
       }
-      Ok(out)
+      let streams = group_by_stream(reassemble(seg))
+      let mut next = max_serial + 1U
+      let remapped : Array[LogicalStream] = []
+      for st in streams {
+        let serial = if has_serial(used, st.serial) {
+          let fresh = next
+          next = next + 1U
+          fresh
+        } else {
+          st.serial
+        }
+        used.push(serial)
+        remapped.push({ serial, packets: st.packets })
+      }
+      // 用按大小攒页而不是一包一页：重组的包只有「原页最后一个包」带真粒度，
+      // 一包一页会让中间那些页的粒度全变成 -1（时间轴断掉）。
+      // 按原页边界攒页则每页的最后一包都带真粒度，时间轴一格不差。
+      match mux_streams_sized(remapped, DEFAULT_PAGE_TARGET) {
+        Err(msg) => return Err(msg)
+        Ok(pages) => {
+          for p in pages {
+            out.push(p)
+          }
+        }
+      }
     }
   }
+  Ok(out)
+}
+///|
+/// 页是否带 EOS 标志（逻辑流的结尾）。
+fn is_eos(page : Page) -> Bool {
+  (page.header_type.to_int() & flag_eos().to_int()) != 0
 }
 
 ///|
@@ -125,9 +135,14 @@ fn is_bos(page : Page) -> Bool {
 ///|
 /// 把一条物理流按链接点切成若干段，每段是一条独立的物理流。
 ///
-/// 切分依据是 **BOS 页出现在数据页之后**：一条流内部，BOS 页只可能成组
-/// 出现在开头（解码器必须先读到头包才能解后面的数据），
-/// 所以在若干数据页之后冒出来的 BOS 页，只能是下一条流的开头。
+/// 切分依据有两条，必须同时满足：
+///
+/// 1. **BOS 页出现在数据页之后**：一条流内部，BOS 页只可能成组出现在开头
+///    （解码器必须先读到头包才能解后面的数据），所以数据页之后冒出来的
+///    BOS 页只能是下一条流的开头；
+/// 2. **当前段的所有流都已经收到 EOS**：链接的定义是「上一段的 eos 页后面
+///    紧跟下一段的 bos 页」。缺了这条，一个在中间损坏出 BOS 页的普通文件
+///    会被误判成两条链 —— 结构体检随之把「重复 BOS」的硬错误降级成软警告。
 ///
 /// 这里刻意只切「字节本身能确定」的地方。有一种形态在规格上是歧义的：
 /// 两条首尾相接的单页流，与「同一物理流里交织的两条单页流」
@@ -147,15 +162,28 @@ pub fn split_chains(pages : Array[Page]) -> Array[Array[Page]] {
   let mut current : Array[Page] = []
   // 当前段是否已经出过不带 BOS 的页（即已经越过开头的 BOS 页组）
   let mut saw_plain = false
+  // 当前段出现过的流号与已收到 EOS 的流号。分段的前提是**这一段真的结束了**：
+  // 只凭「BOS 出现在数据页之后」就切，会把「文件中间损坏出一个 BOS 页」的
+  // 普通文件误判成两条链 —— verify 于是把「重复 BOS」的硬错误降级成两条
+  // 软警告，损坏文件反而通过了体检。
+  let mut seen : Array[UInt] = []
+  let mut closed : Array[UInt] = []
   for page in pages {
-    if is_bos(page) {
-      if saw_plain {
-        chains.push(current)
-        current = []
-        saw_plain = false
-      }
-    } else {
+    if is_bos(page) && saw_plain && seen.length() == closed.length() {
+      chains.push(current)
+      current = []
+      saw_plain = false
+      seen = []
+      closed = []
+    }
+    if !is_bos(page) {
       saw_plain = true
+    }
+    if !has_serial(seen, page.serial) {
+      seen.push(page.serial)
+    }
+    if is_eos(page) && !has_serial(closed, page.serial) {
+      closed.push(page.serial)
     }
     current.push(page)
   }

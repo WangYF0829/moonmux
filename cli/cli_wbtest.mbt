@@ -357,16 +357,30 @@ test "seek arity and millisecond argument" {
     _ => assert_true(false)
   }
   match parse(["seek", "a.ogg", "3500"]) {
-    Command::Seek(p, ms) => {
+    Command::Seek(p, ms, chain) => {
       assert_eq(p, "a.ogg")
       assert_eq(ms, 3500)
+      // 不写链序号时默认第 1 段
+      assert_eq(chain, 1)
     }
     _ => assert_true(false)
   }
   // 0 毫秒是合法的
   match parse(["seek", "a.ogg", "0"]) {
-    Command::Seek(_, ms) => assert_eq(ms, 0)
+    Command::Seek(_, ms, _) => assert_eq(ms, 0)
     _ => assert_true(false)
+  }
+  // 显式指定链序号
+  match parse(["seek", "a.ogg", "1000", "2"]) {
+    Command::Seek(_, _, chain) => assert_eq(chain, 2)
+    _ => assert_true(false)
+  }
+  // 链序号必须是正整数
+  for bad_chain in ["0", "-1", "x"] {
+    match parse(["seek", "a.ogg", "1", bad_chain]) {
+      Command::Bad(msg, _) => assert_true(msg.contains(bad_chain))
+      _ => assert_true(false)
+    }
   }
   // 非数字、负号、小数都要拒绝
   for bad in ["-1", "1.5", "abc"] {
@@ -377,6 +391,26 @@ test "seek arity and millisecond argument" {
   }
   match parse(["seek", "a.ogg", "1", "extra"]) {
     Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// 数值参数超出 Int 范围要拒绝，不能回绕。
+///
+/// `4294967297` 回绕成 1 时，用户以为抽第 42 亿条流，实际拿到第 1 条。
+test "numeric arguments reject overflow" {
+  match parse(["extract", "a.ogg", "4294967297", "out.ogg"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["seek", "a.ogg", "99999999999"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  // 边界内的正常值仍然通过
+  match parse(["extract", "a.ogg", "2147483647", "out.ogg"]) {
+    Command::Extract(_, n, _) => assert_eq(n, 2147483647)
     _ => assert_true(false)
   }
 }

@@ -158,3 +158,48 @@ pub fn mux_streams_sized(
   }
   Ok(out)
 }
+
+///|
+/// 按**物理流（链）**封装：每一段内部照常交织，段与段首尾相接。
+///
+/// 这是 chained 文件的写回路径。`mux_streams_sized` 只处理「一个物理流里
+/// 交织多条逻辑流」；把 chained 文件的所有流一次性丢给它，多段会被压成
+/// 一段同时播放 —— 容器结构仍然合法，语义已经变了。所以链边界必须显式传递。
+///
+/// **所有段的流号必须全局唯一**（RFC 3533 §4：Each chained logical bitstream
+/// MUST have a unique serial number within the scope of the physical bitstream）。
+/// 跨段复用会让读取端把两段当成同一條流：页序号从中间重新数起、
+/// 包被粘在一起 —— 所以这里拒绝，而不是交给播放器去猜。
+pub fn mux_chains_sized(
+  chains : Array[Array[LogicalStream]],
+  target : Int,
+) -> Result[Array[Page], String] {
+  // 先做全局流号唯一性检查（跨段也算），再逐段封装
+  let all_serials : Array[UInt] = []
+  for chain in chains {
+    for st in chain {
+      if has_serial(all_serials, st.serial) {
+        return Err(
+          "流号 " +
+          st.serial.to_string() +
+          " 在多段物理流中重复 —— RFC 3533 §4 要求同一物理流内全局唯一",
+        )
+      }
+      all_serials.push(st.serial)
+    }
+  }
+  let out : Array[Page] = []
+  let mut i = 0
+  while i < chains.length() {
+    match mux_streams_sized(chains[i], target) {
+      Err(msg) => return Err("第 " + (i + 1).to_string() + " 段：" + msg)
+      Ok(pages) => {
+        for p in pages {
+          out.push(p)
+        }
+      }
+    }
+    i = i + 1
+  }
+  Ok(out)
+}

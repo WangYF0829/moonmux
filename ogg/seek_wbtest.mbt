@@ -135,3 +135,63 @@ test "seek terminates on skewed distributions" {
     None => assert_true(false)
   }
 }
+
+///|
+/// 首个音频页：跳过头部页（Opus 两个、Vorbis 三个）。
+test "first audio page skips the header pages" {
+  let pages = paginate(
+    [
+      { data: b"OpusHead", granule_position: 0L, serial: 1U },
+      { data: b"OpusTags", granule_position: 0L, serial: 1U },
+      { data: b"audio-1", granule_position: 960L, serial: 1U },
+      { data: b"audio-2", granule_position: 1920L, serial: 1U },
+    ],
+    1U,
+  )
+  match first_audio_page(pages, 1U, 2) {
+    Some(i) => assert_eq(i, 2)
+    None => assert_true(false)
+  }
+  // Vorbis 有三个头包
+  match first_audio_page(pages, 1U, 3) {
+    Some(i) => assert_eq(i, 3)
+    None => assert_true(false)
+  }
+}
+
+///|
+/// 首个音频包跨页时，必须返回它**开始**的那一页。
+///
+/// 返回结束页会让调用方从 continued 包中间开始解码 —— 那一页的第一个段
+/// 并不是包的开头。
+test "first audio page is where the packet starts, not ends" {
+  let big = repeat_byte((0x41 : Byte), 255 * 255 + 100)
+  let pages = paginate(
+    [
+      { data: b"header-1", granule_position: 0L, serial: 2U },
+      { data: b"header-2", granule_position: 0L, serial: 2U },
+      { data: big, granule_position: 4800L, serial: 2U },
+    ],
+    2U,
+  )
+  // 第 2 页装不下整包（段全为 255），第 3 页才是结束页
+  assert_true((pages[3].header_type.to_int() & flag_continued().to_int()) != 0)
+  match first_audio_page(pages, 2U, 2) {
+    Some(i) => assert_eq(i, 2)
+    None => assert_true(false)
+  }
+}
+
+///|
+/// 没有头部包时返回第 0 页；流号不存在时返回 None。
+test "first audio page handles edges" {
+  let pages = marks_stream()
+  match first_audio_page(pages, 3U, 0) {
+    Some(i) => assert_eq(i, 0)
+    None => assert_true(false)
+  }
+  match first_audio_page(pages, 999U, 0) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+}

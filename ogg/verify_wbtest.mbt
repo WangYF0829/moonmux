@@ -288,3 +288,64 @@ test "clean stream has no findings at all" {
   let findings = structure_findings(paginate(packets, 1U))
   assert_eq(findings.length(), 0)
 }
+
+///|
+/// chained 的两段复用同一个 serial 是**硬错误**（RFC 3533 §4）。
+///
+/// 同时要验证「按链统计」这件事本身：两段各自的结构是自洽的，
+/// 不该再报出「页序号回退 / 两个 EOS」这类由合并统计导致的假阳性。
+test "chained segments reusing a serial are reported once" {
+  let seg_a = paginate(
+    [
+      { data: b"a", granule_position: 0L, serial: 1U },
+      { data: b"b", granule_position: 10L, serial: 1U },
+    ],
+    1U,
+  )
+  let seg_b = paginate(
+    [
+      { data: b"c", granule_position: 0L, serial: 1U },
+      { data: b"d", granule_position: 10L, serial: 1U },
+    ],
+    1U,
+  )
+  let pages : Array[Page] = []
+  for p in seg_a {
+    pages.push(p)
+  }
+  for p in seg_b {
+    pages.push(p)
+  }
+  let findings = structure_findings(pages)
+  assert_eq(findings.length(), 1)
+  match findings[0].severity {
+    Severity::Error => assert_true(findings[0].message.contains("重复"))
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// BOS 页出现在数据页之后必须是 error（RFC 3533 §4：所有 BOS 前置）。
+///
+/// 直观后果：第二条流的头包排在第一条流的数据之后，解码器解第一条数据时
+/// 还没看到它的头 —— 结构自洽但播不了。
+test "a bos page after data pages is an error" {
+  let pages : Array[Page] = [
+    mk_page(1U, 0U, 0L, flag_bos(), b"a"),
+    mk_page(1U, 1U, 10L, (0x00 : Byte), b"b"),
+    mk_page(2U, 0U, 0L, flag_bos(), b"c"),
+    mk_page(2U, 1U, 10L, flag_eos(), b"d"),
+  ]
+  let findings = structure_findings(pages)
+  let mut saw = false
+  for f in findings {
+    match f.severity {
+      Severity::Error =>
+        if f.message.contains("BOS 页出现在数据页之后") {
+          saw = true
+        }
+      _ => ()
+    }
+  }
+  assert_true(saw)
+}

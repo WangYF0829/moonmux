@@ -248,3 +248,84 @@ test "mux_streams_sized keeps every BOS page first" {
   assert_eq(structure_problems(reparsed).length(), 0)
   assert_eq(reassemble(reparsed).length(), 10)
 }
+
+///|
+/// 按链封装：三段各自独立，段内交织，段间首尾相接。
+///
+/// 反例是把三段的所有流一次性交给 `mux_streams_sized`：页数一样合法，
+/// 但播放语义从「顺序播三段」变成「三段同时播」。
+test "mux_chains_sized keeps segments separate" {
+  // 每段至少有一个多页流：全由单页流组成的段在规格上无法与下一段区分
+  // （见 `split does not cut where the format is ambiguous`）。
+  // 三段的流号全局唯一（RFC 3533 §4 的 MUST）。
+  let chain1 = [
+    {
+      serial: 1U,
+      packets: [
+        { data: b"a1", granule_position: 0L, serial: 1U },
+        { data: b"a2", granule_position: 10L, serial: 1U },
+      ],
+    },
+  ]
+  let chain2 = [
+    {
+      serial: 3U,
+      packets: [
+        { data: b"b1", granule_position: 0L, serial: 3U },
+        { data: b"b2", granule_position: 10L, serial: 3U },
+      ],
+    },
+    {
+      serial: 2U,
+      packets: [{ data: b"c1", granule_position: 0L, serial: 2U }],
+    },
+  ]
+  let chain3 = [
+    {
+      serial: 7U,
+      packets: [
+        { data: b"d1", granule_position: 0L, serial: 7U },
+        { data: b"d2", granule_position: 10L, serial: 7U },
+      ],
+    },
+  ]
+  let built = mux_chains_sized([chain1, chain2, chain3], 4096)
+  let pages = match built {
+    Ok(p) => p
+    Err(_) => []
+  }
+  let parts = split_chains(pages)
+  assert_eq(parts.length(), 3)
+  assert_eq(serials_of(parts[0]).length(), 1)
+  assert_eq(serials_of(parts[1]).length(), 2)
+  assert_eq(serials_of(parts[2]).length(), 1)
+  let reparsed = parse_pages(serialize_pages(pages))
+  assert_eq(structure_findings(reparsed).length(), 0)
+  assert_eq(reassemble(reparsed).length(), 7)
+}
+
+///|
+/// 流号在**任意两段**之间重复都要报错（RFC 3533 §4 要求全局唯一）。
+test "mux_chains_sized rejects serials reused across segments" {
+  let a = [{ serial: 1U, packets: [{ data: b"a", granule_position: 0L, serial: 1U }] }]
+  let b = [{ serial: 1U, packets: [{ data: b"b", granule_position: 0L, serial: 1U }] }]
+  match mux_chains_sized([a, b], 4096) {
+    Err(msg) => assert_true(msg.contains("重复"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// 段内流号重复同样要报错。
+test "mux_chains_sized rejects duplicate serials inside a segment" {
+  let bad = [
+    [
+      { serial: 5U, packets: [{ data: b"x", granule_position: 0L, serial: 5U }] },
+      { serial: 5U, packets: [{ data: b"y", granule_position: 0L, serial: 5U }] },
+    ],
+  ]
+  match mux_chains_sized(bad, 4096) {
+    Err(msg) => assert_true(msg.contains("重复"))
+    Ok(_) => assert_true(false)
+  }
+}

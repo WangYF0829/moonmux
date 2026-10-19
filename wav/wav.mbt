@@ -96,6 +96,35 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
       if size < 16L {
         return None
       }
+      // 格式标签：1 = PCM，0xFFFE = WAVE_FORMAT_EXTENSIBLE。
+      // 扩展格式的**真实**编码在 SubFormat GUID 的前两个字节里，
+      // 必须读出来校验 —— 只看 0xFFFE 会把 IEEE float 当成整数 PCM。
+      let format_tag = rd_u16(bytes, body + 0)
+      if format_tag == 0xFFFE {
+        // cbSize(2) + validBits(2) + channelMask(4) + SubFormat(16) ⇒ fmt 至少 40 字节
+        if size < 40L {
+          return None
+        }
+        let cb_size = rd_u16(bytes, body + 16)
+        if cb_size < 22 {
+          return None
+        }
+        // 与标准 PCM 的 SubFormat GUID 全量比较（16 字节）：
+        // 00000001-0000-0010-8000-00AA00389B71，小端字节序。
+        // 只比前两字节的话，伪造一个 `01 00 46 41 4B 45 …` 也能过。
+        let pcm_guid : Array[Int] = [
+          1, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71,
+        ]
+        let mut gi = 0
+        while gi < 16 {
+          if bytes[body + 24 + gi].to_int() != pcm_guid[gi] {
+            return None
+          }
+          gi = gi + 1
+        }
+      } else if format_tag != 1 {
+        return None
+      }
       let channels = rd_u16(bytes, body + 2)
       let sample_rate = rd_u32(bytes, body + 4).to_int()
       let bits_per_sample = rd_u16(bytes, body + 14)

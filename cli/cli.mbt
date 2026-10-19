@@ -28,8 +28,8 @@ pub(all) enum Command {
   Tags(String)
   /// 改写注释并写入新文件（KEY= 表示删除该键）
   TagWrite(String, String, Array[String])
-  /// 按时间（毫秒）定位到页
-  Seek(String, Int)
+  /// 按时间（毫秒）定位到页；第三个参数是物理流（链）序号，1 起算
+  Seek(String, Int, Int)
   /// 逐页重算 CRC，报告通过率
   Verify(String)
   /// 把 Ogg（Opus / Vorbis）转码为 WAV
@@ -60,7 +60,8 @@ pub fn usage() -> String {
   "  moonmux tags <file.ogg>          列出注释（vendor + KEY=VALUE）\n" +
   "  moonmux tag <in.ogg> <out.ogg> KEY=VALUE ...\n" +
   "                                  改写注释，未指定的键原样保留；KEY= 表示删除\n" +
-  "  moonmux seek <file.ogg> <ms>     按时间（毫秒）定位到页\n" +
+  "  moonmux seek <file.ogg> <ms> [chain]\n" +
+  "                                  按时间定位到页（可选：第几段物理流）\n" +
   "  moonmux verify <file.ogg>        结构体检（CRC / 页序号 / BOS·EOS）\n" +
   "  moonmux to-wav <in.ogg> <out.wav> 转码为 WAV\n" +
   "  moonmux version                  打印版本\n" +
@@ -71,7 +72,7 @@ pub fn usage() -> String {
 /// 针对单个子命令的用法文本。
 pub fn usage_for(topic : String) -> String {
   if topic == "info" {
-    "用法: moonmux info <file.ogg>"
+    "用法: moonmux info <file.ogg|file.wav>"
   } else if topic == "demux" {
     "用法: moonmux demux <file.ogg> <dir>\n" +
     "  <dir> 下每条逻辑流一个子目录：s1/、s2/……"
@@ -99,8 +100,9 @@ pub fn usage_for(topic : String) -> String {
     "  只改注释包，音频页原样保留；未指定的键不变\n" +
     "  写成 KEY= 表示删除该键；值里可以有 '='"
   } else if topic == "seek" {
-    "用法: moonmux seek <file.ogg> <毫秒>\n" +
-    "  打印不晚于目标时间的最后一个页：页下标、字节偏移、该页时间\n" +
+    "用法: moonmux seek <file.ogg> <毫秒> [chain]\n" +
+    "  打印不晚于目标时间的最后一个页：页下标、字节偏移、该页起始时间\n" +
+    "  [chain] 是 1 起算的物理流序号（链接流用），默认第 1 段\n" +
     "  Opus 解码侧还需提前 80 ms 开始解码（RFC 7845 §4.6 的 pre-roll）"
   } else if topic == "verify" {
     "用法: moonmux verify <file.ogg>"
@@ -124,7 +126,7 @@ fn arity_msg(sub : String, got : Int, want : Int) -> String {
 ///|
 /// 解析一个正整数参数：只认十进制数字，且必须大于 0。
 ///
-/// 刻意不接受 `+1`、`01`、`1.0`、`0`、`-1` 这些写法 —— 逻辑流序号没有
+/// 刻意不接受 `+1`、`1.0`、`0`、`-1` 这些写法（`01` 按十进制 1 处理）—— 逻辑流序号没有
 /// 「+1」或「第 0 条」这种说法，收下它们只会让错误延后到取流时才暴露，
 /// 而且报出来的会是别的错（找不到流），不是「参数写错了」。
 ///
@@ -145,7 +147,13 @@ fn parse_uint(s : String) -> Int? {
         if d < 48 || d > 57 {
           return None
         }
-        n = n * 10 + (d - 48)
+        let digit = d - 48
+        // 上限检查：不检查的话 4294967297 会回绕成 1，
+        // 用户以为抽了第 42 亿条流，实际拿到第一条。
+        if n > (2147483647 - digit) / 10 {
+          return None
+        }
+        n = n * 10 + digit
       }
       None => return None
     }
@@ -288,8 +296,8 @@ pub fn parse(args : Array[String]) -> Command {
   } else if sub == "seek" {
     if n < 2 {
       Command::Bad("seek 需要文件路径与毫秒数", usage_for("seek"))
-    } else if n > 2 {
-      Command::Bad(arity_msg("seek", n, 2), usage_for("seek"))
+    } else if n > 3 {
+      Command::Bad("seek 至多接受 文件 / 毫秒 / 链序号 三个参数", usage_for("seek"))
     } else {
       match parse_uint(args[2]) {
         None =>
@@ -297,7 +305,22 @@ pub fn parse(args : Array[String]) -> Command {
             "seek 的时间必须是毫秒整数，实际是「" + args[2] + "」",
             usage_for("seek"),
           )
-        Some(ms) => Command::Seek(args[1], ms)
+        Some(ms) => {
+          // 链序号可选，默认第 1 段
+          let chain = if n >= 3 {
+            match parse_positive(args[3]) {
+              Some(c) => c
+              None =>
+                return Command::Bad(
+                  "seek 的链序号必须是正整数，实际是「" + args[3] + "」",
+                  usage_for("seek"),
+                )
+            }
+          } else {
+            1
+          }
+          Command::Seek(args[1], ms, chain)
+        }
       }
     }
   } else if sub == "verify" {

@@ -468,3 +468,24 @@ test "oversized packet at either end keeps flags unique" {
     assert_eq(eos, 1)
   }
 }
+
+///|
+/// 全部粒度都是 -1（清单没记录时间信息）时，页粒度保持 -1，不伪造成 0。
+///
+/// 代价是 `verify` 会给出「有包结束却 -1」的 warn —— 这是**如实反映**
+/// 「这份数据没有时间信息」，比编一个 0 更诚实。正常路径不会走到这里：
+/// demux 写出的清单里，非页尾包的 -1 会与页尾包的真粒度分到同一组。
+test "sized pagination keeps unknown granules as minus one" {
+  let packets : Array[Packet] = [
+    { data: b"a", granule_position: -1L, serial: 1U },
+    { data: b"b", granule_position: -1L, serial: 1U },
+  ]
+  let pages = paginate_sized(packets, 1U, 4096)
+  for p in pages {
+    assert_eq(p.granule_position, -1L)
+  }
+  assert_true(structure_problems(pages).length() > 0)
+  // 但包内容仍然完整
+  let restored = reassemble(parse_pages(serialize_pages(pages)))
+  assert_eq(restored.length(), 2)
+}

@@ -294,3 +294,77 @@ test "split does not cut where the format is ambiguous" {
   // 两页都在，一个都没丢
   assert_eq(serials_of(parts[0]).length(), 2)
 }
+
+///|
+/// 第二个输入本身是 chained、且流号相撞时，必须逐段处理。
+///
+/// 反例：一次性 `reassemble(second)` 会把第二输入的两段压成一段，
+/// 链接结果从「A + B1 + B2」变成「A + (B1 与 B2 交织)」—— 结构合法，
+/// 播放语义已经变了。
+test "chaining a chained input keeps its segments" {
+  let first = three_pages(1U, 0L)
+  let b1 = three_pages(1U, 0L)
+  let b2 = three_pages(2U, 0L)
+  let second : Array[Page] = []
+  for p in b1 {
+    second.push(p)
+  }
+  for p in b2 {
+    second.push(p)
+  }
+  // 输入自身是两段
+  assert_eq(split_chains(second).length(), 2)
+  let merged = match chain(first, second) {
+    Ok(p) => p
+    Err(_) => []
+  }
+  // 结果应是三段：first、b1、b2
+  assert_eq(split_chains(merged).length(), 3)
+  // 流号全局唯一（相撞的都被换了号）
+  let serials = serials_of(merged)
+  let mut i = 0
+  while i < serials.length() {
+    let mut j = i + 1
+    while j < serials.length() {
+      assert_true(serials[i] != serials[j])
+      j = j + 1
+    }
+    i = i + 1
+  }
+  assert_eq(structure_problems(merged).length(), 0)
+}
+
+///|
+/// 一段还没结束（没有 EOS）时，中途出现的 BOS 页不能当成新的一段。
+///
+/// 这是损坏文件的典型形态：把某一页的头标志误设成 BOS。
+/// 若按「BOS 出现在数据页之后」就切段，`verify` 会把「重复 BOS」的
+/// 硬错误降级成两条软警告，损坏文件反而通过体检。
+test "a bos page before the segment ends does not split" {
+  let pages = three_pages(1U, 0L)
+  // 把中间页（序号 1）的头标志改成 BOS，模拟损坏
+  let mid = pages[1]
+  pages[1] = {
+    header_type: mid.header_type | flag_bos(),
+    granule_position: mid.granule_position,
+    serial: mid.serial,
+    sequence: mid.sequence,
+    crc: mid.crc,
+    segments: mid.segments,
+    payload: mid.payload,
+  }
+  assert_eq(split_chains(pages).length(), 1)
+  // 结构体检必须把它当成「重复 BOS」的硬错误
+  let findings = structure_findings(pages)
+  let mut saw_error = false
+  for f in findings {
+    match f.severity {
+      Severity::Error =>
+        if f.message.contains("2 个 BOS") {
+          saw_error = true
+        }
+      _ => ()
+    }
+  }
+  assert_true(saw_error)
+}

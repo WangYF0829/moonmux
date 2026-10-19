@@ -119,3 +119,159 @@ test "reject wav whose data chunk size sets the sign bit" {
     Some(_) => assert_true(false)
   }
 }
+
+///|
+/// 非 PCM 的格式标签要拒绝（浮点 WAV 的 data 不能按整数 PCM 解释）。
+test "reject wav with a non-pcm format tag" {
+  let ok = encode_wav({ channels: 1, sample_rate: 8000, bits_per_sample: 16 }, b"\x00\x00")
+  // 把 fmt 块的格式标签从 1 改成 3（IEEE float）
+  let buf = Buffer()
+  let mut i = 0
+  while i < ok.length() {
+    if i == 20 {
+      buf.write_byte((0x03 : Byte))
+    } else if i == 21 {
+      buf.write_byte((0x00 : Byte))
+    } else {
+      buf.write_byte(ok[i])
+    }
+    i = i + 1
+  }
+  match WavFile::parse(buf.to_bytes()) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+}
+
+///|
+/// 小端写 16 位（测试里手工拼 WAV 用）。
+fn put_u16(buf : Buffer, v : Int) -> Unit {
+  buf.write_byte((v % 256).to_byte())
+  buf.write_byte(((v / 256) % 256).to_byte())
+}
+
+///|
+/// 小端写 32 位。
+fn put_u32(buf : Buffer, v : Int) -> Unit {
+  buf.write_byte((v % 256).to_byte())
+  buf.write_byte(((v / 256) % 256).to_byte())
+  buf.write_byte(((v / 65536) % 256).to_byte())
+  buf.write_byte(((v / 16777216) % 256).to_byte())
+}
+
+///|
+/// 手工拼一个 WAVE_FORMAT_EXTENSIBLE 的 WAV：`sub` 是 SubFormat GUID 的前两字节
+/// （1 = PCM，3 = IEEE float）。
+fn build_wav_ext(sub : Int, bits : Int) -> Bytes {
+  let data_len = 4
+  let fmt_size = 40
+  let total = 12 + 8 + fmt_size + 8 + data_len
+  let buf = Buffer()
+  buf.write_bytes(b"RIFF".exact_view())
+  put_u32(buf, total - 8)
+  buf.write_bytes(b"WAVE".exact_view())
+  buf.write_bytes(b"fmt ".exact_view())
+  put_u32(buf, fmt_size)
+  put_u16(buf, 0xFFFE) // wFormatTag = EXTENSIBLE
+  put_u16(buf, 1) // channels
+  put_u32(buf, 8000) // sample rate
+  put_u32(buf, 16000) // byte rate
+  put_u16(buf, 2) // block align
+  put_u16(buf, bits) // bits per sample
+  put_u16(buf, 22) // cbSize
+  put_u16(buf, bits) // valid bits
+  put_u32(buf, 4) // channel mask
+  // SubFormat GUID（16 字节）：Data1 = sub（4 字节）、Data2 = 0（2）、
+  // Data3 = 0x0010（2）、Data4 = 80 00 00 AA 00 38 9B 71（8）
+  put_u16(buf, sub)
+  put_u16(buf, 0)
+  put_u16(buf, 0)
+  put_u16(buf, 0x0010)
+  buf.write_byte((0x80 : Byte))
+  buf.write_byte((0x00 : Byte))
+  buf.write_byte((0x00 : Byte))
+  buf.write_byte((0xAA : Byte))
+  buf.write_byte((0x00 : Byte))
+  buf.write_byte((0x38 : Byte))
+  buf.write_byte((0x9B : Byte))
+  buf.write_byte((0x71 : Byte))
+  buf.write_bytes(b"data".exact_view())
+  put_u32(buf, data_len)
+  put_u16(buf, 0)
+  put_u16(buf, 0)
+  buf.to_bytes()
+}
+
+///|
+/// EXTENSIBLE + PCM 子格式应当接受。
+test "accept extensible wav whose subformat is pcm" {
+  match WavFile::parse(build_wav_ext(1, 16)) {
+    Some(f) => {
+      assert_eq(f.format.channels, 1)
+      assert_eq(f.format.sample_rate, 8000)
+      assert_eq(f.format.bits_per_sample, 16)
+    }
+    None => assert_true(false)
+  }
+}
+
+///|
+/// EXTENSIBLE + IEEE float 子格式必须拒绝（data 不能按整数 PCM 解释）。
+test "reject extensible wav whose subformat is float" {
+  match WavFile::parse(build_wav_ext(3, 32)) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+}
+
+///|
+/// EXTENSIBLE 但 fmt 块只有 16 字节（没有 cbSize 与 GUID）必须拒绝。
+test "reject truncated extensible fmt block" {
+  let data_len = 4
+  let fmt_size = 16
+  let total = 12 + 8 + fmt_size + 8 + data_len
+  let buf = Buffer()
+  buf.write_bytes(b"RIFF".exact_view())
+  put_u32(buf, total - 8)
+  buf.write_bytes(b"WAVE".exact_view())
+  buf.write_bytes(b"fmt ".exact_view())
+  put_u32(buf, fmt_size)
+  put_u16(buf, 0xFFFE)
+  put_u16(buf, 1)
+  put_u32(buf, 8000)
+  put_u32(buf, 16000)
+  put_u16(buf, 2)
+  put_u16(buf, 16)
+  buf.write_bytes(b"data".exact_view())
+  put_u32(buf, data_len)
+  put_u16(buf, 0)
+  put_u16(buf, 0)
+  match WavFile::parse(buf.to_bytes()) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+}
+
+///|
+/// SubFormat GUID 前两字节对、尾部被伪造 → 必须拒绝。
+///
+/// 只比较 `wFormatTag` 两个字节的话，`01 00 46 41 4B 45 ...` 这种
+/// 伪造 GUID 会被当成 PCM。
+test "reject extensible wav with a forged subformat guid" {
+  let full = build_wav_ext(1, 16)
+  // fmt 体起点 20，GUID 在 +24 → 44；Data4 首字节在 44 + 8 = 52
+  let buf = Buffer()
+  let mut i = 0
+  while i < full.length() {
+    if i == 52 {
+      buf.write_byte((0x46 : Byte))
+    } else {
+      buf.write_byte(full[i])
+    }
+    i = i + 1
+  }
+  match WavFile::parse(buf.to_bytes()) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+}
