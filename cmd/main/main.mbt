@@ -7,6 +7,22 @@
 // 而不是直接插值。
 
 ///|
+/// 删除一个由我们刚创建的目录及其中的文件（写盘失败时清理半成品）。
+fn remove_dir_tree(dir : String) -> Unit {
+  let entries = @fs.read_dir(dir) catch {
+    IOError(_) => return
+  }
+  for e in entries {
+    @fs.remove_file(dir + "/" + e) catch {
+      _ => ()
+    }
+  }
+  @fs.remove_dir(dir) catch {
+    _ => ()
+  }
+}
+
+///|
 /// 统一的失败出口：打印一行错误，并以 **2** 退出。
 ///
 /// 退出码约定：`0` 成功、`1` 校验未通过（verify 的 error / CRC 失败）、
@@ -152,28 +168,56 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
   println("物理流: " + chains.length().to_string())
   let serials = @ogg.serials_of(pages)
   println("逻辑流: " + serials.length().to_string())
+  // 一趟扫描统计每条流：原来对每条流都遍历全部页与全部包，
+  // 是 O(流数 × 页数)。1–2 条流无所谓，300 段文件会放大成几十万次比较。
+  let index_of : Map[UInt, Int] = Map([])
+  let mut k = 0
+  while k < serials.length() {
+    index_of.set(serials[k], k)
+    k = k + 1
+  }
+  let page_counts = Array::make(serials.length(), 0)
+  let byte_counts = Array::make(serials.length(), 0)
+  let first_granules = Array::make(serials.length(), -1L)
+  let last_granules = Array::make(serials.length(), -1L)
+  let has_granules = Array::make(serials.length(), false)
+  for page in pages {
+    match index_of.get(page.serial) {
+      Some(idx) => {
+        page_counts[idx] = page_counts[idx] + 1
+        byte_counts[idx] = byte_counts[idx] + page.payload.length()
+        // -1 表示本页没有包结束，不代表时间
+        if page.granule_position >= 0L {
+          if !has_granules[idx] {
+            first_granules[idx] = page.granule_position
+          }
+          last_granules[idx] = page.granule_position
+          has_granules[idx] = true
+        }
+      }
+      None => ()
+    }
+  }
+  // 每条流的首个包（标识头）：同样一趟扫描，取首次出现
+  let heads : Array[Bytes?] = Array::make(serials.length(), None)
+  for pkt in packets {
+    match index_of.get(pkt.serial) {
+      Some(idx) =>
+        match heads[idx] {
+          None => heads[idx] = Some(pkt.data)
+          Some(_) => ()
+        }
+      None => ()
+    }
+  }
   let mut si = 0
   while si < serials.length() {
     let s = serials[si]
-    let mut page_count = 0
-    let mut byte_count = 0
-    let mut first_granule : Int64 = -1L
-    let mut last_granule : Int64 = -1L
-    let mut has_granule = false
-    for page in pages {
-      if page.serial == s {
-        page_count = page_count + 1
-        byte_count = byte_count + page.payload.length()
-        // -1 表示本页没有包结束，不代表时间
-        if page.granule_position >= 0L {
-          if !has_granule {
-            first_granule = page.granule_position
-          }
-          last_granule = page.granule_position
-          has_granule = true
-        }
-      }
-    }
+    let page_count = page_counts[si]
+    let byte_count = byte_counts[si]
+    let first_granule = first_granules[si]
+    let last_granule = last_granules[si]
+    let has_granule = has_granules[si]
     // 序号是给 `extract` 用的选择符，打出来才不用手工数
     let mut line = "  " +
       (si + 1).to_string() +
@@ -189,7 +233,7 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
     println(line)
     // 音频流：读标识头给出编码、声道、采样率与时长。
     // 不是音频流（Skeleton、视频轨等）就不打这一行。
-    match first_packet_of(packets, s) {
+    match heads[si] {
       Some(head) =>
         match @codec.parse_audio_header(head) {
           Some(info) => {
@@ -243,16 +287,6 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
   }
 }
 
-///|
-/// 取一条逻辑流的第一个包（标识头所在）；没有包则 None。
-fn first_packet_of(packets : Array[@ogg.Packet], serial : UInt) -> Bytes? {
-  for p in packets {
-    if p.serial == serial {
-      return Some(p.data)
-    }
-  }
-  None
-}
 
 ///|
 /// 打印 WAV 的容器信息。
@@ -349,7 +383,10 @@ fn run_demux(src : String, dir : String) -> Unit {
           return
         }
       }
-      if !@fs.path_exists(dir) {
+      // 目录是本轮创建的：中途失败就把整个目录回滚，不留半套 sN。
+      // （复用已存在目录的情况在入口已被拒绝，所以这里的目录只可能是我们的。）
+      let created_dir = !@fs.path_exists(dir)
+      if created_dir {
         @fs.create_dir(dir) catch {
           IOError(msg) => {
             fail("错误: 无法创建目录 " + dir + " —— " + msg)
@@ -363,6 +400,9 @@ fn run_demux(src : String, dir : String) -> Unit {
         if !@fs.path_exists(sub) {
           @fs.create_dir(sub) catch {
             IOError(msg) => {
+              if created_dir {
+                remove_dir_tree(dir)
+              }
               fail("错误: 无法创建目录 " + sub + " —— " + msg)
               return
             }
@@ -374,6 +414,14 @@ fn run_demux(src : String, dir : String) -> Unit {
           let name = sub + "/packet_" + pad6(i) + ".bin"
           @fs.write_bytes_to_file(name, group[i].data) catch {
             IOError(msg) => {
+              // 已经写出的前 i 个文件不能留在磁盘上，否则是一个
+              // 「看起来成功、实际缺包」的包目录；若整个目录是本轮建的，
+              // 连父目录一起删，避免后续 mux 把残留的 sN 当完整输入。
+              if created_dir {
+                remove_dir_tree(dir)
+              } else {
+                remove_dir_tree(sub)
+              }
               fail("错误: 无法写入 " + name + " —— " + msg)
               return
             }
@@ -406,6 +454,11 @@ fn run_demux(src : String, dir : String) -> Unit {
         )
         @fs.write_string_to_file(sub + "/manifest.txt", manifest) catch {
           IOError(msg) => {
+            if created_dir {
+              remove_dir_tree(dir)
+            } else {
+              remove_dir_tree(sub)
+            }
             fail("错误: 无法写入清单 " + sub + "/manifest.txt —— " + msg)
             return
           }
@@ -880,7 +933,10 @@ fn run_split(src : String, dir : String) -> Unit {
           )
         }
       }
-      if !@fs.path_exists(dir) {
+      // 目录是本轮创建的：中途失败就把整个目录回滚，不留半套 sN。
+      // （复用已存在目录的情况在入口已被拒绝，所以这里的目录只可能是我们的。）
+      let created_dir = !@fs.path_exists(dir)
+      if created_dir {
         @fs.create_dir(dir) catch {
           IOError(msg) => {
             fail("错误: 无法创建目录 " + dir + " —— " + msg)
@@ -890,13 +946,27 @@ fn run_split(src : String, dir : String) -> Unit {
       }
       let mut i = 0
       let mut ok = true
+      let written : Array[String] = []
       while ok && i < parts.length() {
         let name = dir + "/part" + (i + 1).to_string() + ".ogg"
         @fs.write_bytes_to_file(name, @ogg.serialize_pages(parts[i])) catch {
           IOError(msg) => {
+            // 删掉本次已写出的 part 与**正在写的那一个**（可能已被创建/截断），
+            // 避免留下「缺了几段」的拆分结果
+            for p in written {
+              @fs.remove_file(p) catch {
+                _ => ()
+              }
+            }
+            @fs.remove_file(name) catch {
+              _ => ()
+            }
             fail("错误: 无法写入 " + name + " —— " + msg)
             ok = false
           }
+        }
+        if ok {
+          written.push(name)
         }
         if ok {
           println(
@@ -1023,9 +1093,10 @@ fn run_dump(path : String) -> Unit {
         )
       }
       println(@ogg.page_table_header())
-      for line in @ogg.describe_pages(pages) {
+      // 边生成边打印：百万页的文件不会先攒一个百万字符串的数组
+      @ogg.for_each_page_line(pages, fn(line) {
         println(line)
-      }
+      })
     }
   }
 }
@@ -1415,15 +1486,6 @@ fn run_verify(path : String) -> Unit {
         println("错误: 不是合法的 Ogg 文件 —— " + path)
         @sys.exit(1)
       }
-      let mut ok = 0
-      let mut bad = 0
-      for page in pages {
-        if @ogg.page_crc_ok(page) {
-          ok = ok + 1
-        } else {
-          bad = bad + 1
-        }
-      }
       // 无法同步的区间是硬错误：那一段数据连页边界都没有
       let findings : Array[@ogg.Finding] = []
       for gap in gaps {
@@ -1436,9 +1498,15 @@ fn run_verify(path : String) -> Unit {
             " 字节（无法同步到有效页：坏页、插入的垃圾或被截断）",
         })
       }
-      // CRC 失败同样是 error：字节坏了，不是「可疑形态」
+      // CRC 失败同样是 error：字节坏了，不是「可疑形态」。
+      // 每页只算一次 CRC（`page_crc_ok` 会复制整页），计数与问题条目共用结果。
+      let mut ok = 0
+      let mut bad = 0
       for page in pages {
-        if !@ogg.page_crc_ok(page) {
+        if @ogg.page_crc_ok(page) {
+          ok = ok + 1
+        } else {
+          bad = bad + 1
           findings.push({
             severity: @ogg.Severity::Error,
             message: "serial=" +
@@ -1581,7 +1649,7 @@ fn run_towav(src : String, out : String) -> Unit {
           " 条逻辑流，只转码每段的第一条可识别音频流",
         )
       }
-      match @pipeline.ogg_to_wav_limited(data, pcm_budget_bytes()) {
+      match @pipeline.ogg_to_wav_pages(pages, pcm_budget_bytes()) {
         Err(msg) => fail_data("错误: 转码失败 —— " + msg)
         Ok(wav) => {
           @fs.write_bytes_to_file(out, wav) catch {

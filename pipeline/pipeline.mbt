@@ -263,6 +263,21 @@ pub fn ogg_to_wav_limited(data : Bytes, limit : Int64) -> Result[Bytes, String] 
   if pages.length() == 0 {
     return Err("不是合法的 Ogg 文件（没有解析出任何页）")
   }
+  ogg_to_wav_pages(pages, limit)
+}
+
+///|
+/// 同 `ogg_to_wav_limited`，但接收**已解析的页**。
+///
+/// 命令行入口为了打印「多流提示」本来就要解析一次；再调一次带 bytes 的版本
+/// 会把整份输入重新解析并复制一遍（大文件上等于多一份峰值）。
+pub fn ogg_to_wav_pages(
+  pages : Array[@ogg.Page],
+  limit : Int64,
+) -> Result[Bytes, String] {
+  if pages.length() == 0 {
+    return Err("不是合法的 Ogg 文件（没有解析出任何页）")
+  }
   let chains = @ogg.split_chains(pages)
   let estimated = estimate_pcm_bytes(chains)
   if estimated > limit {

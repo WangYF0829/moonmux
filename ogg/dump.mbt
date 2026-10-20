@@ -134,11 +134,23 @@ pub fn page_table_header() -> String {
 /// 这张表补的是两者中间的那层：坏点周围到底摆了哪些页。
 pub fn describe_pages(pages : Array[Page]) -> Array[String] {
   let lines : Array[String] = []
+  for_each_page_line(pages, fn(line) {
+    lines.push(line)
+  })
+  lines
+}
+
+///|
+/// 逐页产出格式化后的行，交给回调直接输出。
+///
+/// `describe_pages` 会把所有行攒进数组；百万页的文件等于多持有百万个字符串。
+/// 命令行转储用这个版本边生成边打印。
+pub fn for_each_page_line(pages : Array[Page], emit : (String) -> Unit) -> Unit {
   let offsets = page_offsets(pages)
   let mut i = 0
   while i < pages.length() {
     let page = pages[i]
-    lines.push(
+    let line =
       pad_left(i.to_string(), 5) +
       pad_left(offsets[i].to_string(), 11) +
       pad_left(page.serial.to_string(), 12) +
@@ -147,9 +159,8 @@ pub fn describe_pages(pages : Array[Page]) -> Array[String] {
       "  " +
       pad_right(flags_text(page.header_type), 14) +
       pad_left(page.segments.length().to_string(), 5) +
-      pad_left(page.payload.length().to_string(), 8),
-    )
+      pad_left(page.payload.length().to_string(), 8)
+    emit(line)
     i = i + 1
   }
-  lines
 }

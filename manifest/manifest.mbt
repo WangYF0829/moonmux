@@ -76,35 +76,6 @@ pub fn ends_with(s : String, suffix : String) -> Bool {
 }
 
 ///|
-/// 把字符串按换行切成行（去掉空行由调用方决定）。
-///
-/// 用 StringBuilder 而不是 Buffer::write_char：后者写的是 UTF-16LE 字节，
-/// 现在靠读写对称碰巧不出错，官方已把它标记为弃用并计划改成 UTF-8 语义。
-fn split_lines(s : String) -> Array[String] {
-  let out : Array[String] = []
-  let buf = StringBuilder()
-  let mut i = 0
-  while i < s.length() {
-    match s.get_char(i) {
-      Some(ch) =>
-        if ch.to_int() == 10 {
-          out.push(buf.to_string())
-          buf.reset()
-        } else if ch.to_int() != 13 {
-          // 手工编辑过的清单可能是 CRLF，CR 直接丢掉
-          buf.write_char(ch)
-        }
-      None => ()
-    }
-    i = i + 1
-  }
-  if !buf.is_empty() {
-    out.push(buf.to_string())
-  }
-  out
-}
-
-///|
 /// 严格解析十进制整数：只允许一个可选负号加若干数字，且必须有数字。
 ///
 /// 旧实现「跳过非数字继续拼」会把注释里的数字吃进来
@@ -252,7 +223,35 @@ pub fn parse(text : String) -> Result[Manifest, String] {
     text
   }
   let mut has_version = false
-  for line in split_lines(body) {
+  // 逐行扫描，不把整份清单切成字符串数组：百万包的清单会产生百万个小对象。
+  // 每行现切现用，峰值只与单行长度有关。
+  let mut line_start = 0
+  let mut i = 0
+  while i <= body.length() {
+    let at_end = i == body.length()
+    let mut is_break = at_end
+    if !at_end {
+      match body.get_char(i) {
+        Some(c) =>
+          if c.to_int() == 10 {
+            is_break = true
+          }
+        None => ()
+      }
+    }
+    if is_break {
+      let mut end = i
+      if end > line_start {
+        match body.get_char(end - 1) {
+          Some(c) =>
+            if c.to_int() == 13 {
+              end = end - 1
+            }
+          None => ()
+        }
+      }
+      let line = body[line_start:end].to_owned()
+
     if line.length() > 0 {
       match line.get_char(0) {
         Some(c) =>
@@ -304,6 +303,9 @@ pub fn parse(text : String) -> Result[Manifest, String] {
         None => ()
       }
     }
+        line_start = i + 1
+    }
+    i = i + 1
   }
   // 有版本行却没有任何粒度行：清单被截断（或只复制了头部）。
   // 静默当成「没有时间信息」会让 mux 写出所有粒度都是 0 的文件。
@@ -325,7 +327,8 @@ pub fn render(
 ) -> String {
   // 逐行字符串拼接是 O(n²)：10 万个包会产生约 10 万次整串复制。
   // 用 StringBuilder 预分配（每行最多 21 字节："-" + 19 位数字 + 换行）。
-  let sb = StringBuilder(size_hint=64 + granules.length() * 21)
+  // 平均一行约 6 字节（5–6 位数字 + 换行）；按 21 字节预分配会多占约 3 倍。
+  let sb = StringBuilder(size_hint=64 + granules.length() * 10)
   push_str(sb, "# moonmux manifest v1\n# granulepos\n# serial=")
   push_str(sb, serial.to_string())
   push_str(sb, "\n# packets=")
