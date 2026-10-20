@@ -146,3 +146,53 @@ test "the stream handed to the decoder holds only that stream" {
   assert_eq(@ogg.structure_problems(reparsed).length(), 0)
   assert_eq(@ogg.reassemble(reparsed)[0].data.length(), 8)
 }
+
+///|
+/// 估算只按头部与粒度算 PCM 字节数（2 声道、pre-skip 312、末粒度 48000）。
+test "estimate pcm bytes from headers" {
+  let packets : Array[@ogg.Packet] = [
+    {
+      data: b"OpusHead\x01\x02\x38\x01\x80\xBB\x00\x00\x00\x00\x00",
+      granule_position: 0L,
+      serial: 1U,
+    },
+    { data: b"audio", granule_position: 48000L, serial: 1U },
+  ]
+  let pages = @ogg.paginate(packets, 1U)
+  // (48000 - 0 - 312) × 2 声道 × 2 字节
+  assert_eq(estimate_pcm_bytes([pages]), (48000L - 312L) * 4L)
+}
+
+///|
+/// 估算超过预算时在解码前就拒绝，并说明是 PCM 预算。
+test "the pcm budget is enforced before decoding" {
+  let packets : Array[@ogg.Packet] = [
+    {
+      data: b"OpusHead\x01\x02\x38\x01\x80\xBB\x00\x00\x00\x00\x00",
+      granule_position: 0L,
+      serial: 1U,
+    },
+    { data: b"audio", granule_position: 48000L, serial: 1U },
+  ]
+  let data = @ogg.serialize_pages(@ogg.paginate(packets, 1U))
+  match ogg_to_wav_limited(data, 1000L) {
+    Err(msg) => assert_true(msg.contains("MiB"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// 损坏的粒度（Int64 上限）不能让估算溢出成负数而绕过预算。
+test "an absurd granule cannot bypass the budget" {
+  let packets : Array[@ogg.Packet] = [
+    {
+      data: b"OpusHead\x01\x02\x38\x01\x80\xBB\x00\x00\x00\x00\x00",
+      granule_position: 0L,
+      serial: 1U,
+    },
+    { data: b"audio", granule_position: 9223372036854775807L, serial: 1U },
+  ]
+  let pages = @ogg.paginate(packets, 1U)
+  // 估算应当直接判为超限，而不是回绕成负数
+  assert_true(estimate_pcm_bytes([pages]) > 268435456L)
+}

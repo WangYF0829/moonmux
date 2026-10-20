@@ -368,3 +368,60 @@ test "a bos page before the segment ends does not split" {
   }
   assert_true(saw_error)
 }
+
+///|
+/// 流号号段用尽时必须报错，而不是回绕到 0 撞上已有流。
+///
+/// 构造：第一段占用了 0 与 1；第二段有三条流（0、1、0xFFFFFFFE）需要换号。
+/// 前两条换到 0xFFFFFFFF 后号段用尽，第三条必须报错 ——
+/// 回绕到 0 会产出「跨段流号重复」的文件，`verify` 会判 error。
+test "chain reports an exhausted serial space" {
+  let part_a = paginate(
+    [
+      { data: b"a1", granule_position: 0L, serial: 0U },
+      { data: b"a2", granule_position: 10L, serial: 0U },
+    ],
+    0U,
+  )
+  let part_b = paginate(
+    [
+      { data: b"b1", granule_position: 0L, serial: 1U },
+      { data: b"b2", granule_position: 10L, serial: 1U },
+    ],
+    1U,
+  )
+  let first : Array[Page] = []
+  for p in part_a {
+    first.push(p)
+  }
+  for p in part_b {
+    first.push(p)
+  }
+  let second = match mux_streams([
+    {
+      serial: 0U,
+      packets: [
+        { data: b"c1", granule_position: 0L, serial: 0U },
+        { data: b"c2", granule_position: 10L, serial: 0U },
+      ],
+    },
+    {
+      serial: 1U,
+      packets: [
+        { data: b"d1", granule_position: 0L, serial: 1U },
+        { data: b"d2", granule_position: 10L, serial: 1U },
+      ],
+    },
+    {
+      serial: 4294967294U,
+      packets: [{ data: b"e1", granule_position: 0L, serial: 4294967294U }],
+    },
+  ]) {
+    Ok(p) => p
+    Err(_) => []
+  }
+  match chain(first, second) {
+    Err(msg) => assert_true(msg.contains("用尽"))
+    Ok(_) => assert_true(false)
+  }
+}

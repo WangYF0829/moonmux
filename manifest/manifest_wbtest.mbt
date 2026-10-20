@@ -264,3 +264,33 @@ test "a known header without equals is rejected" {
     Err(msg) => assert_true(msg.contains("等号"))
   }
 }
+
+///|
+/// 超出 Int64 的粒度必须拒绝；边界值本身要通过。
+test "reject granule values beyond int64" {
+  match parse("# packets=1\n9223372036854775808\n") {
+    Ok(_) => assert_true(false)
+    Err(_) => assert_true(true)
+  }
+  match parse("# packets=1\n9223372036854775807\n") {
+    Ok(m) => assert_eq(m.granules[0], 9223372036854775807L)
+    Err(_) => assert_true(false)
+  }
+}
+
+///|
+/// 流号是 32 位字段：超出范围要报错，而不是静默截断。
+test "reject serial values beyond 32 bits" {
+  match parse("# serial=4294967296\n0\n") {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("32 位"))
+  }
+  match parse("# serial=4294967295\n0\n") {
+    Ok(m) =>
+      match m.serial {
+        Some(s) => assert_eq(s, 4294967295U)
+        None => assert_true(false)
+      }
+    Err(_) => assert_true(false)
+  }
+}

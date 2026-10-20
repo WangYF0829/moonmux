@@ -166,7 +166,9 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
 /// 只写标准的 44 字节头：`RIFF` + `fmt `（16 字节 PCM）+ `data`。
 /// 不做 `fact`、`LIST` 之类的扩展块 —— 转码产物越简单越不容易被拒。
 pub fn encode_wav(format : WavFormat, data : Bytes) -> Bytes {
-  let buf = Buffer()
+  // 预分配恰好大小：默认的倍增扩容会在峰值时同时持有旧块与新块，
+  // 对几十 MB 的 PCM 意味着多出一份完整副本。
+  let buf = Buffer(size_hint=44 + data.length())
   // "RIFF"
   buf.write_byte((0x52 : Byte))
   buf.write_byte((0x49 : Byte))

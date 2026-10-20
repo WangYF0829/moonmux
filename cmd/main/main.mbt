@@ -304,6 +304,14 @@ fn run_demux(src : String, dir : String) -> Unit {
         return
       }
       let packets = @ogg.reassemble(pages)
+      // 包文件名是 packet_%06d.bin，超过 6 位后字典序会乱，mux 读回的顺序就错了。
+      if packets.length() > 999999 {
+        fail_data(
+          "错误: 该文件有 " +
+          packets.length().to_string() +
+          " 个包，超过当前命名方案的上限 999999",
+        )
+      }
       let streams = @ogg.group_by_stream(packets)
       let chains = @ogg.split_chains(pages)
       // 输入必须整份解析成功，否则写出的是半截包集
@@ -329,7 +337,8 @@ fn run_demux(src : String, dir : String) -> Unit {
       // 这类错误只能靠入口挡住，容器层看不出来。
       if @fs.path_exists(dir) {
         let existing = @fs.read_dir(dir) catch {
-          IOError(_) => []
+          IOError(msg) =>
+            return fail("错误: 无法读取输出目录 " + dir + " —— " + msg)
         }
         if existing.length() > 0 {
           fail(
@@ -456,7 +465,7 @@ fn files_in(dir : String) -> Result[Array[String], String] {
 }
 
 ///|
-/// 列出目录下的子目录名，按名字典序。
+/// 列出目录下的子目录名，按 s<N> 的数字序（s2 在 s10 之前）。
 fn subdirs_in(dir : String) -> Result[Array[String], String] {
   let entries = @fs.read_dir(dir) catch {
     IOError(msg) => return Err("无法读取目录 " + dir + " —— " + msg)
@@ -470,8 +479,66 @@ fn subdirs_in(dir : String) -> Result[Array[String], String] {
       names.push(e)
     }
   }
-  names.sort()
+  // 按 s<N> 的数字排序。字典序会把 s10 排在 s2 前面，
+  // 超过 9 条逻辑流时 BOS 顺序与 demux 时不一致，往返就对不上了。
+  let mut i = 1
+  while i < names.length() {
+    let mut j = i
+    while j > 0 {
+      let a = dir_number(names[j - 1])
+      let b = dir_number(names[j])
+      let swap = match (a, b) {
+        (Some(x), Some(y)) => y < x
+        (Some(_), None) => false
+        (None, Some(_)) => true
+        (None, None) => names[j] < names[j - 1]
+      }
+      if swap {
+        let tmp = names[j - 1]
+        names[j - 1] = names[j]
+        names[j] = tmp
+        j = j - 1
+      } else {
+        break
+      }
+    }
+    i = i + 1
+  }
   Ok(names)
+}
+
+///|
+/// 解析 `s<N>` 形式的目录序号；不是这种形式时返回 None。
+fn dir_number(name : String) -> Int? {
+  if name.length() < 2 {
+    return None
+  }
+  match name.get_char(0) {
+    Some(c) =>
+      if c.to_int() != 115 {
+        return None
+      }
+    None => return None
+  }
+  let mut n = 0
+  let mut i = 1
+  while i < name.length() {
+    match name.get_char(i) {
+      Some(c) => {
+        let d = c.to_int() - 48
+        if d < 0 || d > 9 {
+          return None
+        }
+        if n > (2147483647 - d) / 10 {
+          return None
+        }
+        n = n * 10 + d
+      }
+      None => return None
+    }
+    i = i + 1
+  }
+  Some(n)
 }
 
 ///|
@@ -802,10 +869,11 @@ fn run_split(src : String, dir : String) -> Unit {
       // 用户可能把它当成这次拆分的产物。
       if @fs.path_exists(dir) {
         let existing = @fs.read_dir(dir) catch {
-          IOError(_) => []
+          IOError(msg) =>
+            return fail("错误: 无法读取输出目录 " + dir + " —— " + msg)
         }
         if existing.length() > 0 {
-          fail_data(
+          fail(
             "错误: 输出目录已存在且非空 —— " +
             dir +
             "\n  请换一个新目录，或先清空它（残留的 partN.ogg 会被误认为本次产物）",
@@ -1159,7 +1227,11 @@ fn run_tag(src : String, out : String, assignments : Array[String]) -> Unit {
       )
       // 自己写出的文件自己都通不过校验，必须让退出码体现出来
       if written_errors > 0 || crc_bad > 0 {
-        fail_data("错误: 写出的文件未通过自检 —— " + out)
+        // 先写盘后自检：失败时不能把坏文件留在原地
+        @fs.remove_file(out) catch {
+          _ => ()
+        }
+        fail_data("错误: 写出的文件未通过自检，已删除 —— " + out)
       }
     }
   }
@@ -1443,6 +1515,42 @@ fn run_verify(path : String) -> Unit {
 }
 
 ///|
+/// 读 `MOONMUX_MAX_PCM_MB` 作为转码的 PCM 预算；非法值退回默认 256 MiB。
+///
+/// 默认值对单链长文件是一个能力上限（约 46 分钟单声道 Opus）。
+/// 给一个显式覆盖入口，比让用户去改代码或忍受 OOM 更合理。
+fn pcm_budget_bytes() -> Int64 {
+  let default : Int64 = 256L * 1048576L
+  match @env.get_env_var("MOONMUX_MAX_PCM_MB") {
+    None => default
+    Some(v) => {
+      let mut n : Int64 = 0L
+      let mut ok = v.length() > 0
+      let mut i = 0
+      while i < v.length() {
+        match v.get_char(i) {
+          Some(c) => {
+            let d = c.to_int() - 48
+            if d < 0 || d > 9 {
+              ok = false
+            } else {
+              n = n * 10L + d.to_int64()
+            }
+          }
+          None => ok = false
+        }
+        i = i + 1
+      }
+      if ok && n > 0L && n <= 4096L {
+        n * 1048576L
+      } else {
+        default
+      }
+    }
+  }
+}
+
+///|
 /// `to-wav`：把 Ogg（Opus / Vorbis）转码成 WAV（16 位 PCM）。
 ///
 /// 这一层只做 I/O：识别与解码都在 `pipeline/` 里，WAV 编码在 `wav/` 里。
@@ -1473,7 +1581,7 @@ fn run_towav(src : String, out : String) -> Unit {
           " 条逻辑流，只转码每段的第一条可识别音频流",
         )
       }
-      match @pipeline.ogg_to_wav(data) {
+      match @pipeline.ogg_to_wav_limited(data, pcm_budget_bytes()) {
         Err(msg) => fail_data("错误: 转码失败 —— " + msg)
         Ok(wav) => {
           @fs.write_bytes_to_file(out, wav) catch {
@@ -1484,7 +1592,12 @@ fn run_towav(src : String, out : String) -> Unit {
           }
           // 回读一遍，确认产出的 WAV 能被子模块自己解析回来
           match @wav.WavFile::parse(wav) {
-            None => fail_data("错误: 已写出 " + out + "，但回读校验未通过")
+            None => {
+              @fs.remove_file(out) catch {
+                _ => ()
+              }
+              fail_data("错误: 已写出 " + out + "，但回读校验未通过，已删除")
+            }
             Some(f) => println(
               "已写出 " +
               out +

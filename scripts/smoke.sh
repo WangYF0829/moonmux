@@ -12,8 +12,27 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 BIN="${1:-_build/native/debug/build/cmd/main/main.exe}"
-TMP="$(mktemp -d -p . smoke.XXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
+# 临时目录放进 _build（已在 .gitignore 里）：即使脚本被中断，
+# 残留也只落在构建目录内，不会污染仓库根目录。
+mkdir -p _build
+# 被强制中断（SIGKILL / 终端关闭）时 trap 不会执行；把一小时前的遗留清掉，
+# 避免残留无限累积。只碰自己命名的目录。
+find _build -maxdepth 1 -type d -name 'smoke.*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+TMP="$(mktemp -d -p _build smoke.XXXXXX)"
+# Windows 上文件句柄释放有延迟，rm -rf 可能第一次删不干净；
+# 重试几次，失败也不影响检查结果（下次运行前的陈旧目录清理会兜底）。
+cleanup() {
+  # Windows 上文件句柄释放有延迟：多试几次，仍失败就留一句提示
+  # （目录在 _build/ 内，下一次运行前的陈旧清理会兜底）。
+  for _ in 1 2 3 4 5; do
+    rm -rf "$TMP" 2>/dev/null
+    [ -d "$TMP" ] || return 0
+    sleep 0.5
+  done
+  echo "注意: 临时目录未能完全删除：$TMP（在 _build 内，已忽略）" >&2
+}
+trap 'cleanup; exit 130' INT TERM
+trap cleanup EXIT
 FAIL=0
 
 pass() { printf "  \033[32mPASS\033[0m  %s\n" "$1"; }

@@ -91,13 +91,25 @@ pub fn chain(first : Array[Page], second : Array[Page]) -> Result[Array[Page], S
           max_serial = s
         }
       }
+      if max_serial == 4294967295U {
+        return Err("流号已用满 32 位，无法为相撞的流分配新号")
+      }
       let streams = group_by_stream(reassemble(seg))
       let mut next = max_serial + 1U
       let remapped : Array[LogicalStream] = []
       for st in streams {
         let serial = if has_serial(used, st.serial) {
+          // 0 表示「32 位号段已用尽」：上一轮用掉了 0xFFFFFFFF，
+          // 再 +1 就会回绕到 0，与已有流撞号并产出 verify 会判错的文件。
+          if next == 0U {
+            return Err("流号已用尽（无法为相撞的流分配新号）")
+          }
           let fresh = next
-          next = next + 1U
+          next = if next == 4294967295U {
+            0U
+          } else {
+            next + 1U
+          }
           fresh
         } else {
           st.serial

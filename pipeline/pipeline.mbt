@@ -153,13 +153,143 @@ pub fn detect(data : Bytes) -> Result[Codec, String] {
 /// 链接要求各段的声道数与采样率一致：WAV 的格式块只有一份，
 /// 拼不进两种格式。不一致时如实报错并指出是哪两段不符，
 /// 而不是按第一段的格式硬写 —— 那会让第二段变成音调错误的噪声。
+///|
+/// 转码输出的内存上限（16 位 PCM 字节数）。
+///
+/// 整条链路没有流式写接口（`@fs` 只有整文件写），所以 PCM 必须在内存里
+/// 攒齐再一次性写盘；实测峰值约为输出的 3–4 倍（解码器的 Double PCM
+/// 与最终 WAV 各占一份）。超过这个上限就明确拒绝，而不是让进程 OOM。
+const MAX_PCM_BYTES : Int64 = 256L * 1024L * 1024L
+
+///|
+/// 取某条流的**第一个包**（头部包）。只扫该流的页，碰到第一个包结束就停。
+///
+/// 估算阶段只需要头部参数，不需要把整条流重组一遍 ——
+/// `reassemble` 会复制全部负载，对百万包的文件等于把内存翻倍。
+fn first_packet_bytes(pages : Array[@ogg.Page], serial : UInt) -> Bytes? {
+  let buf = Buffer(size_hint=256)
+  for page in pages {
+    if page.serial == serial {
+      let mut completes = false
+      for seg in page.segments {
+        if seg < 255 {
+          completes = true
+        }
+      }
+      buf.write_bytes(page.payload.exact_view())
+      if completes {
+        return Some(buf.to_bytes())
+      }
+    }
+  }
+  None
+}
+
+///|
+/// 估算整份输出需要多少 16 位 PCM 字节：逐段按「末粒度 − 首粒度 − pre-skip」
+/// 乘声道数。复杂度 O(页数)，不解码、不重组。
+fn estimate_pcm_bytes(chains : Array[Array[@ogg.Page]]) -> Int64 {
+  let mut total : Int64 = 0L
+  for part in chains {
+    // 找该段的第一条音频流：逐流取头部包解析
+    let mut chosen : UInt? = None
+    let mut channels = 0
+    let mut pre_skip : Int64 = 0L
+    for serial in @ogg.serials_of(part) {
+      match first_packet_bytes(part, serial) {
+        Some(pkt) =>
+          match @codec.parse_audio_header(pkt) {
+            Some(info) => {
+              chosen = Some(serial)
+              channels = info.channels
+              pre_skip = info.pre_skip.to_int64()
+            }
+            None => ()
+          }
+        None => ()
+      }
+      if chosen is Some(_) {
+        break
+      }
+    }
+    let serial = match chosen {
+      Some(s) => s
+      None => continue
+    }
+    if channels <= 0 {
+      continue
+    }
+    let mut first : Int64 = -1L
+    let mut last : Int64 = -1L
+    for p in part {
+      if p.serial == serial && p.granule_position >= 0L {
+        if first < 0L {
+          first = p.granule_position
+        }
+        last = p.granule_position
+      }
+    }
+    if first < 0L || last <= first {
+      continue
+    }
+    let samples = last - first - pre_skip
+    if samples <= 0L {
+      continue
+    }
+    let per_sample = channels.to_int64() * 2L
+    // 乘法前检查：损坏的 granule（例如 INT64_MAX）会让乘法回绕成负数，
+    // 上限就永远不触发 —— 直接当成「超限」处理。
+    if per_sample <= 0L || samples > (9223372036854775807L - total) / per_sample {
+      return MAX_PCM_BYTES + 1L
+    }
+    total = total + samples * per_sample
+  }
+  total
+}
+
+///|
+/// Ogg → WAV。
 pub fn ogg_to_wav(data : Bytes) -> Result[Bytes, String] {
+  ogg_to_wav_limited(data, MAX_PCM_BYTES)
+}
+
+///|
+/// 同 `ogg_to_wav`，但允许调用方指定 PCM 预算（字节）。
+///
+/// 命令行通过 `MOONMUX_MAX_PCM_MB` 覆盖：默认 256 MiB 对单链长文件是一个
+/// 能力上限（约 46 分钟单声道 Opus），知道自己在做什么的用户可以调大。
+pub fn ogg_to_wav_limited(data : Bytes, limit : Int64) -> Result[Bytes, String] {
   let pages = @ogg.parse_pages(data)
   if pages.length() == 0 {
     return Err("不是合法的 Ogg 文件（没有解析出任何页）")
   }
   let chains = @ogg.split_chains(pages)
-  let buf = Buffer()
+  let estimated = estimate_pcm_bytes(chains)
+  if estimated > limit {
+    // 估算函数在数值异常（粒度溢出）时返回 MAX+1 的哨兵值，
+    // 直接打印会变成「预计 256 MiB 超过 256 MiB」这种自相矛盾的话。
+    if estimated > MAX_PCM_BYTES {
+      return Err("无法估算输出大小（页粒度超出可表示范围，文件可能已损坏）")
+    }
+    return Err(
+      "预计输出 " +
+      (estimated / 1048576L).to_string() +
+      " MiB 的 PCM，超过 " +
+      (limit / 1048576L).to_string() +
+      " MiB 的内存预算（解码峰值约为它的 3–4 倍）。\n" +
+      "  链接流可先 split 拆开逐段转码；单链文件需要外部切分或重编码。\n" +
+      "  确认内存足够时可用环境变量 MOONMUX_MAX_PCM_MB 调大预算",
+    )
+  }
+  // 预分配：避免 Buffer 反复倍增时同时持有新旧两块内存。
+  // 但估算值来自输入（不可全信），预分配封顶 16 MiB，其余按需增长 ——
+  // 否则一个伪造的 granule 就能让进程立刻申请 256 MiB。
+  let hint = if estimated > 16777216L {
+    16777216L
+  } else {
+    estimated
+  }
+  let buf = Buffer(size_hint=hint.to_int())
   let mut channels = 0
   let mut sample_rate = 0
   let mut seg = 0

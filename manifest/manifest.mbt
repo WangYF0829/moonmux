@@ -135,6 +135,11 @@ fn parse_int_strict(s : String) -> Int64? {
         if d < 0 || d > 9 {
           return None
         }
+        // 溢出检查：清单是外部输入，一个超大数字会让 v 回绕成负数，
+        // 后面再被当成合法粒度写进页头。
+        if v > (9223372036854775807L - d.to_int64()) / 10L {
+          return None
+        }
         v = v * 10L + d.to_int64()
       }
       None => return None
@@ -268,6 +273,11 @@ pub fn parse(text : String) -> Result[Manifest, String] {
                       if v < 0L {
                         return Err("清单的 serial 不能为负：" + line)
                       }
+                      // 流号是 32 位字段：超出范围时 to_uint() 会静默截断，
+                      // 用户只会看到「流号 1001 重复」这种莫名其妙的错误。
+                      if v > 4294967295L {
+                        return Err("清单的 serial 超出 32 位范围：" + line)
+                      }
                       serial = Some(v.reinterpret_as_uint64().to_uint())
                     } else if key == "packets" {
                       if v < 0L {
@@ -313,17 +323,27 @@ pub fn render(
   chain : Int,
   granules : Array[Int64],
 ) -> String {
-  let mut out = "# moonmux manifest v1\n# granulepos\n# serial=" +
-    serial.to_string() +
-    "\n# packets=" +
-    granules.length().to_string() +
-    "\n# chain=" +
-    chain.to_string() +
-    "\n"
+  // 逐行字符串拼接是 O(n²)：10 万个包会产生约 10 万次整串复制。
+  // 用 StringBuilder 预分配（每行最多 21 字节："-" + 19 位数字 + 换行）。
+  let sb = StringBuilder(size_hint=64 + granules.length() * 21)
+  push_str(sb, "# moonmux manifest v1\n# granulepos\n# serial=")
+  push_str(sb, serial.to_string())
+  push_str(sb, "\n# packets=")
+  push_str(sb, granules.length().to_string())
+  push_str(sb, "\n# chain=")
+  push_str(sb, chain.to_string())
+  push_str(sb, "\n")
   for g in granules {
-    out = out + g.to_string() + "\n"
+    push_str(sb, g.to_string())
+    push_str(sb, "\n")
   }
-  out
+  sb.to_string()
+}
+
+///|
+/// 把字符串追加到 StringBuilder。
+fn push_str(sb : StringBuilder, s : String) -> Unit {
+  sb.write_stringview(s[:])
 }
 
 ///|

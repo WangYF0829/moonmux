@@ -12,6 +12,7 @@
 
 import {
   "moonmux/ogg",
+  "moonmux/codec",
   "moonmux/wav",
   "LL728/moonopus",
   "LL728/moonvorbis",
