@@ -60,7 +60,7 @@ moon add WangYF0829/moonmux
 
 脚本与 CI 可直接据此判断，不必 grep 中文输出。
 
-**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（26 项，覆盖往返、退出码、截断与清单异常）。
+**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（28 项，覆盖往返、退出码、截断与清单异常）。
 
 ## 能力边界
 
@@ -209,7 +209,7 @@ Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测），
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）与转码验证。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`wasm-gc` 与 `native` 双后端
-186 个测试、26 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI。
+186 个测试、28 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI。
 变更记录见 `CHANGELOG.md`，协作约定见 `AGENTS.md`，开发过程与取舍见 `docs/开发历程.md`。
 
 尚未完成：MP4 / ISOBMFF 的封装；WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器）。

@@ -93,6 +93,17 @@ ORIG=$(wc -c < testdata/vorbis_sample.ogg)
 NEW=$(wc -c < "$TMP/t.ogg")
 [ "$NEW" -ge "$ORIG" ]; check $? "改标签后文件大小合理（$ORIG → $NEW）"
 
+echo "== 4b. 转码（解码路径）=="
+# 单测只覆盖容器层；解码器升级后 to-wav 的输出没有任何自动化校验。
+# 这里固定 PCM 字节数（6.00 s @48k 单声道 / 1.00 s @44.1k 双声道），
+# 解码器若改变输出，这一项会先失败，提醒人工复核。
+"$BIN" to-wav testdata/opus_sample.opus "$TMP/o.wav" >/dev/null 2>&1
+[ $? -eq 0 ] && [ "$(wc -c < "$TMP/o.wav")" -eq 576044 ]
+check $? "Opus → WAV（576044 字节）"
+"$BIN" to-wav testdata/vorbis_sample.ogg "$TMP/v.wav" >/dev/null 2>&1
+[ $? -eq 0 ] && [ "$(wc -c < "$TMP/v.wav")" -eq 176444 ]
+check $? "Vorbis → WAV（176444 字节）"
+
 echo "== 5. 定位 =="
 "$BIN" seek testdata/opus_sample.opus 2500 >/dev/null 2>&1
 check $? "seek 正常工作"

@@ -19,6 +19,6 @@ preferred_target = "native"
 
 import {
   "moonbitlang/x@0.5.5",
-  "LL728/moonopus@0.2.1",
-  "LL728/moonvorbis@0.1.3",
+  "LL728/moonopus@0.2.2",
+  "LL728/moonvorbis@0.1.4",
 }
