@@ -23,7 +23,7 @@ fi
 # 残留也只落在构建目录内，不会污染仓库根目录。
 mkdir -p _build
 # 被强制中断（SIGKILL / 终端关闭）或 Windows 句柄延迟时 trap 可能失败；
-# 清掉 5 分钟前的遗留（一次冒烟约 15 秒，不会误删并发实例）。
+# 清掉 5 分钟前的遗留（一次冒烟约 100 秒（含 Vorbis 转码），不会误删并发实例）。
 find _build -maxdepth 1 -type d -name 'smoke.*' -mmin +5 -exec rm -rf {} + 2>/dev/null || true
 TMP="$(mktemp -d -p _build smoke.XXXXXX)"
 # Windows 上文件句柄释放有延迟，rm -rf 可能第一次删不干净；

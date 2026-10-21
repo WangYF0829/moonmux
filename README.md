@@ -209,7 +209,8 @@ Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测），
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）与转码验证。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`wasm-gc` 与 `native` 双后端
-186 个测试、28 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI。
+186 个测试、28 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI（ubuntu + windows 矩阵，
+外加覆盖率非回归门禁与 native 冒烟）。
 变更记录见 `CHANGELOG.md`，协作约定见 `AGENTS.md`，开发过程与取舍见 `docs/开发历程.md`。
 
 尚未完成：MP4 / ISOBMFF 的封装；WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器）。

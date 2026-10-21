@@ -6,21 +6,51 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # 只在 PR 上取消旧 run；master 的推送不互相取消，避免徽章停在 cancelled。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # 未覆盖行数的基线（moon coverage analyze 的 Total，实测 440）。
+  # 新增测试后应调低；调高需要在 PR 说明原因。
+  MAX_UNCOVERED_LINES: 440
+  # 跨平台/工具链 patch 版本可能让计数抖动几行，给一点余量。
+  COVERAGE_TOLERANCE: 10
 
 jobs:
   check:
-    name: check · fmt · info · test
-    runs-on: ubuntu-latest
+    name: check · fmt · info · test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install MoonBit
+      - name: Install MoonBit (Unix)
+        if: runner.os != 'Windows'
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      # Windows 用官方 powershell 安装脚本；安装后断言 moon.exe 存在，
+      # 否则失败会变成下一步的 "command not found"，难以定位。
+      - name: Install MoonBit (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          irm https://cli.moonbitlang.com/install/powershell.ps1 | iex
+          $bin = Join-Path $env:USERPROFILE '.moon\bin'
+          if (-not (Test-Path (Join-Path $bin 'moon.exe'))) {
+            throw "moon.exe not found under $bin"
+          }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Toolchain version
         run: moon version --all
@@ -31,6 +61,7 @@ jobs:
       # 验收口径的四个检查：警告即错误、格式、接口文档、测试。
       # 失败时把输出写进 step summary，便于在没有日志权限时定位。
       - name: moon check --deny-warn
+        shell: bash
         run: |
           set -o pipefail
           if ! moon check --deny-warn 2>&1 | tee /tmp/check.log; then
@@ -49,11 +80,14 @@ jobs:
       - name: moon info
         run: moon info
 
+      # Windows 上显式走 wasm-gc：native 测试需要 MSVC，成本和失败面都更大，
+      # 而 native 后端已由 ubuntu 的 native job 覆盖。
       - name: moon test --deny-warn
-        run: moon test --deny-warn
+        run: moon test --deny-warn --target ${{ runner.os == 'Windows' && 'wasm-gc' || 'native' }}
 
       # 生成物不能进版本库：_build、*.mi/*.core/*.mbti、pkg.generated.mbti。
       - name: Verify no generated artifacts are tracked
+        shell: bash
         run: |
           set -e
           artifacts=$(git ls-files | grep -E '(^|/)_build/|(^|/).*\.(bak|core|mi|mbti|log)$|(^|/)pkg\.generated\.mbti$' || true)
@@ -64,6 +98,7 @@ jobs:
           fi
 
       - name: Verify no secrets are committed
+        shell: bash
         run: |
           set -e
           if git grep -nEI '(ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})' -- ':!*.md'; then
@@ -71,9 +106,52 @@ jobs:
             exit 1
           fi
 
+  coverage:
+    name: coverage (non-regression)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain version
+        run: moon version --all
+
+      - name: Update package index
+        run: moon update
+
+      # 覆盖率不用于评分，只用于防止劣化：未覆盖行数不得超过基线 + 容差。
+      - name: moon coverage analyze
+        run: |
+          set -o pipefail
+          moon coverage analyze 2>&1 | tee /tmp/coverage.log
+          total=$(sed -n 's/^Total: \([0-9][0-9]*\) uncovered.*/\1/p' /tmp/coverage.log | tail -1)
+          hits=$(grep -c '^Total: ' /tmp/coverage.log || true)
+          limit=$((MAX_UNCOVERED_LINES + COVERAGE_TOLERANCE))
+          echo "uncovered=${total:-<missing>} total_lines_seen=$hits limit=$limit"
+          if [ -z "$total" ]; then
+            echo "::error::coverage output did not contain a Total line"
+            exit 1
+          fi
+          if [ "$total" -gt "$limit" ]; then
+            {
+              echo "### coverage regressed: $total > $limit (baseline $MAX_UNCOVERED_LINES)"
+              echo '```'
+              grep -n 'UNCOVERED' /tmp/coverage.log | head -60
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::coverage regressed: $total uncovered lines > $limit"
+            exit 1
+          fi
+
   native:
     name: native · smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -98,6 +176,6 @@ jobs:
             exit 1
           fi
 
-      # 端到端：往返逐字节、退出码、截断与清单异常。
+      # 端到端：往返逐字节、退出码、截断、清单异常、转码输出。
       - name: Smoke tests
         run: bash scripts/smoke.sh
