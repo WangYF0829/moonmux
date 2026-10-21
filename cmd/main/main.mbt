@@ -9,10 +9,21 @@
 ///|
 /// 删除一个由我们刚创建的目录及其中的文件（写盘失败时清理半成品）。
 fn remove_dir_tree(dir : String) -> Unit {
+  if !@fs.path_exists(dir) {
+    return
+  }
   let entries = @fs.read_dir(dir) catch { IOError(_) => return }
   for e in entries {
-    @fs.remove_file(dir + "/" + e) catch {
-      _ => ()
+    let p = dir + "/" + e
+    let nested = @fs.is_dir(p) catch { _ => false }
+    if nested {
+      // demux 的输出是「目录 + 平铺文件」，但回滚也可能遇到更深一层；
+      // 不递归的话 remove_file 对子目录必然失败，整个回滚等于空操作。
+      remove_dir_tree(p)
+    } else {
+      @fs.remove_file(p) catch {
+        _ => ()
+      }
     }
   }
   @fs.remove_dir(dir) catch {
@@ -1611,30 +1622,36 @@ fn pcm_budget_bytes() -> Int64 {
   let default : Int64 = 256L * 1048576L
   match @env.get_env_var("MOONMUX_MAX_PCM_MB") {
     None => default
-    Some(v) => {
-      let mut n : Int64 = 0L
-      let mut ok = v.length() > 0
-      let mut i = 0
-      while i < v.length() {
-        match v.get_char(i) {
-          Some(c) => {
-            let d = c.to_int() - 48
-            if d < 0 || d > 9 {
-              ok = false
-            } else {
-              n = n * 10L + d.to_int64()
-            }
-          }
-          None => ok = false
+    Some(v) => budget_from_text(v)
+  }
+}
+
+///|
+/// 解析预算文本（单位 MiB）：只接受 1..4096 的纯十进制整数，其余退回默认 256 MiB。
+/// 拆成纯函数是为了能单测 —— 环境变量在本进程里不好设置。
+fn budget_from_text(v : String) -> Int64 {
+  let default : Int64 = 256L * 1048576L
+  let mut n : Int64 = 0L
+  let mut ok = v.length() > 0
+  let mut i = 0
+  while i < v.length() {
+    match v.get_char(i) {
+      Some(c) => {
+        let d = c.to_int() - 48
+        if d < 0 || d > 9 {
+          ok = false
+        } else {
+          n = n * 10L + d.to_int64()
         }
-        i = i + 1
       }
-      if ok && n > 0L && n <= 4096L {
-        n * 1048576L
-      } else {
-        default
-      }
+      None => ok = false
     }
+    i = i + 1
+  }
+  if ok && n > 0L && n <= 4096L {
+    n * 1048576L
+  } else {
+    default
   }
 }
 
