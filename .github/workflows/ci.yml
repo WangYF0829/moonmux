@@ -25,9 +25,23 @@ jobs:
       - name: Toolchain version
         run: moon version --all
 
+      - name: Update package index
+        run: moon update
+
       # 验收口径的四个检查：警告即错误、格式、接口文档、测试。
+      # 失败时把输出写进 step summary，便于在没有日志权限时定位。
       - name: moon check --deny-warn
-        run: moon check --deny-warn
+        run: |
+          set -o pipefail
+          if ! moon check --deny-warn 2>&1 | tee /tmp/check.log; then
+            {
+              echo '### moon check failed'
+              echo '```'
+              tail -40 /tmp/check.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: moon fmt --check
         run: moon fmt --check
@@ -68,8 +82,21 @@ jobs:
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
+      - name: Update package index
+        run: moon update
+
       - name: Build native CLI
-        run: moon build --target native
+        run: |
+          set -o pipefail
+          if ! moon build --target native 2>&1 | tee /tmp/build.log; then
+            {
+              echo '### moon build failed'
+              echo '```'
+              tail -40 /tmp/build.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       # 端到端：往返逐字节、退出码、截断与清单异常。
       - name: Smoke tests
