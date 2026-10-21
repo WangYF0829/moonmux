@@ -31,7 +31,7 @@ fn same_bytes(a : Bytes, b : Bytes) -> Bool {
 /// 生成的 Ogg 文件会被所有解码器拒绝。
 test "crc32 matches RFC 3533 parameters" {
   let data : Bytes = b"123456789"
-  assert_eq(crc32(data), (0x89A1897FU : UInt))
+  assert_eq(crc32(data), (0x89A1897FU : UInt32))
 }
 
 ///|
@@ -126,7 +126,7 @@ test "crc covers the capture pattern" {
     (bytes[23].to_int().reinterpret_as_uint() << 8) |
     (bytes[24].to_int().reinterpret_as_uint() << 16) |
     (bytes[25].to_int().reinterpret_as_uint() << 24)
-  assert_eq(crc_field, (0x9663CDB4U : UInt))
+  assert_eq(crc_field, (0x9663CDB4U : UInt32))
 }
 
 ///|

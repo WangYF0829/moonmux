@@ -3,7 +3,11 @@
 ///|
 /// 编码再解析应当还原出同样的格式与数据。
 test "wav encode then parse roundtrip" {
-  let fmt : WavFormat = { channels: 2, sample_rate: 44100, bits_per_sample: 16 }
+  let fmt : WavFormat = {
+    channels: 2,
+    sample_rate: 44100,
+    bits_per_sample: 16,
+  }
   let samples : Bytes = b"\x01\x02\x03\x04"
   let bytes = encode_wav(fmt, samples)
   match WavFile::parse(bytes) {
@@ -22,7 +26,7 @@ test "wav encode then parse roundtrip" {
 ///|
 /// 标准 44 字节头 + 数据：总长应为 44 + n。
 test "header length is 44 bytes" {
-  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 8 }
+  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 8, }
   let bytes = encode_wav(fmt, b"abcd")
   assert_eq(bytes.length(), 48)
   // RIFF 长度字段 = 总长 - 8
@@ -49,7 +53,7 @@ test "reject non-wav input" {
 ///|
 /// 声道数与位深应如实写进头里，供解码方计算块对齐。
 test "format fields survive mono 8-bit" {
-  let fmt : WavFormat = { channels: 1, sample_rate: 16000, bits_per_sample: 8 }
+  let fmt : WavFormat = { channels: 1, sample_rate: 16000, bits_per_sample: 8, }
   let bytes = encode_wav(fmt, b"\x80")
   match WavFile::parse(bytes) {
     Some(w) => {
@@ -66,7 +70,7 @@ test "format fields survive mono 8-bit" {
 ///
 /// 修复前这个字段被完全忽略：把它改成 0xFFFFFFFF 也照样解析通过。
 test "reject wav whose riff size exceeds the file" {
-  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 16 }
+  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 16, }
   let good = encode_wav(fmt, b"abcdefgh")
   let buf = Buffer()
   let mut i = 0
@@ -87,7 +91,7 @@ test "reject wav whose riff size exceeds the file" {
 ///|
 /// 声道数、采样率、位深为 0 不是可用格式，应当拒绝。
 test "reject wav with zero format fields" {
-  let bad : WavFormat = { channels: 0, sample_rate: 0, bits_per_sample: 0 }
+  let bad : WavFormat = { channels: 0, sample_rate: 0, bits_per_sample: 0, }
   match WavFile::parse(encode_wav(bad, b"\x00\x00")) {
     None => assert_true(true)
     Some(_) => assert_true(false)
@@ -101,7 +105,7 @@ test "reject wav with zero format fields" {
 /// 「声明长度超出实际数据」的检查被绕过，copy 循环直接跳过，
 /// 最后返回一个 data 为空的「合法」文件 —— 静默的错误接受。
 test "reject wav whose data chunk size sets the sign bit" {
-  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 16 }
+  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 16, }
   let good = encode_wav(fmt, b"abcdefgh")
   // data 块长度字段在偏移 40..44，篡改为 0x80000000（小端）
   let buf = Buffer()
@@ -123,7 +127,10 @@ test "reject wav whose data chunk size sets the sign bit" {
 ///|
 /// 非 PCM 的格式标签要拒绝（浮点 WAV 的 data 不能按整数 PCM 解释）。
 test "reject wav with a non-pcm format tag" {
-  let ok = encode_wav({ channels: 1, sample_rate: 8000, bits_per_sample: 16 }, b"\x00\x00")
+  let ok = encode_wav(
+    { channels: 1, sample_rate: 8000, bits_per_sample: 16, },
+    b"\x00\x00",
+  )
   // 把 fmt 块的格式标签从 1 改成 3（IEEE float）
   let buf = Buffer()
   let mut i = 0
@@ -145,24 +152,24 @@ test "reject wav with a non-pcm format tag" {
 
 ///|
 /// 小端写 16 位（测试里手工拼 WAV 用）。
-fn put_u16(buf : Buffer, v : Int) -> Unit {
+fn put_u16(buf : Buffer, v : Int32) -> Unit {
   buf.write_byte((v % 256).to_byte())
-  buf.write_byte(((v / 256) % 256).to_byte())
+  buf.write_byte((v / 256 % 256).to_byte())
 }
 
 ///|
 /// 小端写 32 位。
-fn put_u32(buf : Buffer, v : Int) -> Unit {
+fn put_u32(buf : Buffer, v : Int32) -> Unit {
   buf.write_byte((v % 256).to_byte())
-  buf.write_byte(((v / 256) % 256).to_byte())
-  buf.write_byte(((v / 65536) % 256).to_byte())
-  buf.write_byte(((v / 16777216) % 256).to_byte())
+  buf.write_byte((v / 256 % 256).to_byte())
+  buf.write_byte((v / 65536 % 256).to_byte())
+  buf.write_byte((v / 16777216 % 256).to_byte())
 }
 
 ///|
 /// 手工拼一个 WAVE_FORMAT_EXTENSIBLE 的 WAV：`sub` 是 SubFormat GUID 的前两字节
 /// （1 = PCM，3 = IEEE float）。
-fn build_wav_ext(sub : Int, bits : Int) -> Bytes {
+fn build_wav_ext(sub : Int32, bits : Int32) -> Bytes {
   let data_len = 4
   let fmt_size = 40
   let total = 12 + 8 + fmt_size + 8 + data_len

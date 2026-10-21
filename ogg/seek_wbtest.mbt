@@ -57,9 +57,9 @@ test "seek clamps to the ends" {
 test "seek never returns a page without a granule" {
   let big = repeat_byte((0x41 : Byte), 255 * 255 + 1000)
   let packets : Array[Packet] = [
-    { data: b"a", granule_position: 0L, serial: 5U },
-    { data: big, granule_position: 500L, serial: 5U },
-    { data: b"b", granule_position: 900L, serial: 5U },
+    { data: b"a", granule_position: 0L, serial: 5U, },
+    { data: big, granule_position: 500L, serial: 5U, },
+    { data: b"b", granule_position: 900L, serial: 5U, },
   ]
   let pages = paginate(packets, 5U)
   // 超长包的第一页 granule 是 -1
@@ -127,7 +127,7 @@ test "seek terminates on skewed distributions" {
   let packets : Array[Packet] = []
   let marks : Array[Int64] = [0L, 1L, 2L, 3L, 1000000L]
   for g in marks {
-    packets.push({ data: b"x", granule_position: g, serial: 8U })
+    packets.push({ data: b"x", granule_position: g, serial: 8U, })
   }
   let pages = paginate(packets, 8U)
   match seek_granule(pages, 8U, 999999L) {
@@ -141,10 +141,10 @@ test "seek terminates on skewed distributions" {
 test "first audio page skips the header pages" {
   let pages = paginate(
     [
-      { data: b"OpusHead", granule_position: 0L, serial: 1U },
-      { data: b"OpusTags", granule_position: 0L, serial: 1U },
-      { data: b"audio-1", granule_position: 960L, serial: 1U },
-      { data: b"audio-2", granule_position: 1920L, serial: 1U },
+      { data: b"OpusHead", granule_position: 0L, serial: 1U, },
+      { data: b"OpusTags", granule_position: 0L, serial: 1U, },
+      { data: b"audio-1", granule_position: 960L, serial: 1U, },
+      { data: b"audio-2", granule_position: 1920L, serial: 1U, },
     ],
     1U,
   )
@@ -168,9 +168,9 @@ test "first audio page is where the packet starts, not ends" {
   let big = repeat_byte((0x41 : Byte), 255 * 255 + 100)
   let pages = paginate(
     [
-      { data: b"header-1", granule_position: 0L, serial: 2U },
-      { data: b"header-2", granule_position: 0L, serial: 2U },
-      { data: big, granule_position: 4800L, serial: 2U },
+      { data: b"header-1", granule_position: 0L, serial: 2U, },
+      { data: b"header-2", granule_position: 0L, serial: 2U, },
+      { data: big, granule_position: 4800L, serial: 2U, },
     ],
     2U,
   )

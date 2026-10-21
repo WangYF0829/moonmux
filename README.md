@@ -2,6 +2,10 @@
 
 # moonmux
 
+[![CI](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml/badge.svg)](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-186%20passing-brightgreen.svg)](#构建与测试)
+
 纯 MoonBit 实现的音频容器工具包，补上 MoonBit 生态中「能解码、不能封装」的最后一环。
 
 ## 为什么做这个
@@ -35,6 +39,17 @@ moonmux 补的就是最后两行。
 
 **容器层（`ogg/`、`wav/`）不依赖任何三方包**：容器格式的正确性应当能被独立验证，不该被解码器的缺陷掩盖。解码环节留给生态中已有的纯 MoonBit 解码器（`LL728/moonopus`、`LL728/moonvorbis`），通过 `pipeline/` 对接 —— 三方依赖被隔离在这一层，不在容器层。
 
+## 作为库使用
+
+模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）。发布后可直接引用：
+
+```bash
+moon add WangYF0829/moonmux
+```
+
+容器层（`ogg/`、`wav/`、`codec/`、`manifest/`）全部是纯函数、零依赖，可以单独复用；
+只有 `pipeline/` 会引入解码器。各包职责见 `AGENTS.md`。
+
 ## 退出码约定
 
 | 退出码 | 含义 |
@@ -45,22 +60,7 @@ moonmux 补的就是最后两行。
 
 脚本与 CI 可直接据此判断，不必 grep 中文输出。
 
-**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。
-
 **只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（26 项，覆盖往返、退出码、截断与清单异常）。
-
-## 能力边界
-
-| 项 | 上限 | 原因 |
-|---|---|---|
-| 单文件大小 | **2 GiB** | MoonBit `Int` 是 32 位，页偏移与长度都用它；`@fs` 也只有整文件 API |
-| `demux` 包数 | **999999** | 包文件名固定 6 位，超过后字典序错乱、`mux` 读回顺序不对 |
-| `to-wav` PCM 预算 | **256 MiB**（`MOONMUX_MAX_PCM_MB` 可调大） | 整条链路没有流式写接口，PCM 必须攒齐再落盘；实测峰值约为预算的 3–4 倍 |
-| `to-wav` 速度 | Opus 约 1.5× 实时；**Vorbis 约 80× 实时** | 纯 MoonBit 解码器；Vorbis 路径明显更慢，长文件请先 `split` |
-| chained 拆分 | 整段都由单页流组成时无法拆分 | 与「一段内交织两条单页流」字节相同，规格上不可判定（保守不切） |
-| 裁剪流时长 | 上界 | 容器层拿不到首个音频页的样本数，精确值需解码 |
-
-内存量级：所有命令都整文件读入（约 1–2× 文件大小）；`cat`/`mux` 写出时再加一份输出副本（实测 3.7×）；`to-wav` 还要叠加解码器的 Double PCM（约 4–5× 输出）。
 
 ## 能力边界
 
@@ -183,6 +183,21 @@ moonmux/
 - RFC 3534: The application/ogg Media Type
 - Microsoft RIFF 规范（WAV）
 
+## 参考实现与取舍
+
+实现全部为 MoonBit 原创，没有移植或复制其他项目的代码。以下项目只在**行为与取舍**上作为对照：
+
+| 项目 | 参考了什么 | 没有照搬什么 |
+|---|---|---|
+| Xiph `oggz` / `liboggz` | 子命令的语义（`rip`/`dump`/`validate`/`chop` 的职责划分）、多流合并按呈现时间 | 不做 Skeleton，不解析 Theora/FLAC 等头；`dump` 不可逆 |
+| `libogg` | 页大小与 flush 时机（4096 阈值、首页/EOS 强制刷出） | 不把 BOS 顺序交给调用方；写侧自己维护不变量 |
+| `mutagen`（Python） | 注释改写时用 padding 保持旧包等长、复用旧页布局 | 不做 high/low 区间公式 |
+| `ffmpeg` | 作为行为对照（转码产物用独立工具回读验证） | 不用时间驱动的分页策略 |
+| `libopusfile` | seek 在 granule 上插值二分、80 ms pre-roll | 只定位到页，不解码 |
+
+测试样本说明：`testdata/` 下的 Opus / Vorbis 文件由 ffmpeg（libopus / libvorbis）生成，仅用于测试，
+不包含任何第三方受版权保护的音频内容。
+
 ## 开发状态
 
 本项目为 2026 MoonBit 黑客松十月赛参赛作品，开发中。
@@ -190,8 +205,12 @@ moonmux/
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测），
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` 十二个子命令，
-180 个测试通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+186 个测试通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）与转码验证。
+
+工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`wasm-gc` 与 `native` 双后端
+186 个测试、26 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI。
+变更记录见 `CHANGELOG.md`，协作约定见 `AGENTS.md`，开发过程与取舍见 `docs/开发历程.md`。
 
 尚未完成：MP4 / ISOBMFF 的封装；WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器）。
 详见 `docs/design.md`。

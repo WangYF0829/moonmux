@@ -2,17 +2,17 @@
 
 ///|
 /// 造一条单包单页的流，便于拼测试场景。
-fn one_page(data : Bytes, granule : Int64, serial : UInt) -> Array[Page] {
-  paginate([{ data, granule_position: granule, serial }], serial)
+fn one_page(data : Bytes, granule : Int64, serial : UInt32) -> Array[Page] {
+  paginate([{ data, granule_position: granule, serial, }], serial)
 }
 
 ///|
 /// 造三个包，用于拼多页流。
-fn three_packets(serial : UInt, granule : Int64) -> Array[Packet] {
+fn three_packets(serial : UInt32, granule : Int64) -> Array[Packet] {
   [
-    { data: b"p1", granule_position: granule, serial },
-    { data: b"p2", granule_position: granule + 1L, serial },
-    { data: b"p3", granule_position: granule + 2L, serial },
+    { data: b"p1", granule_position: granule, serial, },
+    { data: b"p2", granule_position: granule + 1L, serial, },
+    { data: b"p3", granule_position: granule + 2L, serial, },
   ]
 }
 
@@ -21,7 +21,7 @@ fn three_packets(serial : UInt, granule : Int64) -> Array[Packet] {
 ///
 /// 必须多于一页，段内才会出现数据页 —— 单页流的 BOS 与 EOS 挤在同一页上，
 /// 与「下一段的第一页」在字节上无法区分（见下面那条保守行为的测试）。
-fn three_pages(serial : UInt, granule : Int64) -> Array[Page] {
+fn three_pages(serial : UInt32, granule : Int64) -> Array[Page] {
   paginate(three_packets(serial, granule), serial)
 }
 
@@ -103,11 +103,11 @@ test "chain remaps only the colliding stream" {
   let built = mux_streams([
     {
       serial: 1U,
-      packets: [{ data: b"b1", granule_position: 0L, serial: 1U }],
+      packets: [{ data: b"b1", granule_position: 0L, serial: 1U, }],
     },
     {
       serial: 2U,
-      packets: [{ data: b"b2", granule_position: 0L, serial: 2U }],
+      packets: [{ data: b"b2", granule_position: 0L, serial: 2U, }],
     },
   ])
   let second = match built {
@@ -131,7 +131,10 @@ test "chain remaps only the colliding stream" {
       let packets = reassemble(pages)
       assert_eq(packets.length(), 3)
       // 链接产物结构完好
-      assert_eq(structure_problems(parse_pages(serialize_pages(pages))).length(), 0)
+      assert_eq(
+        structure_problems(parse_pages(serialize_pages(pages))).length(),
+        0,
+      )
     }
   }
 }
@@ -180,15 +183,15 @@ test "split keeps an interleaved multi-stream file whole" {
     {
       serial: 1U,
       packets: [
-        { data: b"a1", granule_position: 0L, serial: 1U },
-        { data: b"a2", granule_position: 10L, serial: 1U },
+        { data: b"a1", granule_position: 0L, serial: 1U, },
+        { data: b"a2", granule_position: 10L, serial: 1U, },
       ],
     },
     {
       serial: 2U,
       packets: [
-        { data: b"b1", granule_position: 0L, serial: 2U },
-        { data: b"b2", granule_position: 20L, serial: 2U },
+        { data: b"b1", granule_position: 0L, serial: 2U, },
+        { data: b"b2", granule_position: 20L, serial: 2U, },
       ],
     },
   ])
@@ -250,8 +253,8 @@ test "split separates a three-way chain including a multi-stream part" {
   let a = three_pages(1U, 10L)
   // 中间那段是两条多页逻辑流交织的：BOS 页成组在前，数据页紧随其后
   let built = mux_streams([
-    { serial: 2U, packets: three_packets(2U, 20L) },
-    { serial: 3U, packets: three_packets(3U, 20L) },
+    { serial: 2U, packets: three_packets(2U, 20L), },
+    { serial: 3U, packets: three_packets(3U, 20L), },
   ])
   let bc = match built {
     Ok(p) => p
@@ -359,10 +362,7 @@ test "a bos page before the segment ends does not split" {
   let mut saw_error = false
   for f in findings {
     match f.severity {
-      Severity::Error =>
-        if f.message.contains("2 个 BOS") {
-          saw_error = true
-        }
+      Severity::Error => if f.message.contains("2 个 BOS") { saw_error = true }
       _ => ()
     }
   }
@@ -378,15 +378,15 @@ test "a bos page before the segment ends does not split" {
 test "chain reports an exhausted serial space" {
   let part_a = paginate(
     [
-      { data: b"a1", granule_position: 0L, serial: 0U },
-      { data: b"a2", granule_position: 10L, serial: 0U },
+      { data: b"a1", granule_position: 0L, serial: 0U, },
+      { data: b"a2", granule_position: 10L, serial: 0U, },
     ],
     0U,
   )
   let part_b = paginate(
     [
-      { data: b"b1", granule_position: 0L, serial: 1U },
-      { data: b"b2", granule_position: 10L, serial: 1U },
+      { data: b"b1", granule_position: 0L, serial: 1U, },
+      { data: b"b2", granule_position: 10L, serial: 1U, },
     ],
     1U,
   )
@@ -397,26 +397,27 @@ test "chain reports an exhausted serial space" {
   for p in part_b {
     first.push(p)
   }
-  let second = match mux_streams([
-    {
-      serial: 0U,
-      packets: [
-        { data: b"c1", granule_position: 0L, serial: 0U },
-        { data: b"c2", granule_position: 10L, serial: 0U },
-      ],
-    },
-    {
-      serial: 1U,
-      packets: [
-        { data: b"d1", granule_position: 0L, serial: 1U },
-        { data: b"d2", granule_position: 10L, serial: 1U },
-      ],
-    },
-    {
-      serial: 4294967294U,
-      packets: [{ data: b"e1", granule_position: 0L, serial: 4294967294U }],
-    },
-  ]) {
+  let second = match
+    mux_streams([
+      {
+        serial: 0U,
+        packets: [
+          { data: b"c1", granule_position: 0L, serial: 0U, },
+          { data: b"c2", granule_position: 10L, serial: 0U, },
+        ],
+      },
+      {
+        serial: 1U,
+        packets: [
+          { data: b"d1", granule_position: 0L, serial: 1U, },
+          { data: b"d2", granule_position: 10L, serial: 1U, },
+        ],
+      },
+      {
+        serial: 4294967294U,
+        packets: [{ data: b"e1", granule_position: 0L, serial: 4294967294U, }],
+      },
+    ]) {
     Ok(p) => p
     Err(_) => []
   }

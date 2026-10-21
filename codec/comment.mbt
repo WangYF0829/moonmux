@@ -54,7 +54,7 @@ pub(all) enum CommentKind {
 ///
 /// 32 位无符号读进有符号 Int 时，0x80000000 以上的值会变成负数。
 /// 长度字段出现负数只可能来自损坏数据，直接拒绝。
-fn read_len(data : Bytes, offset : Int) -> Int? {
+fn read_len(data : Bytes, offset : Int32) -> Int32? {
   if offset < 0 || offset + 4 > data.length() {
     return None
   }
@@ -71,7 +71,7 @@ fn read_len(data : Bytes, offset : Int) -> Int? {
 
 ///|
 /// 取 `data[offset ..< offset+len]` 的副本。
-fn slice_bytes(data : Bytes, offset : Int, len : Int) -> Bytes {
+fn slice_bytes(data : Bytes, offset : Int32, len : Int32) -> Bytes {
   let buf = Buffer()
   let mut i = 0
   while i < len {
@@ -83,11 +83,11 @@ fn slice_bytes(data : Bytes, offset : Int, len : Int) -> Bytes {
 
 ///|
 /// 把小端 u32 写入缓冲。
-fn write_u32(buf : Buffer, v : Int) -> Unit {
+fn write_u32(buf : Buffer, v : Int32) -> Unit {
   buf.write_byte((v % 256).to_byte())
-  buf.write_byte(((v / 256) % 256).to_byte())
-  buf.write_byte(((v / 65536) % 256).to_byte())
-  buf.write_byte(((v / 16777216) % 256).to_byte())
+  buf.write_byte((v / 256 % 256).to_byte())
+  buf.write_byte((v / 65536 % 256).to_byte())
+  buf.write_byte((v / 16777216 % 256).to_byte())
 }
 
 ///|
@@ -139,7 +139,9 @@ pub fn parse_comment(packet : Bytes) -> Result[(CommentKind, Comment), String] {
   // 免得循环把内存吃光 —— 各语言标签库都在这上面出过真实的 OOM 缺陷。
   if count > (packet.length() - offset) / 4 {
     return Err(
-      "条目计数 " + count.to_string() + " 与包内剩余字节不符（已拒绝）",
+      "条目计数 " +
+      count.to_string() +
+      " 与包内剩余字节不符（已拒绝）",
     )
   }
   let tags : Array[Tag] = []
@@ -147,11 +149,16 @@ pub fn parse_comment(packet : Bytes) -> Result[(CommentKind, Comment), String] {
   while i < count {
     let len = match read_len(packet, offset) {
       Some(n) => n
-      None => return Err("第 " + (i + 1).to_string() + " 条注释的长度字段越界")
+      None =>
+        return Err(
+          "第 " + (i + 1).to_string() + " 条注释的长度字段越界",
+        )
     }
     offset = offset + 4
     if len > packet.length() - offset {
-      return Err("第 " + (i + 1).to_string() + " 条注释超出包内剩余字节")
+      return Err(
+        "第 " + (i + 1).to_string() + " 条注释超出包内剩余字节",
+      )
     }
     let text = @utf8.decode_lossy(slice_bytes(packet, offset, len))
     offset = offset + len
@@ -161,7 +168,7 @@ pub fn parse_comment(packet : Bytes) -> Result[(CommentKind, Comment), String] {
         let key = text[0:at].to_owned()
         let value = text[at + 1:].to_owned()
         if key.length() > 0 {
-          tags.push({ key, value })
+          tags.push({ key, value, })
         }
       }
       None => () // 没有 '=' 的条目按规范无效，跳过而不是整包失败
@@ -180,7 +187,7 @@ pub fn parse_comment(packet : Bytes) -> Result[(CommentKind, Comment), String] {
     }
     CommentKind::Opus => ()
   }
-  Ok((kind, { vendor, tags }))
+  Ok((kind, { vendor, tags, }))
 }
 
 ///|
@@ -191,7 +198,7 @@ pub fn parse_comment(packet : Bytes) -> Result[(CommentKind, Comment), String] {
 pub fn encode_comment(
   kind : CommentKind,
   comment : Comment,
-  padding : Int,
+  padding : Int32,
 ) -> Bytes {
   let buf = Buffer()
   match kind {
@@ -297,7 +304,7 @@ pub fn set_tag(comment : Comment, key : String, value : String) -> Comment {
   for t in comment.tags {
     if key_eq(t.key, key) {
       if !replaced {
-        out.push({ key: t.key, value })
+        out.push({ key: t.key, value, })
         replaced = true
       }
       // 其余同名项丢弃
@@ -306,9 +313,9 @@ pub fn set_tag(comment : Comment, key : String, value : String) -> Comment {
     }
   }
   if !replaced {
-    out.push({ key, value })
+    out.push({ key, value, })
   }
-  { vendor: comment.vendor, tags: out }
+  { vendor: comment.vendor, tags: out, }
 }
 
 ///|
@@ -320,5 +327,5 @@ pub fn remove_tag(comment : Comment, key : String) -> Comment {
       out.push(t)
     }
   }
-  { vendor: comment.vendor, tags: out }
+  { vendor: comment.vendor, tags: out, }
 }

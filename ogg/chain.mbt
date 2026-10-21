@@ -14,7 +14,7 @@
 
 ///|
 /// `serials` 里是否已有流号 `s`。
-fn has_serial(serials : Array[UInt], s : UInt) -> Bool {
+fn has_serial(serials : Array[UInt32], s : UInt32) -> Bool {
   let mut i = 0
   while i < serials.length() {
     if serials[i] == s {
@@ -29,8 +29,8 @@ fn has_serial(serials : Array[UInt], s : UInt) -> Bool {
 /// 列出一条物理流里出现过的所有流号，按首次出现顺序。
 ///
 /// 这个顺序也是各流 BOS 页的先后顺序。
-pub fn serials_of(pages : Array[Page]) -> Array[UInt] {
-  let serials : Array[UInt] = []
+pub fn serials_of(pages : Array[Page]) -> Array[UInt32] {
+  let serials : Array[UInt32] = []
   for p in pages {
     if !has_serial(serials, p.serial) {
       serials.push(p.serial)
@@ -47,7 +47,10 @@ pub fn serials_of(pages : Array[Page]) -> Array[UInt] {
 /// 冲突时把 `second` 按流重组，给相撞的流换一个两边都未使用的新流号，
 /// 再重新分页交织 —— 这一步会重排 `second` 的页，
 /// 但每条流的包内容与粒度位置不变。
-pub fn chain(first : Array[Page], second : Array[Page]) -> Result[Array[Page], String] {
+pub fn chain(
+  first : Array[Page],
+  second : Array[Page],
+) -> Result[Array[Page], String] {
   if first.length() == 0 {
     return Ok(second)
   }
@@ -80,7 +83,7 @@ pub fn chain(first : Array[Page], second : Array[Page]) -> Result[Array[Page], S
       }
     } else {
       // 这一段有流号相撞：只给相撞的流换号，然后按原页边界重新分页
-      let mut max_serial : UInt = 0U
+      let mut max_serial : UInt32 = 0U
       for s in used {
         if s > max_serial {
           max_serial = s
@@ -105,33 +108,29 @@ pub fn chain(first : Array[Page], second : Array[Page]) -> Result[Array[Page], S
             return Err("流号已用尽（无法为相撞的流分配新号）")
           }
           let fresh = next
-          next = if next == 4294967295U {
-            0U
-          } else {
-            next + 1U
-          }
+          next = if next == 4294967295U { 0U } else { next + 1U }
           fresh
         } else {
           st.serial
         }
         used.push(serial)
-        remapped.push({ serial, packets: st.packets })
+        remapped.push({ serial, packets: st.packets, })
       }
       // 用按大小攒页而不是一包一页：重组的包只有「原页最后一个包」带真粒度，
       // 一包一页会让中间那些页的粒度全变成 -1（时间轴断掉）。
       // 按原页边界攒页则每页的最后一包都带真粒度，时间轴一格不差。
       match mux_streams_sized(remapped, DEFAULT_PAGE_TARGET) {
         Err(msg) => return Err(msg)
-        Ok(pages) => {
+        Ok(pages) =>
           for p in pages {
             out.push(p)
           }
-        }
       }
     }
   }
   Ok(out)
 }
+
 ///|
 /// 页是否带 EOS 标志（逻辑流的结尾）。
 fn is_eos(page : Page) -> Bool {
@@ -178,8 +177,8 @@ pub fn split_chains(pages : Array[Page]) -> Array[Array[Page]] {
   // 只凭「BOS 出现在数据页之后」就切，会把「文件中间损坏出一个 BOS 页」的
   // 普通文件误判成两条链 —— verify 于是把「重复 BOS」的硬错误降级成两条
   // 软警告，损坏文件反而通过了体检。
-  let mut seen : Array[UInt] = []
-  let mut closed : Array[UInt] = []
+  let mut seen : Array[UInt32] = []
+  let mut closed : Array[UInt32] = []
   for page in pages {
     if is_bos(page) && saw_plain && seen.length() == closed.length() {
       chains.push(current)

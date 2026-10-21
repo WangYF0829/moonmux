@@ -3,22 +3,23 @@
 ///|
 /// 造一个「两条逻辑流交织」的页序列，供挑选测试使用。
 fn interleaved_pair() -> Array[Page] {
-  match mux_streams([
-    {
-      serial: 7U,
-      packets: [
-        { data: b"a1", granule_position: 0L, serial: 7U },
-        { data: b"a2", granule_position: 10L, serial: 7U },
-      ],
-    },
-    {
-      serial: 9U,
-      packets: [
-        { data: b"b1", granule_position: 0L, serial: 9U },
-        { data: b"b2", granule_position: 20L, serial: 9U },
-      ],
-    },
-  ]) {
+  match
+    mux_streams([
+      {
+        serial: 7U,
+        packets: [
+          { data: b"a1", granule_position: 0L, serial: 7U, },
+          { data: b"a2", granule_position: 10L, serial: 7U, },
+        ],
+      },
+      {
+        serial: 9U,
+        packets: [
+          { data: b"b1", granule_position: 0L, serial: 9U, },
+          { data: b"b2", granule_position: 20L, serial: 9U, },
+        ],
+      },
+    ]) {
     Ok(pages) => pages
     Err(_) => []
   }
@@ -89,11 +90,11 @@ test "serial_at maps a 1-based index in first-appearance order" {
   let built = mux_streams([
     {
       serial: 500U,
-      packets: [{ data: b"x", granule_position: 0L, serial: 500U }],
+      packets: [{ data: b"x", granule_position: 0L, serial: 500U, }],
     },
     {
       serial: 3U,
-      packets: [{ data: b"y", granule_position: 0L, serial: 3U }],
+      packets: [{ data: b"y", granule_position: 0L, serial: 3U, }],
     },
   ])
   let pages = match built {

@@ -9,9 +9,7 @@
 ///|
 /// 删除一个由我们刚创建的目录及其中的文件（写盘失败时清理半成品）。
 fn remove_dir_tree(dir : String) -> Unit {
-  let entries = @fs.read_dir(dir) catch {
-    IOError(_) => return
-  }
+  let entries = @fs.read_dir(dir) catch { IOError(_) => return }
   for e in entries {
     @fs.remove_file(dir + "/" + e) catch {
       _ => ()
@@ -48,7 +46,11 @@ fn fail_data(msg : String) -> Unit {
 ///
 /// 对**会写产物**的命令这必须拒绝：产出的会是半截文件，而退出码和
 /// 正常情况一样是 0 —— 用户以为拆完了，实际只拿到前一段。
-fn require_fully_parsed(path : String, pages : Array[@ogg.Page], data : Bytes) -> Unit {
+fn require_fully_parsed(
+  path : String,
+  pages : Array[@ogg.Page],
+  data : Bytes,
+) -> Unit {
   let mut consumed = 0
   for p in pages {
     consumed = consumed + 27 + p.segments.length() + p.payload.length()
@@ -108,16 +110,16 @@ fn read_all(path : String) -> Bytes? {
 fn run_info(path : String) -> Unit {
   match read_all(path) {
     None => ()
-    Some(data) => {
+    Some(data) =>
       if @ogg.is_page_start(data, 0) {
         show_ogg_info(path, data)
       } else {
         match @wav.WavFile::parse(data) {
           Some(f) => show_wav_info(path, data, f)
-          None => fail_data("错误: 既不是 Ogg 也不是 WAV —— " + path)
+          None =>
+            fail_data("错误: 既不是 Ogg 也不是 WAV —— " + path)
         }
       }
-    }
   }
 }
 
@@ -170,7 +172,7 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
   println("逻辑流: " + serials.length().to_string())
   // 一趟扫描统计每条流：原来对每条流都遍历全部页与全部包，
   // 是 O(流数 × 页数)。1–2 条流无所谓，300 段文件会放大成几十万次比较。
-  let index_of : Map[UInt, Int] = Map([])
+  let index_of : Map[UInt32, Int32] = Map([])
   let mut k = 0
   while k < serials.length() {
     index_of.set(serials[k], k)
@@ -247,7 +249,9 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
             if has_granule {
               // 时长按整数百分之一秒舍入显示，不走浮点打印，
               // 避免把 6 秒显示成 5.9999999
-              let secs = @codec.duration_seconds(info, first_granule, last_granule)
+              let secs = @codec.duration_seconds(
+                info, first_granule, last_granule,
+              )
               let hundredths = (secs * 100.0 + 0.5).to_int64()
               detail = detail +
                 "  时长=" +
@@ -283,10 +287,11 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
       )
       ci = ci + 1
     }
-    println("  （链接流：以上各段首尾相接，段间流号互不复用）")
+    println(
+      "  （链接流：以上各段首尾相接，段间流号互不复用）",
+    )
   }
 }
-
 
 ///|
 /// 打印 WAV 的容器信息。
@@ -305,7 +310,7 @@ fn show_wav_info(path : String, data : Bytes, f : @wav.WavFile) -> Unit {
   if frame_size > 0 && f.format.sample_rate > 0 {
     let frames = f.data.length() / frame_size
     let whole = frames / f.format.sample_rate
-    let frac = (frames % f.format.sample_rate) * 100 / f.format.sample_rate
+    let frac = frames % f.format.sample_rate * 100 / f.format.sample_rate
     println(
       "帧数:   " +
       frames.to_string() +
@@ -372,7 +377,9 @@ fn run_demux(src : String, dir : String) -> Unit {
       if @fs.path_exists(dir) {
         let existing = @fs.read_dir(dir) catch {
           IOError(msg) =>
-            return fail("错误: 无法读取输出目录 " + dir + " —— " + msg)
+            return fail(
+              "错误: 无法读取输出目录 " + dir + " —— " + msg,
+            )
         }
         if existing.length() > 0 {
           fail(
@@ -459,7 +466,12 @@ fn run_demux(src : String, dir : String) -> Unit {
             } else {
               remove_dir_tree(sub)
             }
-            fail("错误: 无法写入清单 " + sub + "/manifest.txt —— " + msg)
+            fail(
+              "错误: 无法写入清单 " +
+              sub +
+              "/manifest.txt —— " +
+              msg,
+            )
             return
           }
         }
@@ -489,8 +501,8 @@ fn run_demux(src : String, dir : String) -> Unit {
 /// 一次封装的结果：写出的页、涉及多少包、多少条逻辑流。
 struct MuxPlan {
   pages : Array[@ogg.Page]
-  packets : Int
-  streams : Int
+  packets : Int32
+  streams : Int32
 }
 
 ///|
@@ -501,15 +513,15 @@ fn files_in(dir : String) -> Result[Array[String], String] {
   }
   let names : Array[String] = []
   for e in entries {
-    let isf = @fs.is_file(dir + "/" + e) catch {
-      _ => false
-    }
+    let isf = @fs.is_file(dir + "/" + e) catch { _ => false }
     // manifest.txt 描述包，本身不是包。漏掉这一句会让它被当成最后一个包
     // 读进来：封装出的文件多一个包、末页粒度取到清单之外的默认值 0 ——
     // 症状与「粒度根本没修」一模一样，极易误判。
     // 只收自己写出的包文件：目录里的 .DS_Store、Thumbs.db、
     // 手工笔记之类不能被当成包读进容器（读进去就是一个垃圾包）
-    if isf && @manifest.starts_with(e, "packet_") && @manifest.ends_with(e, ".bin") {
+    if isf &&
+      @manifest.starts_with(e, "packet_") &&
+      @manifest.ends_with(e, ".bin") {
       names.push(e)
     }
   }
@@ -525,9 +537,7 @@ fn subdirs_in(dir : String) -> Result[Array[String], String] {
   }
   let names : Array[String] = []
   for e in entries {
-    let isf = @fs.is_file(dir + "/" + e) catch {
-      _ => false
-    }
+    let isf = @fs.is_file(dir + "/" + e) catch { _ => false }
     if !isf {
       names.push(e)
     }
@@ -562,15 +572,12 @@ fn subdirs_in(dir : String) -> Result[Array[String], String] {
 
 ///|
 /// 解析 `s<N>` 形式的目录序号；不是这种形式时返回 None。
-fn dir_number(name : String) -> Int? {
+fn dir_number(name : String) -> Int32? {
   if name.length() < 2 {
     return None
   }
   match name.get_char(0) {
-    Some(c) =>
-      if c.to_int() != 115 {
-        return None
-      }
+    Some(c) => if c.to_int() != 115 { return None }
     None => return None
   }
   let mut n = 0
@@ -596,7 +603,7 @@ fn dir_number(name : String) -> Int? {
 
 ///|
 /// 流号属于第几段物理流（1 起算）；找不到时按第 1 段处理。
-fn chain_index_of(chains : Array[Array[@ogg.Page]], serial : UInt) -> Int {
+fn chain_index_of(chains : Array[Array[@ogg.Page]], serial : UInt32) -> Int32 {
   let mut i = 0
   while i < chains.length() {
     if @ogg.has_stream(chains[i], serial) {
@@ -684,7 +691,8 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
     let mut gi = 0
     for n in loose {
       let data = @fs.read_file_to_bytes(dir + "/" + n) catch {
-        IOError(msg) => return Err("无法读取包文件 " + n + " —— " + msg)
+        IOError(msg) =>
+          return Err("无法读取包文件 " + n + " —— " + msg)
       }
       packets.push({
         data,
@@ -700,7 +708,7 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
     })
   } else {
     // 多条逻辑流：按清单里的 `# chain=` 分组，段内交织、段间首尾相接
-    let chain_ids : Array[Int] = []
+    let chain_ids : Array[Int32] = []
     let groups : Array[Array[@ogg.LogicalStream]] = []
     let mut total = 0
     let mut saw_chain = false
@@ -713,14 +721,17 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
       }
       if names.length() == 0 {
         return Err(
-          "子目录 " + subs[si] + " 中没有包文件 —— 空逻辑流无法封装",
+          "子目录 " +
+          subs[si] +
+          " 中没有包文件 —— 空逻辑流无法封装",
         )
       }
       let manifest = match read_manifest(sub) {
         Ok(m) => m
         Err(msg) => return Err(msg)
       }
-      match @manifest.check_count(manifest, names.length(), "子目录 " + subs[si]) {
+      match
+        @manifest.check_count(manifest, names.length(), "子目录 " + subs[si]) {
         Err(msg) => return Err(msg)
         Ok(_) => ()
       }
@@ -732,7 +743,8 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
       let mut gi = 0
       for n in names {
         let data = @fs.read_file_to_bytes(sub + "/" + n) catch {
-          IOError(msg) => return Err("无法读取包文件 " + n + " —— " + msg)
+          IOError(msg) =>
+            return Err("无法读取包文件 " + n + " —— " + msg)
         }
         packets.push({
           data,
@@ -746,11 +758,7 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
         saw_chain = true
       }
       let chain_no = match manifest.chain {
-        Some(c) => if c < 1 {
-          1
-        } else {
-          c
-        }
+        Some(c) => if c < 1 { 1 } else { c }
         None => 1
       }
       let mut slot = -1
@@ -763,9 +771,9 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
       }
       if slot < 0 {
         chain_ids.push(chain_no)
-        groups.push([{ serial, packets }])
+        groups.push([{ serial, packets, }])
       } else {
-        groups[slot].push({ serial, packets })
+        groups[slot].push({ serial, packets, })
       }
       si = si + 1
     }
@@ -804,7 +812,7 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
     // 交织规则（BOS 页置顶、按粒度升序）全在容器层，这里不碰
     match @ogg.mux_chains_sized(groups, @ogg.DEFAULT_PAGE_TARGET) {
       Err(m) => Err(m)
-      Ok(pages) => Ok({ pages, packets: total, streams: stream_count })
+      Ok(pages) => Ok({ pages, packets: total, streams: stream_count, })
     }
   }
 }
@@ -923,7 +931,9 @@ fn run_split(src : String, dir : String) -> Unit {
       if @fs.path_exists(dir) {
         let existing = @fs.read_dir(dir) catch {
           IOError(msg) =>
-            return fail("错误: 无法读取输出目录 " + dir + " —— " + msg)
+            return fail(
+              "错误: 无法读取输出目录 " + dir + " —— " + msg,
+            )
         }
         if existing.length() > 0 {
           fail(
@@ -984,10 +994,17 @@ fn run_split(src : String, dir : String) -> Unit {
       if ok {
         if parts.length() == 1 {
           println(
-            "该文件不是链接流，已原样写出到 " + dir + "/part1.ogg",
+            "该文件不是链接流，已原样写出到 " +
+            dir +
+            "/part1.ogg",
           )
         } else {
-          println("已拆出 " + parts.length().to_string() + " 条物理流到 " + dir)
+          println(
+            "已拆出 " +
+            parts.length().to_string() +
+            " 条物理流到 " +
+            dir,
+          )
         }
       }
     }
@@ -1004,7 +1021,7 @@ fn run_split(src : String, dir : String) -> Unit {
 /// 与 `demux` 的分工：`demux` 拆到**包**（丢掉页边界与粒度位置，
 /// 适合拿去处理音频数据），`extract` 抽到**流**（保持页级原样，
 /// 适合把文件里的某一条轨道单独取出来用）。
-fn run_extract(src : String, index : Int, out : String) -> Unit {
+fn run_extract(src : String, index : Int32, out : String) -> Unit {
   match read_all(src) {
     None => ()
     Some(data) => {
@@ -1094,9 +1111,7 @@ fn run_dump(path : String) -> Unit {
       }
       println(@ogg.page_table_header())
       // 边生成边打印：百万页的文件不会先攒一个百万字符串的数组
-      @ogg.for_each_page_line(pages, fn(line) {
-        println(line)
-      })
+      @ogg.for_each_page_line(pages, fn(line) { println(line) })
     }
   }
 }
@@ -1109,7 +1124,7 @@ fn run_dump(path : String) -> Unit {
 /// 找不到就如实说清楚，而不是打印一份空注释列表。
 fn find_comment(
   pages : Array[@ogg.Page],
-) -> Result[(UInt, @codec.CommentKind, @codec.Comment), String] {
+) -> Result[(UInt32, @codec.CommentKind, @codec.Comment), String] {
   let serials = @ogg.serials_of(pages)
   if serials.length() == 0 {
     return Err("文件里没有任何逻辑流")
@@ -1152,13 +1167,13 @@ fn run_tags(path : String) -> Unit {
       }
       match find_comment(pages) {
         Err(msg) =>
-      // plan_mux 的失败分两类：读不到目录/清单/包文件是 I/O（2），
-      // 布局与清单不符是数据（1）。按消息前缀区分，避免把 I/O 也报成数据错误。
-      if msg.contains("无法读取") || msg.contains("无法打开") {
-        fail("错误: " + msg)
-      } else {
-        fail_data("错误: " + msg)
-      }
+          // plan_mux 的失败分两类：读不到目录/清单/包文件是 I/O（2），
+          // 布局与清单不符是数据（1）。按消息前缀区分，避免把 I/O 也报成数据错误。
+          if msg.contains("无法读取") || msg.contains("无法打开") {
+            fail("错误: " + msg)
+          } else {
+            fail_data("错误: " + msg)
+          }
         Ok(found) => {
           let (serial, kind, comment) = found
           let codec_name = match kind {
@@ -1302,7 +1317,9 @@ fn run_tag(src : String, out : String, assignments : Array[String]) -> Unit {
         @fs.remove_file(out) catch {
           _ => ()
         }
-        fail_data("错误: 写出的文件未通过自检，已删除 —— " + out)
+        fail_data(
+          "错误: 写出的文件未通过自检，已删除 —— " + out,
+        )
       }
     }
   }
@@ -1312,7 +1329,7 @@ fn run_tag(src : String, out : String, assignments : Array[String]) -> Unit {
 /// 找出第一条音频流：返回（流号、头参数、首个真粒度、末个真粒度）。
 fn audio_stream_info(
   pages : Array[@ogg.Page],
-) -> Result[(UInt, @codec.AudioInfo, Int64, Int64), String] {
+) -> Result[(UInt32, @codec.AudioInfo, Int64, Int64), String] {
   let serials = @ogg.serials_of(pages)
   let mut i = 0
   while i < serials.length() {
@@ -1352,7 +1369,7 @@ fn audio_stream_info(
 /// （chained 各段时间轴独立，不能混算）、把落点夹到首个音频页之后。
 ///
 /// 我们不解码，所以不做 pre-roll，只把落点与「解码时要提前多少」一起打出来。
-fn run_seek(path : String, ms : Int, chain_no : Int) -> Unit {
+fn run_seek(path : String, ms : Int32, chain_no : Int32) -> Unit {
   match read_all(path) {
     None => ()
     Some(data) => {
@@ -1393,21 +1410,20 @@ fn run_seek(path : String, ms : Int, chain_no : Int) -> Unit {
       let first = found.2
       let target = first +
         head.pre_skip.to_int64() +
-        (ms.to_int64() * head.sample_rate.to_int64()) / 1000L
+        ms.to_int64() * head.sample_rate.to_int64() / 1000L
       let landing = match @ogg.seek_granule(chain, serial, target) {
         None => {
-          fail_data("错误: 该流没有可用的粒度路标（所有页的 granule 都是 -1）")
+          fail_data(
+            "错误: 该流没有可用的粒度路标（所有页的 granule 都是 -1）",
+          )
           return
         }
         Some(p) => p
       }
       // 夹到首个音频页：`seek 0` 不该停在头部页上
-      let header_packets = if head.codec == "Opus" {
-        2
-      } else {
-        3
-      }
-      let audio_page = match @ogg.first_audio_page(chain, serial, header_packets) {
+      let header_packets = if head.codec == "Opus" { 2 } else { 3 }
+      let audio_page = match
+        @ogg.first_audio_page(chain, serial, header_packets) {
         Some(p) => p
         None => landing.page_index
       }
@@ -1461,7 +1477,9 @@ fn run_seek(path : String, ms : Int, chain_no : Int) -> Unit {
         " 秒",
       )
       if head.codec == "Opus" {
-        println("提示:     解码需从该页再提前 80 ms 开始并丢弃输出（RFC 7845 §4.6 pre-roll）")
+        println(
+          "提示:     解码需从该页再提前 80 ms 开始并丢弃输出（RFC 7845 §4.6 pre-roll）",
+        )
       }
     }
   }
@@ -1492,10 +1510,10 @@ fn run_verify(path : String) -> Unit {
         findings.push({
           severity: @ogg.Severity::Error,
           message: "偏移 " +
-            gap.offset.to_string() +
-            " 处跳过 " +
-            gap.bytes.to_string() +
-            " 字节（无法同步到有效页：坏页、插入的垃圾或被截断）",
+          gap.offset.to_string() +
+          " 处跳过 " +
+          gap.bytes.to_string() +
+          " 字节（无法同步到有效页：坏页、插入的垃圾或被截断）",
         })
       }
       // CRC 失败同样是 error：字节坏了，不是「可疑形态」。
@@ -1510,10 +1528,10 @@ fn run_verify(path : String) -> Unit {
           findings.push({
             severity: @ogg.Severity::Error,
             message: "serial=" +
-              page.serial.to_string() +
-              " sequence=" +
-              page.sequence.to_string() +
-              " CRC 校验失败（页内容已损坏）",
+            page.serial.to_string() +
+            " sequence=" +
+            page.sequence.to_string() +
+            " CRC 校验失败（页内容已损坏）",
           })
         }
       }
@@ -1561,7 +1579,9 @@ fn run_verify(path : String) -> Unit {
         )
       }
       if bad == 0 && findings.length() == 0 {
-        println("结论:     结构完好（CRC、页序号、BOS·EOS、粒度全部自洽）")
+        println(
+          "结论:     结构完好（CRC、页序号、BOS·EOS、粒度全部自洽）",
+        )
       } else {
         println(
           "结论:     " +
@@ -1664,21 +1684,26 @@ fn run_towav(src : String, out : String) -> Unit {
               @fs.remove_file(out) catch {
                 _ => ()
               }
-              fail_data("错误: 已写出 " + out + "，但回读校验未通过，已删除")
+              fail_data(
+                "错误: 已写出 " +
+                out +
+                "，但回读校验未通过，已删除",
+              )
             }
-            Some(f) => println(
-              "已写出 " +
-              out +
-              "  " +
-              f.format.channels.to_string() +
-              " 声道 / " +
-              f.format.sample_rate.to_string() +
-              " Hz / " +
-              f.format.bits_per_sample.to_string() +
-              " 位 / " +
-              f.data.length().to_string() +
-              " 字节 PCM",
-            )
+            Some(f) =>
+              println(
+                "已写出 " +
+                out +
+                "  " +
+                f.format.channels.to_string() +
+                " 声道 / " +
+                f.format.sample_rate.to_string() +
+                " Hz / " +
+                f.format.bits_per_sample.to_string() +
+                " 位 / " +
+                f.data.length().to_string() +
+                " 字节 PCM",
+              )
           }
         }
       }
@@ -1693,7 +1718,7 @@ fn run_towav(src : String, out : String) -> Unit {
 /// 位数不一致时 "1000" 会插在 "100" 与 "101" 之间（第三位 '0' < '1'），
 /// 包数超过 999 就会静默乱序。三分钟的音频轻轻松松就有九千个包，
 /// 所以这里直接留够六位。
-fn pad6(n : Int) -> String {
+fn pad6(n : Int32) -> String {
   let s = n.to_string()
   let mut zeros = ""
   let mut i = s.length()
@@ -1706,7 +1731,7 @@ fn pad6(n : Int) -> String {
 
 ///|
 /// 把不足 10 的数补一位零。
-fn pad2(n : Int) -> String {
+fn pad2(n : Int32) -> String {
   if n < 10 {
     "0" + n.to_string()
   } else {

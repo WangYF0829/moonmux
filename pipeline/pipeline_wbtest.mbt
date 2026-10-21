@@ -86,11 +86,11 @@ test "detect skips non-audio streams and finds the audio one" {
   let built = @ogg.mux_streams([
     {
       serial: 1U,
-      packets: [{ data: b"fishead", granule_position: 0L, serial: 1U }],
+      packets: [{ data: b"fishead", granule_position: 0L, serial: 1U, }],
     },
     {
       serial: 2U,
-      packets: [{ data: b"OpusHead", granule_position: 0L, serial: 2U }],
+      packets: [{ data: b"OpusHead", granule_position: 0L, serial: 2U, }],
     },
   ])
   let pages = match built {
@@ -128,11 +128,11 @@ test "the stream handed to the decoder holds only that stream" {
   let built = @ogg.mux_streams([
     {
       serial: 4U,
-      packets: [{ data: b"OpusHead", granule_position: 0L, serial: 4U }],
+      packets: [{ data: b"OpusHead", granule_position: 0L, serial: 4U, }],
     },
     {
       serial: 5U,
-      packets: [{ data: b"\x01vorbis", granule_position: 0L, serial: 5U }],
+      packets: [{ data: b"\x01vorbis", granule_position: 0L, serial: 5U, }],
     },
   ])
   let pages = match built {
@@ -156,7 +156,7 @@ test "estimate pcm bytes from headers" {
       granule_position: 0L,
       serial: 1U,
     },
-    { data: b"audio", granule_position: 48000L, serial: 1U },
+    { data: b"audio", granule_position: 48000L, serial: 1U, },
   ]
   let pages = @ogg.paginate(packets, 1U)
   // (48000 - 0 - 312) × 2 声道 × 2 字节
@@ -172,7 +172,7 @@ test "the pcm budget is enforced before decoding" {
       granule_position: 0L,
       serial: 1U,
     },
-    { data: b"audio", granule_position: 48000L, serial: 1U },
+    { data: b"audio", granule_position: 48000L, serial: 1U, },
   ]
   let data = @ogg.serialize_pages(@ogg.paginate(packets, 1U))
   match ogg_to_wav_limited(data, 1000L) {
@@ -190,7 +190,7 @@ test "an absurd granule cannot bypass the budget" {
       granule_position: 0L,
       serial: 1U,
     },
-    { data: b"audio", granule_position: 9223372036854775807L, serial: 1U },
+    { data: b"audio", granule_position: 9223372036854775807L, serial: 1U, },
   ]
   let pages = @ogg.paginate(packets, 1U)
   // 估算应当直接判为超限，而不是回绕成负数

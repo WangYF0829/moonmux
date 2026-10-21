@@ -14,7 +14,7 @@
 
 ///|
 /// 文件里是否出现过流号 `serial`。
-pub fn has_stream(pages : Array[Page], serial : UInt) -> Bool {
+pub fn has_stream(pages : Array[Page], serial : UInt32) -> Bool {
   for page in pages {
     if page.serial == serial {
       return true
@@ -28,7 +28,7 @@ pub fn has_stream(pages : Array[Page], serial : UInt) -> Bool {
 ///
 /// 流号不存在时返回空数组 —— 调用方若要区分「没有这条流」与「这条流没有页」，
 /// 先用 `has_stream` 判断（后者在合法文件里不可能出现）。
-pub fn stream_pages(pages : Array[Page], serial : UInt) -> Array[Page] {
+pub fn stream_pages(pages : Array[Page], serial : UInt32) -> Array[Page] {
   let out : Array[Page] = []
   for page in pages {
     if page.serial == serial {
@@ -47,7 +47,7 @@ pub fn stream_pages(pages : Array[Page], serial : UInt) -> Array[Page] {
 ///
 /// 序号越界时返回 Err 并给出实际条数 —— 让 `extract` 报「超出范围（本文件有 2 条）」
 /// 比报「找不到」有用得多。
-pub fn serial_at(pages : Array[Page], index : Int) -> Result[UInt, String] {
+pub fn serial_at(pages : Array[Page], index : Int32) -> Result[UInt32, String] {
   let serials = serials_of(pages)
   if index < 1 || index > serials.length() {
     return Err(

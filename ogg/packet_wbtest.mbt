@@ -2,7 +2,7 @@
 
 ///|
 /// 构造一段重复字节，便于造出指定长度的负载。
-fn repeat_byte(b : Byte, n : Int) -> Bytes {
+fn repeat_byte(b : Byte, n : Int32) -> Bytes {
   let buf = Buffer()
   let mut i = 0
   while i < n {
@@ -195,8 +195,8 @@ test "interleaved logical streams stay separate" {
 /// `paginate` 是 `reassemble` 的逆运算：小包一包一页，BOS / EOS 到位。
 test "paginate lays small packets one page each" {
   let packets : Array[Packet] = [
-    { data: b"abc", granule_position: 0L, serial: 4U },
-    { data: b"de", granule_position: 5L, serial: 4U },
+    { data: b"abc", granule_position: 0L, serial: 4U, },
+    { data: b"de", granule_position: 5L, serial: 4U, },
   ]
   let pages = paginate(packets, 4U)
   assert_eq(pages.length(), 2)
@@ -217,7 +217,7 @@ test "paginate lays small packets one page each" {
 test "paginate splits oversized packet and roundtrips" {
   let n = 255 * 255 + 1
   let data = repeat_byte((0x41 : Byte), n)
-  let packets : Array[Packet] = [{ data, granule_position: 7L, serial: 9U }]
+  let packets : Array[Packet] = [{ data, granule_position: 7L, serial: 9U, }]
   let pages = paginate(packets, 9U)
   assert_eq(pages.length(), 2)
   for p in pages {
@@ -241,8 +241,8 @@ test "paginate splits oversized packet and roundtrips" {
 /// 序列化后的页 CRC 必须自洽（用独立的校验路径复查一遍）。
 test "serialized pages pass independent crc check" {
   let packets : Array[Packet] = [
-    { data: b"hello world", granule_position: 0L, serial: 1U },
-    { data: repeat_byte((0x5A : Byte), 600), granule_position: 3L, serial: 1U },
+    { data: b"hello world", granule_position: 0L, serial: 1U, },
+    { data: repeat_byte((0x5A : Byte), 600), granule_position: 3L, serial: 1U, },
   ]
   let pages = paginate(packets, 1U)
   let reparsed = parse_pages(serialize_pages(pages))
@@ -259,9 +259,9 @@ test "serialized pages pass independent crc check" {
 /// 的原语义，任何「顺手改默认行为」的改动都会在这里变红。
 test "paginate_sized with zero target matches paginate" {
   let packets : Array[Packet] = [
-    { data: b"abc", granule_position: 0L, serial: 4U },
-    { data: repeat_byte((0x41 : Byte), 700), granule_position: 5L, serial: 4U },
-    { data: b"de", granule_position: 6L, serial: 4U },
+    { data: b"abc", granule_position: 0L, serial: 4U, },
+    { data: repeat_byte((0x41 : Byte), 700), granule_position: 5L, serial: 4U, },
+    { data: b"de", granule_position: 6L, serial: 4U, },
   ]
   let legacy = paginate(packets, 4U)
   let sized = paginate_sized(packets, 4U, 0)
@@ -316,10 +316,10 @@ test "paginate_sized packs small packets up to the target" {
 /// （-1），播放器的时钟会在那里断掉。
 test "paginate_sized never splits an original page" {
   let packets : Array[Packet] = [
-    { data: b"hdr", granule_position: 0L, serial: 1U },
-    { data: b"a", granule_position: -1L, serial: 1U },
-    { data: b"b", granule_position: -1L, serial: 1U },
-    { data: b"c", granule_position: 48000L, serial: 1U },
+    { data: b"hdr", granule_position: 0L, serial: 1U, },
+    { data: b"a", granule_position: -1L, serial: 1U, },
+    { data: b"b", granule_position: -1L, serial: 1U, },
+    { data: b"c", granule_position: 48000L, serial: 1U, },
   ]
   let pages = paginate_sized(packets, 1U, 4096)
   assert_eq(pages.length(), 2)
@@ -337,7 +337,7 @@ test "paginate_sized never splits an original page" {
 test "paginate_sized keeps oversized packets spanning pages" {
   let n = 255 * 255 + 1
   let packets : Array[Packet] = [
-    { data: repeat_byte((0x41 : Byte), n), granule_position: 7L, serial: 9U },
+    { data: repeat_byte((0x41 : Byte), n), granule_position: 7L, serial: 9U, },
   ]
   let pages = paginate_sized(packets, 9U, 4096)
   assert_eq(pages.length(), 2)
@@ -411,9 +411,9 @@ test "granules do not leak across pages" {
 test "an oversized packet in the middle keeps a single BOS and EOS" {
   let big = repeat_byte((0x42 : Byte), 65025 + 500)
   let packets : Array[Packet] = [
-    { data: b"id", granule_position: 0L, serial: 4U },
-    { data: big, granule_position: 1000L, serial: 4U },
-    { data: b"tail", granule_position: 2000L, serial: 4U },
+    { data: b"id", granule_position: 0L, serial: 4U, },
+    { data: big, granule_position: 1000L, serial: 4U, },
+    { data: b"tail", granule_position: 2000L, serial: 4U, },
   ]
   let pages = paginate_sized(packets, 4U, 4096)
   let mut bos = 0
@@ -430,7 +430,9 @@ test "an oversized packet in the middle keeps a single BOS and EOS" {
   assert_eq(eos, 1)
   // 首尾必须真的是第一条与最后一条
   assert_true((pages[0].header_type.to_int() & flag_bos().to_int()) != 0)
-  assert_true((pages[pages.length() - 1].header_type.to_int() & flag_eos().to_int()) != 0)
+  assert_true(
+    (pages[pages.length() - 1].header_type.to_int() & flag_eos().to_int()) != 0,
+  )
   // 结构体检必须全绿，且能重组回三个包
   let reparsed = parse_pages(serialize_pages(pages))
   assert_eq(structure_findings(reparsed).length(), 0)
@@ -442,12 +444,12 @@ test "an oversized packet in the middle keeps a single BOS and EOS" {
 test "oversized packet at either end keeps flags unique" {
   let big = repeat_byte((0x43 : Byte), 65025 + 100)
   let first_case : Array[Packet] = [
-    { data: big, granule_position: 0L, serial: 6U },
-    { data: b"x", granule_position: 500L, serial: 6U },
+    { data: big, granule_position: 0L, serial: 6U, },
+    { data: b"x", granule_position: 500L, serial: 6U, },
   ]
   let last_case : Array[Packet] = [
-    { data: b"y", granule_position: 0L, serial: 7U },
-    { data: big, granule_position: 900L, serial: 7U },
+    { data: b"y", granule_position: 0L, serial: 7U, },
+    { data: big, granule_position: 900L, serial: 7U, },
   ]
   for packets in [first_case, last_case] {
     let serial = packets[0].serial
@@ -477,8 +479,8 @@ test "oversized packet at either end keeps flags unique" {
 /// demux 写出的清单里，非页尾包的 -1 会与页尾包的真粒度分到同一组。
 test "sized pagination keeps unknown granules as minus one" {
   let packets : Array[Packet] = [
-    { data: b"a", granule_position: -1L, serial: 1U },
-    { data: b"b", granule_position: -1L, serial: 1U },
+    { data: b"a", granule_position: -1L, serial: 1U, },
+    { data: b"b", granule_position: -1L, serial: 1U, },
   ]
   let pages = paginate_sized(packets, 1U, 4096)
   for p in pages {

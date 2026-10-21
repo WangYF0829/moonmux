@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check · fmt · info · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain version
+        run: moon version --all
+
+      # 验收口径的四个检查：警告即错误、格式、接口文档、测试。
+      - name: moon check --deny-warn
+        run: moon check --deny-warn
+
+      - name: moon fmt --check
+        run: moon fmt --check
+
+      - name: moon info
+        run: moon info
+
+      - name: moon test --deny-warn
+        run: moon test --deny-warn
+
+      # 生成物不能进版本库：_build、*.mi/*.core/*.mbti、pkg.generated.mbti。
+      - name: Verify no generated artifacts are tracked
+        run: |
+          set -e
+          artifacts=$(git ls-files | grep -E '(^|/)_build/|(^|/).*\.(bak|core|mi|mbti|log)$|(^|/)pkg\.generated\.mbti$' || true)
+          if [ -n "$artifacts" ]; then
+            echo "Generated artifacts are tracked:"
+            echo "$artifacts"
+            exit 1
+          fi
+
+      - name: Verify no secrets are committed
+        run: |
+          set -e
+          if git grep -nEI '(ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})' -- ':!*.md'; then
+            echo "Possible credential committed"
+            exit 1
+          fi
+
+  native:
+    name: native · smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Build native CLI
+        run: moon build --target native
+
+      # 端到端：往返逐字节、退出码、截断与清单异常。
+      - name: Smoke tests
+        run: bash scripts/smoke.sh

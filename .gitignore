@@ -28,3 +28,6 @@ Thumbs.db
 # 本机专用目录（只留在本机，不进仓库）
 .workbuddy/
 smoke.*/  
+
+# 生成物（moon info / 编译产物）
+*.mbti

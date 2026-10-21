@@ -20,7 +20,7 @@
 ///|
 /// 一条逻辑流：流号 + 该流的包序列。
 pub(all) struct LogicalStream {
-  serial : UInt
+  serial : UInt32
   packets : Array[Packet]
 }
 
@@ -32,7 +32,7 @@ pub(all) struct LogicalStream {
 /// 大小与文件里的先后顺序无关（Ogg Skeleton 的骨架流必须先出，
 /// 但它的流号未必最小）。
 pub fn group_by_stream(packets : Array[Packet]) -> Array[LogicalStream] {
-  let serials : Array[UInt] = []
+  let serials : Array[UInt32] = []
   let groups : Array[Array[Packet]] = []
   for pkt in packets {
     let mut found = -1
@@ -53,7 +53,7 @@ pub fn group_by_stream(packets : Array[Packet]) -> Array[LogicalStream] {
   let out : Array[LogicalStream] = []
   let mut k = 0
   while k < serials.length() {
-    out.push({ serial: serials[k], packets: groups[k] })
+    out.push({ serial: serials[k], packets: groups[k], })
     k = k + 1
   }
   out
@@ -64,7 +64,9 @@ pub fn group_by_stream(packets : Array[Packet]) -> Array[LogicalStream] {
 ///
 /// 等价于 `mux_streams_sized(streams, 0)` —— 阈值 0 时退回 `paginate`
 /// 的原有语义。需要按目标页大小攒页时用 `mux_streams_sized`。
-pub fn mux_streams(streams : Array[LogicalStream]) -> Result[Array[Page], String] {
+pub fn mux_streams(
+  streams : Array[LogicalStream],
+) -> Result[Array[Page], String] {
   mux_streams_sized(streams, 0)
 }
 
@@ -82,7 +84,7 @@ pub fn mux_streams(streams : Array[LogicalStream]) -> Result[Array[Page], String
 /// 静默接受只会把错误推迟到解码阶段爆发，所以在这里就拒绝。
 pub fn mux_streams_sized(
   streams : Array[LogicalStream],
-  target : Int,
+  target : Int32,
 ) -> Result[Array[Page], String] {
   let mut i = 0
   while i < streams.length() {
@@ -90,7 +92,9 @@ pub fn mux_streams_sized(
     while j < streams.length() {
       if streams[i].serial == streams[j].serial {
         return Err(
-          "流号 " + streams[i].serial.to_string() + " 被多条逻辑流重复使用",
+          "流号 " +
+          streams[i].serial.to_string() +
+          " 被多条逻辑流重复使用",
         )
       }
       j = j + 1
@@ -102,7 +106,7 @@ pub fn mux_streams_sized(
     per.push(paginate_sized(st.packets, st.serial, target))
   }
   // `cursors` 是每条流下一个待取页的下标，`carries` 是该流上一条已知的粒度
-  let cursors : Array[Int] = []
+  let cursors : Array[Int32] = []
   let carries : Array[Int64] = []
   let mut k = 0
   while k < per.length() {
@@ -172,10 +176,10 @@ pub fn mux_streams_sized(
 /// 包被粘在一起 —— 所以这里拒绝，而不是交给播放器去猜。
 pub fn mux_chains_sized(
   chains : Array[Array[LogicalStream]],
-  target : Int,
+  target : Int32,
 ) -> Result[Array[Page], String] {
   // 先做全局流号唯一性检查（跨段也算），再逐段封装
-  let all_serials : Array[UInt] = []
+  let all_serials : Array[UInt32] = []
   for chain in chains {
     for st in chain {
       if has_serial(all_serials, st.serial) {
@@ -193,11 +197,10 @@ pub fn mux_chains_sized(
   while i < chains.length() {
     match mux_streams_sized(chains[i], target) {
       Err(msg) => return Err("第 " + (i + 1).to_string() + " 段：" + msg)
-      Ok(pages) => {
+      Ok(pages) =>
         for p in pages {
           out.push(p)
         }
-      }
     }
     i = i + 1
   }

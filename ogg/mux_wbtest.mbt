@@ -7,9 +7,9 @@
 /// 若按流号排序，交织出的 BOS 页顺序就与原文件相反。
 test "group_by_stream keeps first-appearance order" {
   let packets : Array[Packet] = [
-    { data: b"a", granule_position: 0L, serial: 5U },
-    { data: b"b", granule_position: 0L, serial: 3U },
-    { data: b"c", granule_position: 0L, serial: 5U },
+    { data: b"a", granule_position: 0L, serial: 5U, },
+    { data: b"b", granule_position: 0L, serial: 3U, },
+    { data: b"c", granule_position: 0L, serial: 5U, },
   ]
   let groups = group_by_stream(packets)
   assert_eq(groups.length(), 2)
@@ -32,15 +32,15 @@ test "all bos pages come first" {
     {
       serial: 1U,
       packets: [
-        { data: b"a1", granule_position: 0L, serial: 1U },
-        { data: b"a2", granule_position: 1L, serial: 1U },
+        { data: b"a1", granule_position: 0L, serial: 1U, },
+        { data: b"a2", granule_position: 1L, serial: 1U, },
       ],
     },
     {
       serial: 2U,
       packets: [
-        { data: b"b1", granule_position: 0L, serial: 2U },
-        { data: b"b2", granule_position: 1L, serial: 2U },
+        { data: b"b1", granule_position: 0L, serial: 2U, },
+        { data: b"b2", granule_position: 1L, serial: 2U, },
       ],
     },
   ]
@@ -75,16 +75,16 @@ test "pages are interleaved by granule position" {
     {
       serial: 1U,
       packets: [
-        { data: b"a1", granule_position: 0L, serial: 1U },
-        { data: b"a2", granule_position: 100L, serial: 1U },
-        { data: b"a3", granule_position: 200L, serial: 1U },
+        { data: b"a1", granule_position: 0L, serial: 1U, },
+        { data: b"a2", granule_position: 100L, serial: 1U, },
+        { data: b"a3", granule_position: 200L, serial: 1U, },
       ],
     },
     {
       serial: 2U,
       packets: [
-        { data: b"b1", granule_position: 50L, serial: 2U },
-        { data: b"b2", granule_position: 150L, serial: 2U },
+        { data: b"b1", granule_position: 50L, serial: 2U, },
+        { data: b"b2", granule_position: 150L, serial: 2U, },
       ],
     },
   ]
@@ -92,7 +92,7 @@ test "pages are interleaved by granule position" {
     Err(_) => assert_true(false)
     Ok(pages) => {
       let gran : Array[Int64] = []
-      let ser : Array[UInt] = []
+      let ser : Array[UInt32] = []
       for p in pages {
         if (p.header_type.to_int() & flag_bos().to_int()) == 0 {
           gran.push(p.granule_position)
@@ -118,17 +118,20 @@ test "each stream numbers its own pages from zero" {
     {
       serial: 1U,
       packets: [
-        { data: b"a1", granule_position: 0L, serial: 1U },
-        { data: b"a2", granule_position: 1L, serial: 1U },
+        { data: b"a1", granule_position: 0L, serial: 1U, },
+        { data: b"a2", granule_position: 1L, serial: 1U, },
       ],
     },
-    { serial: 2U, packets: [{ data: b"b1", granule_position: 0L, serial: 2U }] },
+    {
+      serial: 2U,
+      packets: [{ data: b"b1", granule_position: 0L, serial: 2U, }],
+    },
   ]
   match mux_streams(streams) {
     Err(_) => assert_true(false)
     Ok(pages) => {
-      let seq1 : Array[UInt] = []
-      let seq2 : Array[UInt] = []
+      let seq1 : Array[UInt32] = []
+      let seq2 : Array[UInt32] = []
       for p in pages {
         if p.serial == 1U {
           seq1.push(p.sequence)
@@ -157,15 +160,19 @@ test "multiplexed output roundtrips byte for byte" {
     {
       serial: 11U,
       packets: [
-        { data: b"head-a", granule_position: 0L, serial: 11U },
-        { data: b"body-a", granule_position: 10L, serial: 11U },
+        { data: b"head-a", granule_position: 0L, serial: 11U, },
+        { data: b"body-a", granule_position: 10L, serial: 11U, },
       ],
     },
     {
       serial: 22U,
       packets: [
-        { data: b"head-b", granule_position: 0L, serial: 22U },
-        { data: repeat_byte((0x41 : Byte), 70000), granule_position: 10L, serial: 22U },
+        { data: b"head-b", granule_position: 0L, serial: 22U, },
+        {
+          data: repeat_byte((0x41 : Byte), 70000),
+          granule_position: 10L,
+          serial: 22U,
+        },
       ],
     },
   ]
@@ -198,8 +205,14 @@ test "multiplexed output roundtrips byte for byte" {
 /// 静默接受等于把错误推迟到解码阶段，所以宁可在这里报错。
 test "duplicate serial is rejected" {
   let streams : Array[LogicalStream] = [
-    { serial: 7U, packets: [{ data: b"a", granule_position: 0L, serial: 7U }] },
-    { serial: 7U, packets: [{ data: b"b", granule_position: 0L, serial: 7U }] },
+    {
+      serial: 7U,
+      packets: [{ data: b"a", granule_position: 0L, serial: 7U, }],
+    },
+    {
+      serial: 7U,
+      packets: [{ data: b"b", granule_position: 0L, serial: 7U, }],
+    },
   ]
   match mux_streams(streams) {
     Ok(_) => assert_true(false)
@@ -228,14 +241,22 @@ test "mux_streams_sized keeps every BOS page first" {
   let mut i = 0
   while i < 5 {
     let g = i.to_int64() * 960L
-    pa.push({ data: repeat_byte((0x41 : Byte), 1200), granule_position: g, serial: 1U })
-    pb.push({ data: repeat_byte((0x42 : Byte), 1200), granule_position: g, serial: 2U })
+    pa.push({
+      data: repeat_byte((0x41 : Byte), 1200),
+      granule_position: g,
+      serial: 1U,
+    })
+    pb.push({
+      data: repeat_byte((0x42 : Byte), 1200),
+      granule_position: g,
+      serial: 2U,
+    })
     i = i + 1
   }
-  let built = mux_streams_sized([
-    { serial: 1U, packets: pa },
-    { serial: 2U, packets: pb },
-  ], 4096)
+  let built = mux_streams_sized(
+    [{ serial: 1U, packets: pa, }, { serial: 2U, packets: pb, }],
+    4096,
+  )
   let pages = match built {
     Ok(p) => p
     Err(_) => []
@@ -262,8 +283,8 @@ test "mux_chains_sized keeps segments separate" {
     {
       serial: 1U,
       packets: [
-        { data: b"a1", granule_position: 0L, serial: 1U },
-        { data: b"a2", granule_position: 10L, serial: 1U },
+        { data: b"a1", granule_position: 0L, serial: 1U, },
+        { data: b"a2", granule_position: 10L, serial: 1U, },
       ],
     },
   ]
@@ -271,21 +292,21 @@ test "mux_chains_sized keeps segments separate" {
     {
       serial: 3U,
       packets: [
-        { data: b"b1", granule_position: 0L, serial: 3U },
-        { data: b"b2", granule_position: 10L, serial: 3U },
+        { data: b"b1", granule_position: 0L, serial: 3U, },
+        { data: b"b2", granule_position: 10L, serial: 3U, },
       ],
     },
     {
       serial: 2U,
-      packets: [{ data: b"c1", granule_position: 0L, serial: 2U }],
+      packets: [{ data: b"c1", granule_position: 0L, serial: 2U, }],
     },
   ]
   let chain3 = [
     {
       serial: 7U,
       packets: [
-        { data: b"d1", granule_position: 0L, serial: 7U },
-        { data: b"d2", granule_position: 10L, serial: 7U },
+        { data: b"d1", granule_position: 0L, serial: 7U, },
+        { data: b"d2", granule_position: 10L, serial: 7U, },
       ],
     },
   ]
@@ -307,8 +328,18 @@ test "mux_chains_sized keeps segments separate" {
 ///|
 /// 流号在**任意两段**之间重复都要报错（RFC 3533 §4 要求全局唯一）。
 test "mux_chains_sized rejects serials reused across segments" {
-  let a = [{ serial: 1U, packets: [{ data: b"a", granule_position: 0L, serial: 1U }] }]
-  let b = [{ serial: 1U, packets: [{ data: b"b", granule_position: 0L, serial: 1U }] }]
+  let a = [
+    {
+      serial: 1U,
+      packets: [{ data: b"a", granule_position: 0L, serial: 1U, }],
+    },
+  ]
+  let b = [
+    {
+      serial: 1U,
+      packets: [{ data: b"b", granule_position: 0L, serial: 1U, }],
+    },
+  ]
   match mux_chains_sized([a, b], 4096) {
     Err(msg) => assert_true(msg.contains("重复"))
     Ok(_) => assert_true(false)
@@ -320,8 +351,14 @@ test "mux_chains_sized rejects serials reused across segments" {
 test "mux_chains_sized rejects duplicate serials inside a segment" {
   let bad = [
     [
-      { serial: 5U, packets: [{ data: b"x", granule_position: 0L, serial: 5U }] },
-      { serial: 5U, packets: [{ data: b"y", granule_position: 0L, serial: 5U }] },
+      {
+        serial: 5U,
+        packets: [{ data: b"x", granule_position: 0L, serial: 5U, }],
+      },
+      {
+        serial: 5U,
+        packets: [{ data: b"y", granule_position: 0L, serial: 5U, }],
+      },
     ],
   ]
   match mux_chains_sized(bad, 4096) {

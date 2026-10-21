@@ -28,10 +28,10 @@
 pub(all) struct Page {
   header_type : Byte
   granule_position : Int64
-  serial : UInt
-  sequence : UInt
-  crc : UInt
-  segments : Array[Int]
+  serial : UInt32
+  sequence : UInt32
+  crc : UInt32
+  segments : Array[Int32]
   payload : Bytes
 }
 
@@ -55,7 +55,7 @@ pub fn flag_eos() -> Byte {
 
 ///|
 /// 小端读取 32 位无符号整数。
-fn read_u32_le(data : Bytes, offset : Int) -> UInt {
+fn read_u32_le(data : Bytes, offset : Int32) -> UInt32 {
   let b0 = data[offset].to_int().reinterpret_as_uint()
   let b1 = data[offset + 1].to_int().reinterpret_as_uint()
   let b2 = data[offset + 2].to_int().reinterpret_as_uint()
@@ -65,7 +65,7 @@ fn read_u32_le(data : Bytes, offset : Int) -> UInt {
 
 ///|
 /// 小端读取 64 位无符号整数。
-fn read_u64_le(data : Bytes, offset : Int) -> UInt64 {
+fn read_u64_le(data : Bytes, offset : Int32) -> UInt64 {
   let lo = read_u32_le(data, offset).to_uint64()
   let hi = read_u32_le(data, offset + 4).to_uint64()
   lo | (hi << 32)
@@ -76,7 +76,7 @@ fn read_u64_le(data : Bytes, offset : Int) -> UInt64 {
 ///
 /// `offset` 来自调用方，必须先挡掉负值 —— 否则 `offset + 4 <= 长度`
 /// 这类上界检查拦不住它，索引到负数会在运行时直接崩掉。
-pub fn is_page_start(data : Bytes, offset : Int) -> Bool {
+pub fn is_page_start(data : Bytes, offset : Int32) -> Bool {
   offset >= 0 &&
   offset + 4 <= data.length() &&
   data[offset].to_int() == 0x4F &&
@@ -90,7 +90,7 @@ pub fn is_page_start(data : Bytes, offset : Int) -> Bool {
 ///
 /// 返回 `None` 表示此处不是合法页起点（捕获模式不匹配或数据不足），
 /// 调用方可以据此在字节流中重新同步。
-pub fn Page::parse(data : Bytes, offset : Int) -> (Page, Int)? {
+pub fn Page::parse(data : Bytes, offset : Int32) -> (Page, Int32)? {
   // 固定头 27 字节
   if offset + 27 > data.length() {
     return None
@@ -109,7 +109,7 @@ pub fn Page::parse(data : Bytes, offset : Int) -> (Page, Int)? {
   if table_start + n_segments > data.length() {
     return None
   }
-  let segments : Array[Int] = []
+  let segments : Array[Int32] = []
   let mut payload_len = 0
   let mut k = 0
   while k < n_segments {
@@ -156,7 +156,7 @@ fn write_capture(buf : Buffer) -> Unit {
 ///
 /// 构造第一次时 `crc` 传 0 用于计算校验值，构造第二次时传入真实值 ——
 /// 这样就不需要「先写占位再回填」，因为 `Bytes` 本身不可变。
-fn write_body(buf : Buffer, page : Page, crc : UInt) -> Unit {
+fn write_body(buf : Buffer, page : Page, crc : UInt32) -> Unit {
   buf.write_byte((0x00 : Byte))
   buf.write_byte(page.header_type)
   buf.write_uint64_le(page.granule_position.reinterpret_as_uint64())
@@ -180,7 +180,7 @@ fn write_body(buf : Buffer, page : Page, crc : UInt) -> Unit {
 ///
 /// 只算不写，因此可以用来**校验**从外部拿到的文件：
 /// 把结果与该页里存着的 `crc` 字段比较即可（见 `page_crc_ok`）。
-pub fn Page::expected_crc(self : Page) -> UInt {
+pub fn Page::expected_crc(self : Page) -> UInt32 {
   let probe = Buffer()
   write_capture(probe)
   write_body(probe, self, 0U)

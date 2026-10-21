@@ -17,7 +17,7 @@
 /// 在序列化时重算，因此补丁后的页天然自洽。
 pub fn patch_page(
   pages : Array[Page],
-  index : Int,
+  index : Int32,
   granule? : Int64,
   header? : Byte,
 ) -> Result[Array[Page], String] {
@@ -64,7 +64,10 @@ pub fn patch_page(
 /// 给某条逻辑流的末页补上 EOS 标志（`oggz-chop` 裁掉尾巴后的常规修补）。
 ///
 /// 找不到该流时返回 Err；该流末页已经有 EOS 时原样返回，不做无谓改动。
-pub fn set_eos(pages : Array[Page], serial : UInt) -> Result[Array[Page], String] {
+pub fn set_eos(
+  pages : Array[Page],
+  serial : UInt32,
+) -> Result[Array[Page], String] {
   let mut last = -1
   let mut i = 0
   while i < pages.length() {
@@ -79,5 +82,5 @@ pub fn set_eos(pages : Array[Page], serial : UInt) -> Result[Array[Page], String
   if (pages[last].header_type.to_int() & flag_eos().to_int()) != 0 {
     return Ok(pages)
   }
-  patch_page(pages, last, header=(pages[last].header_type | flag_eos()))
+  patch_page(pages, last, header=pages[last].header_type | flag_eos())
 }

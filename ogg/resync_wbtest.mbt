@@ -4,9 +4,9 @@
 /// 造三页：每包一页，带 BOS / EOS 与递增粒度。
 fn three_page_blob() -> Bytes {
   let packets : Array[Packet] = [
-    { data: b"AAAA", granule_position: 0L, serial: 1U },
-    { data: b"BBBB", granule_position: 10L, serial: 1U },
-    { data: b"CCCC", granule_position: 20L, serial: 1U },
+    { data: b"AAAA", granule_position: 0L, serial: 1U, },
+    { data: b"BBBB", granule_position: 10L, serial: 1U, },
+    { data: b"CCCC", granule_position: 20L, serial: 1U, },
   ]
   serialize_pages(paginate(packets, 1U))
 }
@@ -41,9 +41,9 @@ test "a corrupted middle page is skipped and the rest recovered" {
   let original = three_page_blob()
   let pages = paginate(
     [
-      { data: b"AAAA", granule_position: 0L, serial: 1U },
-      { data: b"BBBB", granule_position: 10L, serial: 1U },
-      { data: b"CCCC", granule_position: 20L, serial: 1U },
+      { data: b"AAAA", granule_position: 0L, serial: 1U, },
+      { data: b"BBBB", granule_position: 10L, serial: 1U, },
+      { data: b"CCCC", granule_position: 20L, serial: 1U, },
     ],
     1U,
   )
@@ -96,7 +96,7 @@ test "a fake page start is rejected while resyncing" {
     i = i + 1
   }
   let real = serialize_pages(
-    paginate([{ data: b"R", granule_position: 0L, serial: 1U }], 1U),
+    paginate([{ data: b"R", granule_position: 0L, serial: 1U, }], 1U),
   )
   let data = Buffer()
   data.write_bytes(b"GARBAGE!".exact_view())
@@ -131,7 +131,7 @@ test "a fake page at offset zero parses structurally but fails crc" {
 /// 正常页的负载里带 "OggS" 不影响解析（可信位置上不需要重同步）。
 test "ogg magic inside a payload does not disturb parsing" {
   let pages = paginate(
-    [{ data: b"xxOggSyy", granule_position: 0L, serial: 2U }],
+    [{ data: b"xxOggSyy", granule_position: 0L, serial: 2U, }],
     2U,
   )
   let blob = serialize_pages(pages)
@@ -146,8 +146,8 @@ test "ogg magic inside a payload does not disturb parsing" {
 test "a truncated tail becomes a skipped range" {
   let pages = paginate(
     [
-      { data: b"AAAA", granule_position: 0L, serial: 1U },
-      { data: b"BBBB", granule_position: 10L, serial: 1U },
+      { data: b"AAAA", granule_position: 0L, serial: 1U, },
+      { data: b"BBBB", granule_position: 10L, serial: 1U, },
     ],
     1U,
   )

@@ -5,9 +5,9 @@
 fn patch_stream() -> Array[Page] {
   paginate(
     [
-      { data: b"a", granule_position: 0L, serial: 1U },
-      { data: b"bb", granule_position: 10L, serial: 1U },
-      { data: b"ccc", granule_position: 20L, serial: 1U },
+      { data: b"a", granule_position: 0L, serial: 1U, },
+      { data: b"bb", granule_position: 10L, serial: 1U, },
+      { data: b"ccc", granule_position: 20L, serial: 1U, },
     ],
     1U,
   )
@@ -38,7 +38,8 @@ test "patching a granule touches only that page" {
 /// 只给标志时粒度不变；两个都不给时等于原样复制。
 test "patch_page keeps omitted fields intact" {
   let pages = patch_stream()
-  let marked = match patch_page(pages, 2, header=(pages[2].header_type | flag_eos())) {
+  let marked = match
+    patch_page(pages, 2, header=pages[2].header_type | flag_eos()) {
     Ok(p) => p
     Err(_) => []
   }
@@ -65,7 +66,8 @@ test "patch_page reports an out of range index" {
 test "set_eos marks the last page once" {
   let pages = patch_stream()
   // 先清掉末页 EOS，模拟被裁剪过的文件
-  let stripped = match patch_page(pages, 2, header=(pages[2].header_type & 0xFB)) {
+  let stripped = match
+    patch_page(pages, 2, header=pages[2].header_type & 0xFB) {
     Ok(p) => p
     Err(_) => []
   }

@@ -29,8 +29,8 @@ pub(all) enum Codec {
 ///|
 /// 一段解出来的音频：格式 + 16 位小端交错的 PCM。
 priv struct Pcm {
-  channels : Int
-  sample_rate : Int
+  channels : Int32
+  sample_rate : Int32
   data : Bytes
 }
 
@@ -39,7 +39,7 @@ priv struct Pcm {
 ///
 /// 先折到无符号区间再拆两个字节，避开 Int → UInt16 转换的语义细节，
 /// 这样负样本写入的补码是确定的。
-fn write_i16_le(buf : Buffer, v : Int) -> Unit {
+fn write_i16_le(buf : Buffer, v : Int32) -> Unit {
   let u = if v < 0 { v + 65536 } else { v }
   buf.write_byte((u % 256).to_byte())
   buf.write_byte((u / 256).to_byte())
@@ -52,19 +52,13 @@ fn write_i16_le(buf : Buffer, v : Int) -> Unit {
 /// 回绕会让一个 1.0001 的样本变成满量程负值，听上去是一声爆音。
 fn write_sample(buf : Buffer, s : Double) -> Unit {
   let v = (s * 32767.0).to_int()
-  let q = if v > 32767 {
-    32767
-  } else if v < -32768 {
-    -32768
-  } else {
-    v
-  }
+  let q = if v > 32767 { 32767 } else if v < -32768 { -32768 } else { v }
   write_i16_le(buf, q)
 }
 
 ///|
 /// 判断 `data` 从 `offset` 起是否为给定的字节序列。
-fn starts_with(data : Bytes, offset : Int, tag : Bytes) -> Bool {
+fn starts_with(data : Bytes, offset : Int32, tag : Bytes) -> Bool {
   if offset < 0 || offset + tag.length() > data.length() {
     return false
   }
@@ -105,7 +99,9 @@ fn codec_of_packet(head : Bytes) -> Codec? {
 ///
 /// 找不到可识别的音频流时返回 Err，说明里点明「首包既不是 OpusHead
 /// 也不是 Vorbis 标识包」—— 这句话直接告诉用户问题出在哪一层。
-fn first_audio_stream(pages : Array[@ogg.Page]) -> Result[(UInt, Codec), String] {
+fn first_audio_stream(
+  pages : Array[@ogg.Page],
+) -> Result[(UInt32, Codec), String] {
   let serials = @ogg.serials_of(pages)
   if serials.length() == 0 {
     return Err("文件里没有任何逻辑流")
@@ -122,7 +118,9 @@ fn first_audio_stream(pages : Array[@ogg.Page]) -> Result[(UInt, Codec), String]
     }
     i = i + 1
   }
-  Err("文件里没有可识别的音频流（首包既不是 OpusHead 也不是 Vorbis 标识包）")
+  Err(
+    "文件里没有可识别的音频流（首包既不是 OpusHead 也不是 Vorbis 标识包）",
+  )
 }
 
 ///|
@@ -153,6 +151,7 @@ pub fn detect(data : Bytes) -> Result[Codec, String] {
 /// 链接要求各段的声道数与采样率一致：WAV 的格式块只有一份，
 /// 拼不进两种格式。不一致时如实报错并指出是哪两段不符，
 /// 而不是按第一段的格式硬写 —— 那会让第二段变成音调错误的噪声。
+
 ///|
 /// 转码输出的内存上限（16 位 PCM 字节数）。
 ///
@@ -166,7 +165,7 @@ const MAX_PCM_BYTES : Int64 = 256L * 1024L * 1024L
 ///
 /// 估算阶段只需要头部参数，不需要把整条流重组一遍 ——
 /// `reassemble` 会复制全部负载，对百万包的文件等于把内存翻倍。
-fn first_packet_bytes(pages : Array[@ogg.Page], serial : UInt) -> Bytes? {
+fn first_packet_bytes(pages : Array[@ogg.Page], serial : UInt32) -> Bytes? {
   let buf = Buffer(size_hint=256)
   for page in pages {
     if page.serial == serial {
@@ -192,7 +191,7 @@ fn estimate_pcm_bytes(chains : Array[Array[@ogg.Page]]) -> Int64 {
   let mut total : Int64 = 0L
   for part in chains {
     // 找该段的第一条音频流：逐流取头部包解析
-    let mut chosen : UInt? = None
+    let mut chosen : UInt32? = None
     let mut channels = 0
     let mut pre_skip : Int64 = 0L
     for serial in @ogg.serials_of(part) {
@@ -284,7 +283,9 @@ pub fn ogg_to_wav_pages(
     // 估算函数在数值异常（粒度溢出）时返回 MAX+1 的哨兵值，
     // 直接打印会变成「预计 256 MiB 超过 256 MiB」这种自相矛盾的话。
     if estimated > MAX_PCM_BYTES {
-      return Err("无法估算输出大小（页粒度超出可表示范围，文件可能已损坏）")
+      return Err(
+        "无法估算输出大小（页粒度超出可表示范围，文件可能已损坏）",
+      )
     }
     return Err(
       "预计输出 " +
@@ -299,11 +300,7 @@ pub fn ogg_to_wav_pages(
   // 预分配：避免 Buffer 反复倍增时同时持有新旧两块内存。
   // 但估算值来自输入（不可全信），预分配封顶 16 MiB，其余按需增长 ——
   // 否则一个伪造的 granule 就能让进程立刻申请 256 MiB。
-  let hint = if estimated > 16777216L {
-    16777216L
-  } else {
-    estimated
-  }
+  let hint = if estimated > 16777216L { 16777216L } else { estimated }
   let buf = Buffer(size_hint=hint.to_int())
   let mut channels = 0
   let mut sample_rate = 0
@@ -312,9 +309,7 @@ pub fn ogg_to_wav_pages(
     let part = chains[seg]
     let target = match first_audio_stream(part) {
       Ok(t) => t
-      Err(msg) => {
-        return Err("第 " + (seg + 1).to_string() + " 段：" + msg)
-      }
+      Err(msg) => return Err("第 " + (seg + 1).to_string() + " 段：" + msg)
     }
     let serial = target.0
     let codec = target.1
@@ -322,9 +317,7 @@ pub fn ogg_to_wav_pages(
     let one = @ogg.serialize_pages(@ogg.stream_pages(part, serial))
     let decoded = match decode_stream(one, codec) {
       Ok(d) => d
-      Err(msg) => {
-        return Err("第 " + (seg + 1).to_string() + " 段：" + msg)
-      }
+      Err(msg) => return Err("第 " + (seg + 1).to_string() + " 段：" + msg)
     }
     if channels == 0 {
       channels = decoded.channels
@@ -350,7 +343,7 @@ pub fn ogg_to_wav_pages(
   if channels == 0 || sample_rate == 0 {
     return Err("没有解出任何音频数据")
   }
-  let format : @wav.WavFormat = { channels, sample_rate, bits_per_sample: 16 }
+  let format : @wav.WavFormat = { channels, sample_rate, bits_per_sample: 16, }
   Ok(@wav.encode_wav(format, buf.to_bytes()))
 }
 
@@ -376,7 +369,7 @@ fn opus_pcm(data : Bytes) -> Result[Pcm, String] {
       for s in samples {
         write_sample(buf, s)
       }
-      Ok({ channels: 1, sample_rate: 48000, data: buf.to_bytes() })
+      Ok({ channels: 1, sample_rate: 48000, data: buf.to_bytes(), })
     }
   }
 }
@@ -417,7 +410,7 @@ fn vorbis_pcm(data : Bytes) -> Result[Pcm, String] {
         }
         f = f + 1
       }
-      Ok({ channels, sample_rate, data: buf.to_bytes() })
+      Ok({ channels, sample_rate, data: buf.to_bytes(), })
     }
   }
 }

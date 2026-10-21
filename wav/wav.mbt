@@ -13,9 +13,9 @@
 ///|
 /// WAV 的音频格式参数。
 pub(all) struct WavFormat {
-  channels : Int
-  sample_rate : Int
-  bits_per_sample : Int
+  channels : Int32
+  sample_rate : Int32
+  bits_per_sample : Int32
 }
 
 ///|
@@ -27,7 +27,7 @@ pub(all) struct WavFile {
 
 ///|
 /// 小端读取 16 位无符号整数。
-fn rd_u16(data : Bytes, offset : Int) -> Int {
+fn rd_u16(data : Bytes, offset : Int32) -> Int32 {
   data[offset].to_int() | (data[offset + 1].to_int() << 8)
 }
 
@@ -37,7 +37,7 @@ fn rd_u16(data : Bytes, offset : Int) -> Int {
 /// 必须用 64 位承接：MoonBit 的 `Int` 是 32 位有符号，
 /// 长度字段的最高位一旦置 1（如 0x80000000），用 `Int` 读出来就是负数，
 /// 会绕过「块声明长度超出实际数据」的边界检查，把损坏文件静默当成空数据放行。
-fn rd_u32(data : Bytes, offset : Int) -> Int64 {
+fn rd_u32(data : Bytes, offset : Int32) -> Int64 {
   data[offset].to_int().to_int64() |
   (data[offset + 1].to_int().to_int64() << 8) |
   (data[offset + 2].to_int().to_int64() << 16) |
@@ -46,7 +46,14 @@ fn rd_u32(data : Bytes, offset : Int) -> Int64 {
 
 ///|
 /// 判断偏移处 4 个字节是否等于给定的 ASCII 标记。
-fn tag_is(data : Bytes, offset : Int, a : Int, b : Int, c : Int, d : Int) -> Bool {
+fn tag_is(
+  data : Bytes,
+  offset : Int32,
+  a : Int32,
+  b : Int32,
+  c : Int32,
+  d : Int32,
+) -> Bool {
   offset + 4 <= data.length() &&
   data[offset].to_int() == a &&
   data[offset + 1].to_int() == b &&
@@ -112,7 +119,7 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
         // 与标准 PCM 的 SubFormat GUID 全量比较（16 字节）：
         // 00000001-0000-0010-8000-00AA00389B71，小端字节序。
         // 只比前两字节的话，伪造一个 `01 00 46 41 4B 45 …` 也能过。
-        let pcm_guid : Array[Int] = [
+        let pcm_guid : Array[Int32] = [
           1, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71,
         ]
         let mut gi = 0
@@ -135,7 +142,7 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
       if channels <= 0 || sample_rate <= 0 || bits_per_sample <= 0 {
         return None
       }
-      format = Some({ channels, sample_rate, bits_per_sample })
+      format = Some({ channels, sample_rate, bits_per_sample, })
     } else if tag_is(bytes, pos, 0x64, 0x61, 0x74, 0x61) {
       // "data"。经过上面的边界检查后 size 必然小于等于文件长度，
       // 此时转回 Int 是安全的。
@@ -155,7 +162,7 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
     }
   }
   match (format, pcm) {
-    (Some(f), Some(d)) => Some({ format: f, data: d })
+    (Some(f), Some(d)) => Some({ format: f, data: d, })
     _ => None
   }
 }

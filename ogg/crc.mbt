@@ -13,8 +13,8 @@
 /// 采用逐位实现，优先保证与规范一致。Ogg 页的负载通常在数 KB 量级，
 /// 该实现足够；若日后需要处理超大负载，可在不改变对外行为的前提下
 /// 改为查表实现。
-pub fn crc32(data : Bytes) -> UInt {
-  let mut crc : UInt = 0U
+pub fn crc32(data : Bytes) -> UInt32 {
+  let mut crc : UInt32 = 0U
   let mut i = 0
   while i < data.length() {
     // 当前字节移到最高位后与寄存器异或
@@ -38,7 +38,7 @@ pub fn crc32(data : Bytes) -> UInt {
 ///
 /// 传入的是**页的完整字节**，其中 CRC 字段必须已经置零，
 /// 与 RFC 3533 要求的计算方式一致。
-pub fn verify_page(page_bytes : Bytes, expected : UInt) -> Bool {
+pub fn verify_page(page_bytes : Bytes, expected : UInt32) -> Bool {
   crc32(page_bytes) == expected
 }
 

@@ -15,7 +15,7 @@
 /// 不能直接用 `String::length()` 当宽度 —— 那是 UTF-16 码元数，
 /// 一个汉字算 1，但显示出来占 2 列。表头全是中文标签，
 /// 按 1 列算会让整行表头相对数字列整体偏左，一眼就看得出错位。
-fn display_width(s : String) -> Int {
+fn display_width(s : String) -> Int32 {
   let mut width = 0
   let mut i = 0
   while i < s.length() {
@@ -44,7 +44,7 @@ fn display_width(s : String) -> Int {
 
 ///|
 /// 字符串右侧补空格到占满 `width` 列（已够宽则原样返回，不截断）。
-fn pad_right(s : String, width : Int) -> String {
+fn pad_right(s : String, width : Int32) -> String {
   let mut out = s
   let mut i = display_width(s)
   while i < width {
@@ -58,7 +58,7 @@ fn pad_right(s : String, width : Int) -> String {
 /// 字符串左侧补空格到占满 `width` 列。
 ///
 /// 数字列左补、文本列右补，这样按列扫读时数位能对齐。
-fn pad_left(s : String, width : Int) -> String {
+fn pad_left(s : String, width : Int32) -> String {
   let mut out = ""
   let mut i = display_width(s)
   while i < width {
@@ -97,8 +97,8 @@ fn flags_text(header_type : Byte) -> String {
 /// 长度一致。偏移单独成一个函数而不是埋在排版里：它是可以直接拿去和
 /// 真实文件对照的数值（用十六进制编辑器核对损坏位置时正需要），
 /// 而排版里的数字没法被断言。
-pub fn page_offsets(pages : Array[Page]) -> Array[Int] {
-  let offsets : Array[Int] = []
+pub fn page_offsets(pages : Array[Page]) -> Array[Int32] {
+  let offsets : Array[Int32] = []
   let mut offset = 0
   for page in pages {
     offsets.push(offset)
@@ -134,9 +134,7 @@ pub fn page_table_header() -> String {
 /// 这张表补的是两者中间的那层：坏点周围到底摆了哪些页。
 pub fn describe_pages(pages : Array[Page]) -> Array[String] {
   let lines : Array[String] = []
-  for_each_page_line(pages, fn(line) {
-    lines.push(line)
-  })
+  for_each_page_line(pages, fn(line) { lines.push(line) })
   lines
 }
 
@@ -150,8 +148,7 @@ pub fn for_each_page_line(pages : Array[Page], emit : (String) -> Unit) -> Unit 
   let mut i = 0
   while i < pages.length() {
     let page = pages[i]
-    let line =
-      pad_left(i.to_string(), 5) +
+    let line = pad_left(i.to_string(), 5) +
       pad_left(offsets[i].to_string(), 11) +
       pad_left(page.serial.to_string(), 12) +
       pad_left(page.sequence.to_string(), 6) +

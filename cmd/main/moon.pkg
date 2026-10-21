@@ -5,13 +5,13 @@
 // 容器怎么解析、怎么封装，全在 ogg/ 与 wav/ 里。
 
 import {
-  "moonmux",
-  "moonmux/cli",
-  "moonmux/ogg",
-  "moonmux/wav",
-  "moonmux/codec",
-  "moonmux/manifest",
-  "moonmux/pipeline",
+  "WangYF0829/moonmux",
+  "WangYF0829/moonmux/cli",
+  "WangYF0829/moonmux/ogg",
+  "WangYF0829/moonmux/wav",
+  "WangYF0829/moonmux/codec",
+  "WangYF0829/moonmux/manifest",
+  "WangYF0829/moonmux/pipeline",
   "moonbitlang/x/fs",
   "moonbitlang/core/env",
   "moonbitlang/x/sys",
@@ -19,6 +19,4 @@ import {
 
 supported_targets = "native"
 
-options(
-  "is-main": true,
-)
+pkgtype(kind: "executable")

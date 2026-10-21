@@ -11,7 +11,14 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
-BIN="${1:-_build/native/debug/build/cmd/main/main.exe}"
+# Windows 产物是 main.exe，Linux/macOS 是 main —— 自动探测，CI 与本地共用
+if [ -n "${1:-}" ]; then
+  BIN="$1"
+elif [ -x "_build/native/debug/build/cmd/main/main.exe" ]; then
+  BIN="_build/native/debug/build/cmd/main/main.exe"
+else
+  BIN="_build/native/debug/build/cmd/main/main"
+fi
 # 临时目录放进 _build（已在 .gitignore 里）：即使脚本被中断，
 # 残留也只落在构建目录内，不会污染仓库根目录。
 mkdir -p _build

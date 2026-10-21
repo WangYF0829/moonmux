@@ -1,0 +1,8 @@
+# 发布归档时排除的内容（moon package / moon publish 使用）
+_build/
+smoke.*/
+.workbuddy/
+_mbuild/
+*.log
+pkg.generated.mbti
+*.mbti

@@ -5,7 +5,7 @@
 ///
 /// 结构体检的设计前提：每类问题能被独立触发 ——
 /// 所以测试必须能只改序号、只抹 BOS、只抹 EOS，而不牵连别的字段。
-fn copy_page(p : Page, sequence : UInt, header_type : Byte) -> Page {
+fn copy_page(p : Page, sequence : UInt32, header_type : Byte) -> Page {
   {
     header_type,
     granule_position: p.granule_position,
@@ -19,7 +19,7 @@ fn copy_page(p : Page, sequence : UInt, header_type : Byte) -> Page {
 
 ///|
 /// 清掉 `page` 头类型标志中的某一位。
-fn strip_flag(p : Page, bit : Int) -> Byte {
+fn strip_flag(p : Page, bit : Int32) -> Byte {
   (p.header_type.to_int() & (255 - bit)).to_byte()
 }
 
@@ -27,8 +27,8 @@ fn strip_flag(p : Page, bit : Int) -> Byte {
 /// 分页产出的页本身就是完好的：序号从 0 连续，BOS / EOS 到位。
 test "clean pages report no problems" {
   let packets : Array[Packet] = [
-    { data: b"a", granule_position: 0L, serial: 1U },
-    { data: b"b", granule_position: 9L, serial: 1U },
+    { data: b"a", granule_position: 0L, serial: 1U, },
+    { data: b"b", granule_position: 9L, serial: 1U, },
   ]
   assert_eq(structure_problems(paginate(packets, 1U)).length(), 0)
 }
@@ -40,13 +40,13 @@ test "multiplexed pages report no problems" {
     {
       serial: 1U,
       packets: [
-        { data: b"a1", granule_position: 0L, serial: 1U },
-        { data: b"a2", granule_position: 5L, serial: 1U },
+        { data: b"a1", granule_position: 0L, serial: 1U, },
+        { data: b"a2", granule_position: 5L, serial: 1U, },
       ],
     },
     {
       serial: 2U,
-      packets: [{ data: b"b1", granule_position: 3L, serial: 2U }],
+      packets: [{ data: b"b1", granule_position: 3L, serial: 2U, }],
     },
   ])
   match built {
@@ -61,14 +61,17 @@ test "multiplexed pages report no problems" {
 /// 报告里要带断点两侧的实际序号与丢失页数，否则排查时无从定位。
 test "sequence gap is reported" {
   let packets : Array[Packet] = [
-    { data: b"a", granule_position: 0L, serial: 1U },
-    { data: b"b", granule_position: 9L, serial: 1U },
+    { data: b"a", granule_position: 0L, serial: 1U, },
+    { data: b"b", granule_position: 9L, serial: 1U, },
   ]
   let pages = paginate(packets, 1U)
   pages[1] = copy_page(pages[1], 5U, pages[1].header_type)
   let problems = structure_problems(pages)
   assert_eq(problems.length(), 1)
-  assert_eq(problems[0], "serial=1 页序号从 0 跳到 5（中间丢了 4 页）")
+  assert_eq(
+    problems[0],
+    "serial=1 页序号从 0 跳到 5（中间丢了 4 页）",
+  )
 }
 
 ///|
@@ -81,7 +84,7 @@ test "one lost page yields exactly one report" {
   let packets : Array[Packet] = []
   let mut i = 0
   while i < 8 {
-    packets.push({ data: b"x", granule_position: i.to_int64(), serial: 1U })
+    packets.push({ data: b"x", granule_position: i.to_int64(), serial: 1U, })
     i = i + 1
   }
   let pages = paginate(packets, 1U)
@@ -96,47 +99,63 @@ test "one lost page yields exactly one report" {
   }
   let problems = structure_problems(kept)
   assert_eq(problems.length(), 1)
-  assert_eq(problems[0], "serial=1 页序号从 2 跳到 4（中间丢了 1 页）")
+  assert_eq(
+    problems[0],
+    "serial=1 页序号从 2 跳到 4（中间丢了 1 页）",
+  )
 }
 
 ///|
 /// 一条流不从第 0 页开始必须被指出 —— 说明前面那段不在这个文件里。
 test "stream not starting at page zero is reported" {
-  let pages = paginate([{ data: b"a", granule_position: 0L, serial: 1U }], 1U)
+  let pages = paginate([{ data: b"a", granule_position: 0L, serial: 1U, }], 1U)
   pages[0] = copy_page(pages[0], 3U, pages[0].header_type)
   let problems = structure_problems(pages)
   assert_eq(problems.length(), 1)
-  assert_eq(problems[0], "serial=1 首页页序号是 3（应为 0，流的开头可能丢失）")
+  assert_eq(
+    problems[0],
+    "serial=1 首页页序号是 3（应为 0，流的开头可能丢失）",
+  )
 }
 
 ///|
 /// 首页缺 BOS 必须被指出 —— 头部包不在，解码器无法初始化。
 test "missing bos is reported" {
   let packets : Array[Packet] = [
-    { data: b"a", granule_position: 0L, serial: 1U },
-    { data: b"b", granule_position: 9L, serial: 1U },
+    { data: b"a", granule_position: 0L, serial: 1U, },
+    { data: b"b", granule_position: 9L, serial: 1U, },
   ]
   let pages = paginate(packets, 1U)
   pages[0] = copy_page(pages[0], pages[0].sequence, strip_flag(pages[0], 2))
   let problems = structure_problems(pages)
   // 只抹了 BOS，序号与 EOS 都还正常 —— 应当只有这一条问题
   assert_eq(problems.length(), 1)
-  assert_eq(problems[0], "serial=1 首页缺 BOS 标志（头部包可能丢失）")
+  assert_eq(
+    problems[0],
+    "serial=1 首页缺 BOS 标志（头部包可能丢失）",
+  )
 }
 
 ///|
 /// 末页缺 EOS 必须被指出 —— 文件末尾被截断时就是这个形态。
 test "missing eos is reported" {
   let packets : Array[Packet] = [
-    { data: b"a", granule_position: 0L, serial: 1U },
-    { data: b"b", granule_position: 9L, serial: 1U },
+    { data: b"a", granule_position: 0L, serial: 1U, },
+    { data: b"b", granule_position: 9L, serial: 1U, },
   ]
   let pages = paginate(packets, 1U)
   let last = pages.length() - 1
-  pages[last] = copy_page(pages[last], pages[last].sequence, strip_flag(pages[last], 4))
+  pages[last] = copy_page(
+    pages[last],
+    pages[last].sequence,
+    strip_flag(pages[last], 4),
+  )
   let problems = structure_problems(pages)
   assert_eq(problems.length(), 1)
-  assert_eq(problems[0], "serial=1 末页缺 EOS 标志（文件可能被截断）")
+  assert_eq(
+    problems[0],
+    "serial=1 末页缺 EOS 标志（文件可能被截断）",
+  )
 }
 
 ///|
@@ -145,7 +164,10 @@ test "missing eos is reported" {
 /// `Page::parse` 产出的页天然满足段表一致性，这项检查防的是
 /// 上层手工拼页 —— 段表与负载错位时读端会越界或悄悄丢数据。
 test "segment table mismatch is reported" {
-  let pages = paginate([{ data: b"abc", granule_position: 0L, serial: 1U }], 1U)
+  let pages = paginate(
+    [{ data: b"abc", granule_position: 0L, serial: 1U, }],
+    1U,
+  )
   // 声明 4 字节，实际负载 3 字节
   pages[0] = {
     header_type: pages[0].header_type,
@@ -158,14 +180,17 @@ test "segment table mismatch is reported" {
   }
   let problems = structure_problems(pages)
   assert_eq(problems.length(), 1)
-  assert_eq(problems[0], "serial=1 sequence=0 段表声明 4 字节，实际负载 3 字节")
+  assert_eq(
+    problems[0],
+    "serial=1 sequence=0 段表声明 4 字节，实际负载 3 字节",
+  )
 }
 
 ///|
 /// 造一页：段表按负载长度生成（负载 < 255 时本页有包结束）。
 fn mk_page(
-  serial : UInt,
-  seq : UInt,
+  serial : UInt32,
+  seq : UInt32,
   granule : Int64,
   header : Byte,
   payload : Bytes,
@@ -201,7 +226,13 @@ test "granule going backwards is an error" {
 /// 没有包结束的页带着粒度 → warn（-1 才表示「本页没有包结束」）。
 test "granule on a page without packet completion is a warning" {
   let pages : Array[Page] = [
-    mk_page(1U, 0U, 5L, flag_bos() | flag_eos(), repeat_byte((0x41 : Byte), 255)),
+    mk_page(
+      1U,
+      0U,
+      5L,
+      flag_bos() | flag_eos(),
+      repeat_byte((0x41 : Byte), 255),
+    ),
   ]
   let findings = structure_findings(pages)
   assert_eq(findings.length(), 1)
@@ -220,7 +251,8 @@ test "missing granule where packets complete is a warning" {
   let findings = structure_findings(pages)
   assert_eq(findings.length(), 1)
   match findings[0].severity {
-    Severity::Warning => assert_true(findings[0].message.contains("粒度却是 -1"))
+    Severity::Warning =>
+      assert_true(findings[0].message.contains("粒度却是 -1"))
     _ => assert_true(false)
   }
 }
@@ -282,8 +314,8 @@ test "severity labels" {
 /// 一份完好的文件不该产生任何 findings（包括 info 级）。
 test "clean stream has no findings at all" {
   let packets : Array[Packet] = [
-    { data: b"a", granule_position: 0L, serial: 1U },
-    { data: b"b", granule_position: 9L, serial: 1U },
+    { data: b"a", granule_position: 0L, serial: 1U, },
+    { data: b"b", granule_position: 9L, serial: 1U, },
   ]
   let findings = structure_findings(paginate(packets, 1U))
   assert_eq(findings.length(), 0)
@@ -297,15 +329,15 @@ test "clean stream has no findings at all" {
 test "chained segments reusing a serial are reported once" {
   let seg_a = paginate(
     [
-      { data: b"a", granule_position: 0L, serial: 1U },
-      { data: b"b", granule_position: 10L, serial: 1U },
+      { data: b"a", granule_position: 0L, serial: 1U, },
+      { data: b"b", granule_position: 10L, serial: 1U, },
     ],
     1U,
   )
   let seg_b = paginate(
     [
-      { data: b"c", granule_position: 0L, serial: 1U },
-      { data: b"d", granule_position: 10L, serial: 1U },
+      { data: b"c", granule_position: 0L, serial: 1U, },
+      { data: b"d", granule_position: 10L, serial: 1U, },
     ],
     1U,
   )

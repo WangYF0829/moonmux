@@ -16,12 +16,12 @@
 pub(all) struct Packet {
   data : Bytes
   granule_position : Int64
-  serial : UInt
+  serial : UInt32
 }
 
 ///|
 /// 查找逻辑流序号在 `serials` 中的下标；未出现过返回 -1。
-fn serial_index(serials : Array[UInt], s : UInt) -> Int {
+fn serial_index(serials : Array[UInt32], s : UInt32) -> Int32 {
   let mut i = 0
   while i < serials.length() {
     if serials[i] == s {
@@ -45,7 +45,7 @@ fn serial_index(serials : Array[UInt], s : UInt) -> Int {
 ///    宁可少一个包，也不交出半截数据，更不越界读。
 pub fn reassemble(pages : Array[Page]) -> Array[Packet] {
   let packets : Array[Packet] = []
-  let serials : Array[UInt] = []
+  let serials : Array[UInt32] = []
   let accs : Array[Buffer] = []
   for page in pages {
     let idx = serial_index(serials, page.serial)
@@ -68,7 +68,7 @@ pub fn reassemble(pages : Array[Page]) -> Array[Packet] {
     } else {
       let mut offset = 0
       // 本页最后一个「完整结束」的包在 packets 中的下标；-1 表示本页没有包结束
-      let mut last_ended : Int = -1
+      let mut last_ended : Int32 = -1
       for seg in page.segments {
         let mut i = 0
         while i < seg {
@@ -114,8 +114,8 @@ pub fn reassemble(pages : Array[Page]) -> Array[Packet] {
 ///
 /// 注意：本函数只负责**单个包**的段表，不保证段数不超过 255。
 /// 段数超过 255 时应由 `paginate` 拆到多页承载。
-pub fn segments_for(len : Int) -> Array[Int] {
-  let segs : Array[Int] = []
+pub fn segments_for(len : Int32) -> Array[Int32] {
+  let segs : Array[Int32] = []
   let mut rest = len
   while rest >= 255 {
     segs.push(255)
@@ -136,7 +136,7 @@ pub fn segments_for(len : Int) -> Array[Int] {
 /// 粒度位置只写在包**结束**所在的那一页，其余页写 -1
 /// （RFC 3533：表示「本页没有包结束」）。首页打 BOS、末页打 EOS，
 /// 解码器据此判断流边界，缺了会被认为文件被截断。
-pub fn paginate(packets : Array[Packet], serial : UInt) -> Array[Page] {
+pub fn paginate(packets : Array[Packet], serial : UInt32) -> Array[Page] {
   let pages : Array[Page] = []
   let mut sequence = 0
   for pkt in packets {
@@ -146,7 +146,7 @@ pub fn paginate(packets : Array[Packet], serial : UInt) -> Array[Page] {
     let mut first_chunk = true
     while seg_idx < segs.length() {
       // 每页最多取 255 个段
-      let chunk : Array[Int] = []
+      let chunk : Array[Int32] = []
       let mut chunk_len = 0
       while seg_idx < segs.length() && chunk.length() < 255 {
         chunk.push(segs[seg_idx])
@@ -167,7 +167,11 @@ pub fn paginate(packets : Array[Packet], serial : UInt) -> Array[Page] {
       }
       pages.push({
         header_type: header,
-        granule_position: if ends_here { pkt.granule_position } else { -1L },
+        granule_position: if ends_here {
+          pkt.granule_position
+        } else {
+          -1L
+        },
         serial,
         sequence: sequence.reinterpret_as_uint(),
         crc: 0U,
@@ -206,13 +210,13 @@ pub fn paginate(packets : Array[Packet], serial : UInt) -> Array[Page] {
 
 ///|
 /// 一个包会占几个段。
-fn seg_count(p : Packet) -> Int {
+fn seg_count(p : Packet) -> Int32 {
   segments_for(p.data.length()).length()
 }
 
 ///|
 /// 一组包的负载字节数。
-fn group_bytes(group : Array[Packet]) -> Int {
+fn group_bytes(group : Array[Packet]) -> Int32 {
   let mut n = 0
   for p in group {
     n = n + p.data.length()
@@ -222,7 +226,7 @@ fn group_bytes(group : Array[Packet]) -> Int {
 
 ///|
 /// 一组包的段数。
-fn group_segs(group : Array[Packet]) -> Int {
+fn group_segs(group : Array[Packet]) -> Int32 {
   let mut n = 0
   for p in group {
     n = n + seg_count(p)
@@ -235,7 +239,7 @@ fn group_segs(group : Array[Packet]) -> Int {
 ///
 /// 4096 是 libogg 写死的阈值，也是 mutagen `from_packets` 的默认值 ——
 /// 生态里的事实标准。需要别的值时把参数传进来，不要改这个常量。
-pub const DEFAULT_PAGE_TARGET : Int = 4096
+pub const DEFAULT_PAGE_TARGET : Int32 = 4096
 
 ///|
 /// 按目标页大小重新分页 —— 「攒够再出页」，而不是一包一页。
@@ -262,7 +266,11 @@ pub const DEFAULT_PAGE_TARGET : Int = 4096
 ///
 /// `target` ≤ 0 时与 `paginate` 完全一致 —— 默认行为不变，
 /// `cat` / `split` 依赖的字节透传特性不受影响。
-pub fn paginate_sized(packets : Array[Packet], serial : UInt, target : Int) -> Array[Page] {
+pub fn paginate_sized(
+  packets : Array[Packet],
+  serial : UInt32,
+  target : Int32,
+) -> Array[Page] {
   if packets.length() == 0 || target <= 0 {
     return paginate(packets, serial)
   }
@@ -349,7 +357,7 @@ pub fn paginate_sized(packets : Array[Packet], serial : UInt, target : Int) -> A
         end = end + 1
       }
     }
-    let segs : Array[Int] = []
+    let segs : Array[Int32] = []
     let buf = Buffer()
     let mut granule : Int64 = -1L
     let mut k = gi

@@ -21,7 +21,7 @@ pub(all) enum Command {
   /// 把一条链接流按链接点拆成多个 Ogg 文件
   Split(String, String)
   /// 抽出第 n 条逻辑流，写成独立的 Ogg 文件
-  Extract(String, Int, String)
+  Extract(String, Int32, String)
   /// 转储页级结构
   Dump(String)
   /// 列出注释（vendor + KEY=VALUE）
@@ -29,7 +29,7 @@ pub(all) enum Command {
   /// 改写注释并写入新文件（KEY= 表示删除该键）
   TagWrite(String, String, Array[String])
   /// 按时间（毫秒）定位到页；第三个参数是物理流（链）序号，1 起算
-  Seek(String, Int, Int)
+  Seek(String, Int32, Int32)
   /// 逐页重算 CRC，报告通过率
   Verify(String)
   /// 把 Ogg（Opus / Vorbis）转码为 WAV
@@ -119,8 +119,13 @@ pub fn usage_for(topic : String) -> String {
 
 ///|
 /// 参数个数不符时的统一报错文本。`got` / `want` 均不含子命令本身。
-fn arity_msg(sub : String, got : Int, want : Int) -> String {
-  sub + " 需要 " + want.to_string() + " 个参数，实际给了 " + got.to_string() + " 个"
+fn arity_msg(sub : String, got : Int32, want : Int32) -> String {
+  sub +
+  " 需要 " +
+  want.to_string() +
+  " 个参数，实际给了 " +
+  got.to_string() +
+  " 个"
 }
 
 ///|
@@ -132,7 +137,7 @@ fn arity_msg(sub : String, got : Int, want : Int) -> String {
 ///
 /// 手写而不引 `strconv`：这一层至今不引任何包，而这里要的语义比
 /// 通用解析窄得多，窄语义自己写反而更清楚。
-fn parse_uint(s : String) -> Int? {
+fn parse_uint(s : String) -> Int32? {
   if s.length() == 0 {
     return None
   }
@@ -164,13 +169,9 @@ fn parse_uint(s : String) -> Int? {
 
 ///|
 /// 解析一个正整数参数（不允许 0）。
-fn parse_positive(s : String) -> Int? {
+fn parse_positive(s : String) -> Int32? {
   match parse_uint(s) {
-    Some(n) => if n > 0 {
-      Some(n)
-    } else {
-      None
-    }
+    Some(n) => if n > 0 { Some(n) } else { None }
     None => None
   }
 }
@@ -194,7 +195,10 @@ pub fn parse(args : Array[String]) -> Command {
     }
   } else if sub == "demux" {
     if n < 2 {
-      Command::Bad("demux 需要输入文件与输出目录", usage_for("demux"))
+      Command::Bad(
+        "demux 需要输入文件与输出目录",
+        usage_for("demux"),
+      )
     } else if n > 2 {
       Command::Bad(arity_msg("demux", n, 2), usage_for("demux"))
     } else {
@@ -211,7 +215,10 @@ pub fn parse(args : Array[String]) -> Command {
   } else if sub == "cat" {
     // cat 的输入个数不限，但至少要两个输入加一个输出
     if n < 3 {
-      Command::Bad("cat 需要至少两个输入文件与一个输出文件", usage_for("cat"))
+      Command::Bad(
+        "cat 需要至少两个输入文件与一个输出文件",
+        usage_for("cat"),
+      )
     } else {
       let inputs : Array[String] = []
       let mut i = 1
@@ -223,7 +230,10 @@ pub fn parse(args : Array[String]) -> Command {
     }
   } else if sub == "split" {
     if n < 2 {
-      Command::Bad("split 需要输入文件与输出目录", usage_for("split"))
+      Command::Bad(
+        "split 需要输入文件与输出目录",
+        usage_for("split"),
+      )
     } else if n > 2 {
       Command::Bad(arity_msg("split", n, 2), usage_for("split"))
     } else {
@@ -241,7 +251,9 @@ pub fn parse(args : Array[String]) -> Command {
       match parse_positive(args[2]) {
         None =>
           Command::Bad(
-            "extract 的逻辑流序号必须是正整数，实际是「" + args[2] + "」",
+            "extract 的逻辑流序号必须是正整数，实际是「" +
+            args[2] +
+            "」",
             usage_for("extract"),
           )
         Some(k) => Command::Extract(args[1], k, args[3])
@@ -277,17 +289,16 @@ pub fn parse(args : Array[String]) -> Command {
       while i < args.length() {
         match args[i].find("=") {
           Some(_) => assignments.push(args[i])
-          None =>
-            if bad is None {
-              bad = Some(args[i])
-            }
+          None => if bad is None { bad = Some(args[i]) }
         }
         i = i + 1
       }
       match bad {
         Some(text) =>
           Command::Bad(
-            "tag 的参数必须写成 KEY=VALUE，实际收到「" + text + "」",
+            "tag 的参数必须写成 KEY=VALUE，实际收到「" +
+            text +
+            "」",
             usage_for("tag"),
           )
         None => Command::TagWrite(args[1], args[2], assignments)
@@ -297,12 +308,17 @@ pub fn parse(args : Array[String]) -> Command {
     if n < 2 {
       Command::Bad("seek 需要文件路径与毫秒数", usage_for("seek"))
     } else if n > 3 {
-      Command::Bad("seek 至多接受 文件 / 毫秒 / 链序号 三个参数", usage_for("seek"))
+      Command::Bad(
+        "seek 至多接受 文件 / 毫秒 / 链序号 三个参数",
+        usage_for("seek"),
+      )
     } else {
       match parse_uint(args[2]) {
         None =>
           Command::Bad(
-            "seek 的时间必须是毫秒整数，实际是「" + args[2] + "」",
+            "seek 的时间必须是毫秒整数，实际是「" +
+            args[2] +
+            "」",
             usage_for("seek"),
           )
         Some(ms) => {
@@ -312,7 +328,9 @@ pub fn parse(args : Array[String]) -> Command {
               Some(c) => c
               None =>
                 return Command::Bad(
-                  "seek 的链序号必须是正整数，实际是「" + args[3] + "」",
+                  "seek 的链序号必须是正整数，实际是「" +
+                  args[3] +
+                  "」",
                   usage_for("seek"),
                 )
             }
@@ -333,7 +351,10 @@ pub fn parse(args : Array[String]) -> Command {
     }
   } else if sub == "to-wav" {
     if n < 2 {
-      Command::Bad("to-wav 需要输入文件与输出文件", usage_for("to-wav"))
+      Command::Bad(
+        "to-wav 需要输入文件与输出文件",
+        usage_for("to-wav"),
+      )
     } else if n > 2 {
       Command::Bad(arity_msg("to-wav", n, 2), usage_for("to-wav"))
     } else {

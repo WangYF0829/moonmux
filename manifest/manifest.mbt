@@ -23,11 +23,11 @@
 /// 一份流目录清单的内容。
 pub(all) struct Manifest {
   /// 原文件的流号；旧清单没有则 None
-  serial : UInt?
+  serial : UInt32?
   /// 包数（用于校验目录是否被改动或复用）
-  packets : Int?
+  packets : Int32?
   /// 该流所属的物理流（链）序号，1 起算；旧清单没有则 None
-  chain : Int?
+  chain : Int32?
   /// 逐包粒度；-1 表示该包在原文件里不携带粒度
   granules : Array[Int64]
 }
@@ -42,10 +42,7 @@ pub fn starts_with(s : String, prefix : String) -> Bool {
   let mut same = true
   while i < prefix.length() {
     match (s.get_char(i), prefix.get_char(i)) {
-      (Some(a), Some(b)) =>
-        if a.to_int() != b.to_int() {
-          same = false
-        }
+      (Some(a), Some(b)) => if a.to_int() != b.to_int() { same = false }
       _ => same = false
     }
     i = i + 1
@@ -64,10 +61,7 @@ pub fn ends_with(s : String, suffix : String) -> Bool {
   let mut same = true
   while i < suffix.length() {
     match (s.get_char(offset + i), suffix.get_char(i)) {
-      (Some(a), Some(b)) =>
-        if a.to_int() != b.to_int() {
-          same = false
-        }
+      (Some(a), Some(b)) => if a.to_int() != b.to_int() { same = false }
       _ => same = false
     }
     i = i + 1
@@ -169,10 +163,7 @@ fn parse_header(line : String) -> Result[(String, String)?, String] {
           known = true
         } else if starts_with(key, name) {
           match key.get_char(name.length()) {
-            Some(c) =>
-              if c.to_int() == 32 || c.to_int() == 9 {
-                known = true
-              }
+            Some(c) => if c.to_int() == 32 || c.to_int() == 9 { known = true }
             None => ()
           }
         }
@@ -204,19 +195,14 @@ fn parse_header(line : String) -> Result[(String, String)?, String] {
 /// 而 mux 完全信任这份数据，错位的结果是「结构合法但时间轴错了」。
 pub fn parse(text : String) -> Result[Manifest, String] {
   let granules : Array[Int64] = []
-  let mut serial : UInt? = None
-  let mut packets : Int? = None
-  let mut chain : Int? = None
+  let mut serial : UInt32? = None
+  let mut packets : Int32? = None
+  let mut chain : Int32? = None
   // 去掉 UTF-8 BOM：Notepad 保存的清单第一行会带它，
   // 不去掉的话版本行不再以 '#' 开头，会被当成一条粒度。
   let body = if text.length() > 0 {
     match text.get_char(0) {
-      Some(c) =>
-        if c.to_int() == 0xFEFF {
-          text[1:].to_owned()
-        } else {
-          text
-        }
+      Some(c) => if c.to_int() == 0xFEFF { text[1:].to_owned() } else { text }
       None => text
     }
   } else {
@@ -232,10 +218,7 @@ pub fn parse(text : String) -> Result[Manifest, String] {
     let mut is_break = at_end
     if !at_end {
       match body.get_char(i) {
-        Some(c) =>
-          if c.to_int() == 10 {
-            is_break = true
-          }
+        Some(c) => if c.to_int() == 10 { is_break = true }
         None => ()
       }
     }
@@ -243,67 +226,72 @@ pub fn parse(text : String) -> Result[Manifest, String] {
       let mut end = i
       if end > line_start {
         match body.get_char(end - 1) {
-          Some(c) =>
-            if c.to_int() == 13 {
-              end = end - 1
-            }
+          Some(c) => if c.to_int() == 13 { end = end - 1 }
           None => ()
         }
       }
       let line = body[line_start:end].to_owned()
 
-    if line.length() > 0 {
-      match line.get_char(0) {
-        Some(c) =>
-          if c.to_int() == 35 {
-            // 注释行：可能是头部字段，也可能是版本行
-            if line.contains("moonmux manifest") {
-              has_version = true
-            }
-            match parse_header(line) {
-              Err(msg) => return Err(msg)
-              Ok(Some(kv)) => {
-                let key = kv.0
-                let value = kv.1
-                match parse_int_strict(value) {
-                  None => return Err("清单的 " + key + " 不是十进制整数：" + line)
-                  Some(v) => {
-                    if key == "serial" {
-                      if v < 0L {
-                        return Err("清单的 serial 不能为负：" + line)
+      if line.length() > 0 {
+        match line.get_char(0) {
+          Some(c) =>
+            if c.to_int() == 35 {
+              // 注释行：可能是头部字段，也可能是版本行
+              if line.contains("moonmux manifest") {
+                has_version = true
+              }
+              match parse_header(line) {
+                Err(msg) => return Err(msg)
+                Ok(Some(kv)) => {
+                  let key = kv.0
+                  let value = kv.1
+                  match parse_int_strict(value) {
+                    None =>
+                      return Err(
+                        "清单的 " + key + " 不是十进制整数：" + line,
+                      )
+                    Some(v) =>
+                      if key == "serial" {
+                        if v < 0L {
+                          return Err("清单的 serial 不能为负：" + line)
+                        }
+                        // 流号是 32 位字段：超出范围时 to_uint() 会静默截断，
+                        // 用户只会看到「流号 1001 重复」这种莫名其妙的错误。
+                        if v > 4294967295L {
+                          return Err(
+                            "清单的 serial 超出 32 位范围：" + line,
+                          )
+                        }
+                        serial = Some(v.reinterpret_as_uint64().to_uint())
+                      } else if key == "packets" {
+                        if v < 0L {
+                          return Err("清单的 packets 不能为负：" + line)
+                        }
+                        packets = Some(v.to_int())
+                      } else if key == "chain" {
+                        if v < 1L {
+                          return Err(
+                            "清单的 chain 必须是 ≥ 1 的整数：" +
+                            line,
+                          )
+                        }
+                        chain = Some(v.to_int())
                       }
-                      // 流号是 32 位字段：超出范围时 to_uint() 会静默截断，
-                      // 用户只会看到「流号 1001 重复」这种莫名其妙的错误。
-                      if v > 4294967295L {
-                        return Err("清单的 serial 超出 32 位范围：" + line)
-                      }
-                      serial = Some(v.reinterpret_as_uint64().to_uint())
-                    } else if key == "packets" {
-                      if v < 0L {
-                        return Err("清单的 packets 不能为负：" + line)
-                      }
-                      packets = Some(v.to_int())
-                    } else if key == "chain" {
-                      if v < 1L {
-                        return Err("清单的 chain 必须是 ≥ 1 的整数：" + line)
-                      }
-                      chain = Some(v.to_int())
-                    }
                   }
                 }
+                Ok(None) => ()
               }
-              Ok(None) => ()
+            } else {
+              match parse_int_strict(line) {
+                Some(v) => granules.push(v)
+                None =>
+                  return Err("清单里有无法解析的粒度行：" + line)
+              }
             }
-          } else {
-            match parse_int_strict(line) {
-              Some(v) => granules.push(v)
-              None => return Err("清单里有无法解析的粒度行：" + line)
-            }
-          }
-        None => ()
+          None => ()
+        }
       }
-    }
-        line_start = i + 1
+      line_start = i + 1
     }
     i = i + 1
   }
@@ -312,7 +300,7 @@ pub fn parse(text : String) -> Result[Manifest, String] {
   if has_version && granules.length() == 0 {
     return Err("清单没有任何粒度行（文件可能被截断）")
   }
-  Ok({ serial, packets, chain, granules })
+  Ok({ serial, packets, chain, granules, })
 }
 
 ///|
@@ -321,8 +309,8 @@ pub fn parse(text : String) -> Result[Manifest, String] {
 /// `chain` 是 1 起算的物理流序号：chained 文件重封装时必须知道
 /// 哪些流属于同一段，否则多段会被压成一条交织流（语义变了但结构仍合法）。
 pub fn render(
-  serial : UInt,
-  chain : Int,
+  serial : UInt32,
+  chain : Int32,
   granules : Array[Int64],
 ) -> String {
   // 逐行字符串拼接是 O(n²)：10 万个包会产生约 10 万次整串复制。
@@ -351,7 +339,7 @@ fn push_str(sb : StringBuilder, s : String) -> Unit {
 
 ///|
 /// 取第 `i` 个粒度；清单比包数短时返回 0（与新增清单之前的行为一致）。
-pub fn granule_at(granules : Array[Int64], i : Int) -> Int64 {
+pub fn granule_at(granules : Array[Int64], i : Int32) -> Int64 {
   if i >= 0 && i < granules.length() {
     granules[i]
   } else {
@@ -367,7 +355,7 @@ pub fn granule_at(granules : Array[Int64], i : Int) -> Int64 {
 /// 所以必须在封装前挡住。
 pub fn check_count(
   manifest : Manifest,
-  actual : Int,
+  actual : Int32,
   label : String,
 ) -> Result[Unit, String] {
   let rows = manifest.granules.length()

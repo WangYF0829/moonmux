@@ -4,9 +4,9 @@
 /// 一段无法同步到页的字节区间（坏了、被插了东西、或被截断）。
 pub(all) struct Skipped {
   /// 区间在文件里的起始偏移
-  offset : Int
+  offset : Int32
   /// 跳过的字节数
-  bytes : Int
+  bytes : Int32
 }
 
 ///|
@@ -55,13 +55,12 @@ pub fn parse_pages_lenient(data : Bytes) -> (Array[Page], Array[Skipped]) {
     let mut accepted = false
     if is_page_start(data, offset) {
       match Page::parse(data, offset) {
-        Some((page, next)) => {
+        Some((page, next)) =>
           if next > offset {
             pages.push(page)
             offset = next
             accepted = true
           }
-        }
         None => ()
       }
     }
@@ -74,21 +73,20 @@ pub fn parse_pages_lenient(data : Bytes) -> (Array[Page], Array[Skipped]) {
     while found < 0 && probe + 27 <= data.length() {
       if is_page_start(data, probe) {
         match Page::parse(data, probe) {
-          Some((page, next)) => {
+          Some((page, next)) =>
             if next > probe && page_crc_ok(page) {
               found = probe
             }
-          }
           None => ()
         }
       }
       probe = probe + 1
     }
     if found >= 0 {
-      gaps.push({ offset, bytes: found - offset })
+      gaps.push({ offset, bytes: found - offset, })
       offset = found
     } else {
-      gaps.push({ offset, bytes: data.length() - offset })
+      gaps.push({ offset, bytes: data.length() - offset, })
       offset = data.length()
     }
   }

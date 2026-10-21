@@ -31,7 +31,10 @@ test "page_offsets agree with the serialized layout" {
   // 末页偏移 + 末页长度 = 文件总长（说明没有页被算漏或算重）
   let last = pages.length() - 1
   assert_eq(
-    offsets[last] + 27 + pages[last].segments.length() + pages[last].payload.length(),
+    offsets[last] +
+    27 +
+    pages[last].segments.length() +
+    pages[last].payload.length(),
     blob.length(),
   )
 }
@@ -53,7 +56,7 @@ test "describe_pages emits one line per page carrying its identity" {
 ///|
 /// 标志列写成文字而不是位掩码：单页流的 BOS 与 EOS 落在同一页上。
 test "flags are spelled out" {
-  let one = paginate([{ data: b"hi", granule_position: 5L, serial: 1U }], 1U)
+  let one = paginate([{ data: b"hi", granule_position: 5L, serial: 1U, }], 1U)
   assert_eq(one.length(), 1)
   let lines = describe_pages(one)
   assert_true(lines[0].contains("BOS+EOS"))
@@ -61,9 +64,9 @@ test "flags are spelled out" {
   // 多页流：首页只有 BOS，末页只有 EOS
   let three = paginate(
     [
-      { data: b"p1", granule_position: 0L, serial: 2U },
-      { data: b"p2", granule_position: 1L, serial: 2U },
-      { data: b"p3", granule_position: 2L, serial: 2U },
+      { data: b"p1", granule_position: 0L, serial: 2U, },
+      { data: b"p2", granule_position: 1L, serial: 2U, },
+      { data: b"p3", granule_position: 2L, serial: 2U, },
     ],
     2U,
   )
@@ -85,7 +88,7 @@ test "flags are spelled out" {
 test "negative granule is shown as is" {
   let n = 255 * 255 + 1
   let data = repeat_byte((0x41 : Byte), n)
-  let pages = paginate([{ data, granule_position: 7L, serial: 9U }], 9U)
+  let pages = paginate([{ data, granule_position: 7L, serial: 9U, }], 9U)
   assert_eq(pages.length(), 2)
   assert_eq(pages[0].granule_position, -1L)
   let lines = describe_pages(pages)
@@ -98,7 +101,7 @@ test "negative granule is shown as is" {
 test "segment and payload columns reflect the page" {
   let n = 255 * 255 + 1
   let data = repeat_byte((0x41 : Byte), n)
-  let pages = paginate([{ data, granule_position: 0L, serial: 3U }], 3U)
+  let pages = paginate([{ data, granule_position: 0L, serial: 3U, }], 3U)
   let lines = describe_pages(pages)
   // 首页装满了 255 个段
   assert_true(lines[0].contains("255"))

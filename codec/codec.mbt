@@ -10,22 +10,22 @@
 /// 对 Opus 而言两者常常不同（见 `parse_opus_head`）。
 pub(all) struct AudioInfo {
   codec : String
-  channels : Int
-  sample_rate : Int
+  channels : Int32
+  sample_rate : Int32
   // Opus 的 pre-skip（解码器需要丢弃的前导样本数）；Vorbis 恒为 0。
   // 算时长时必须减掉它，否则会把编码器补的前导静音算进去。
-  pre_skip : Int
+  pre_skip : Int32
 }
 
 ///|
 /// 小端读取 16 位无符号整数。
-fn rd_u16(data : Bytes, offset : Int) -> Int {
+fn rd_u16(data : Bytes, offset : Int32) -> Int32 {
   data[offset].to_int() | (data[offset + 1].to_int() << 8)
 }
 
 ///|
 /// 小端读取 32 位无符号整数。
-fn rd_u32(data : Bytes, offset : Int) -> Int {
+fn rd_u32(data : Bytes, offset : Int32) -> Int32 {
   data[offset].to_int() |
   (data[offset + 1].to_int() << 8) |
   (data[offset + 2].to_int() << 16) |
@@ -34,7 +34,7 @@ fn rd_u32(data : Bytes, offset : Int) -> Int {
 
 ///|
 /// 判断 `data` 从 `offset` 起是否等于给定的 ASCII 标记。
-fn tag_at(data : Bytes, offset : Int, tag : String) -> Bool {
+fn tag_at(data : Bytes, offset : Int32, tag : String) -> Bool {
   if offset + tag.length() > data.length() {
     return false
   }
@@ -42,10 +42,7 @@ fn tag_at(data : Bytes, offset : Int, tag : String) -> Bool {
   let mut same = true
   while i < tag.length() {
     match tag.get_char(i) {
-      Some(c) =>
-        if data[offset + i].to_int() != c.to_int() {
-          same = false
-        }
+      Some(c) => if data[offset + i].to_int() != c.to_int() { same = false }
       None => same = false
     }
     i = i + 1
@@ -122,7 +119,7 @@ pub fn parse_vorbis_id(data : Bytes) -> AudioInfo? {
   if channels == 0 || sample_rate <= 0 {
     return None
   }
-  Some({ codec: "Vorbis", channels, sample_rate, pre_skip: 0 })
+  Some({ codec: "Vorbis", channels, sample_rate, pre_skip: 0, })
 }
 
 ///|

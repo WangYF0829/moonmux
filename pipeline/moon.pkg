@@ -11,9 +11,9 @@
 // 依赖边界清楚之后，一旦某个解码器出问题，能一眼看出责任在哪一侧。
 
 import {
-  "moonmux/ogg",
-  "moonmux/codec",
-  "moonmux/wav",
+  "WangYF0829/moonmux/ogg",
+  "WangYF0829/moonmux/codec",
+  "WangYF0829/moonmux/wav",
   "LL728/moonopus",
   "LL728/moonvorbis",
 }

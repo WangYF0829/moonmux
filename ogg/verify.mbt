@@ -67,15 +67,15 @@ pub fn structure_findings(pages : Array[Page]) -> Array[Finding] {
   let chains = split_chains(pages)
   // 跨段流号重复是硬错误（RFC 3533 §4：同一物理流内必须全局唯一）。
   // 读取端会把两段当成同一条流，页序号与包都错乱。
-  let seen : Array[UInt] = []
+  let seen : Array[UInt32] = []
   for chain in chains {
     for s in serials_of(chain) {
       if has_serial(seen, s) {
         findings.push({
           severity: Severity::Error,
           message: "serial=" +
-            s.to_string() +
-            " 在多段物理流中重复（RFC 3533 §4 要求全局唯一）",
+          s.to_string() +
+          " 在多段物理流中重复（RFC 3533 §4 要求全局唯一）",
         })
       } else {
         seen.push(s)
@@ -92,8 +92,8 @@ pub fn structure_findings(pages : Array[Page]) -> Array[Finding] {
 /// 单段（一条物理流）内的检查；结果追加到 `findings`。
 fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
   // 按流分组（保持首次出现顺序），记录各流页下标
-  let serials : Array[UInt] = []
-  let members : Array[Array[Int]] = []
+  let serials : Array[UInt32] = []
+  let members : Array[Array[Int32]] = []
   let mut i = 0
   while i < pages.length() {
     let page = pages[i]
@@ -106,14 +106,14 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
       findings.push({
         severity: Severity::Error,
         message: "serial=" +
-          page.serial.to_string() +
-          " sequence=" +
-          page.sequence.to_string() +
-          " 段表声明 " +
-          declared.to_string() +
-          " 字节，实际负载 " +
-          page.payload.length().to_string() +
-          " 字节",
+        page.serial.to_string() +
+        " sequence=" +
+        page.sequence.to_string() +
+        " 段表声明 " +
+        declared.to_string() +
+        " 字节，实际负载 " +
+        page.payload.length().to_string() +
+        " 字节",
       })
     }
     // 粒度与「本页有没有包结束」必须一致（RFC 3533：-1 表示本页没有包结束）
@@ -122,10 +122,10 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
       findings.push({
         severity: Severity::Warning,
         message: "serial=" +
-          page.serial.to_string() +
-          " sequence=" +
-          page.sequence.to_string() +
-          " 本页有包结束，粒度却是 -1（应为完成样本数）",
+        page.serial.to_string() +
+        " sequence=" +
+        page.sequence.to_string() +
+        " 本页有包结束，粒度却是 -1（应为完成样本数）",
       })
     }
     // nil EOS 页是合法的（RFC 3533 §4）：没有内容、只有页头，
@@ -137,12 +137,12 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
       findings.push({
         severity: Severity::Warning,
         message: "serial=" +
-          page.serial.to_string() +
-          " sequence=" +
-          page.sequence.to_string() +
-          " 本页没有包结束，粒度却是 " +
-          page.granule_position.to_string() +
-          "（应为 -1）",
+        page.serial.to_string() +
+        " sequence=" +
+        page.sequence.to_string() +
+        " 本页没有包结束，粒度却是 " +
+        page.granule_position.to_string() +
+        "（应为 -1）",
       })
     }
     let mut idx = -1
@@ -180,8 +180,8 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
         findings.push({
           severity: Severity::Error,
           message: "serial=" +
-            pages[li].serial.to_string() +
-            " 的 BOS 页出现在数据页之后（所有 BOS 必须排在最前）",
+          pages[li].serial.to_string() +
+          " 的 BOS 页出现在数据页之后（所有 BOS 必须排在最前）",
         })
       }
       li = li + 1
@@ -198,10 +198,10 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
       findings.push({
         severity: Severity::Warning,
         message: "serial=" +
-          sid +
-          " 首页页序号是 " +
-          first.sequence.to_string() +
-          "（应为 0，流的开头可能丢失）",
+        sid +
+        " 首页页序号是 " +
+        first.sequence.to_string() +
+        "（应为 0，流的开头可能丢失）",
       })
     }
     // 逐页比对：页序号每次只能前进 1，多出来的是丢页、退回去的是重复
@@ -217,25 +217,25 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
         findings.push({
           severity: Severity::Error,
           message: "serial=" +
-            sid +
-            " 页序号从 " +
-            prev.to_string() +
-            " 跳到 " +
-            cur.to_string() +
-            "（中间丢了 " +
-            (cur - prev - 1U).to_string() +
-            " 页）",
+          sid +
+          " 页序号从 " +
+          prev.to_string() +
+          " 跳到 " +
+          cur.to_string() +
+          "（中间丢了 " +
+          (cur - prev - 1U).to_string() +
+          " 页）",
         })
       } else if cur < prev + 1U {
         findings.push({
           severity: Severity::Error,
           message: "serial=" +
-            sid +
-            " 页序号从 " +
-            prev.to_string() +
-            " 回退到 " +
-            cur.to_string() +
-            "（可能重复或乱序）",
+          sid +
+          " 页序号从 " +
+          prev.to_string() +
+          " 回退到 " +
+          cur.to_string() +
+          "（可能重复或乱序）",
         })
       }
       k = k + 1
@@ -261,34 +261,38 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
     if (first.header_type.to_int() & flag_bos().to_int()) == 0 {
       findings.push({
         severity: Severity::Error,
-        message: "serial=" + sid + " 首页缺 BOS 标志（头部包可能丢失）",
+        message: "serial=" +
+        sid +
+        " 首页缺 BOS 标志（头部包可能丢失）",
       })
     }
     if bos_count > 1 {
       findings.push({
         severity: Severity::Error,
         message: "serial=" +
-          sid +
-          " 出现 " +
-          bos_count.to_string() +
-          " 个 BOS 页（一条流只应有一个开头）",
+        sid +
+        " 出现 " +
+        bos_count.to_string() +
+        " 个 BOS 页（一条流只应有一个开头）",
       })
     }
     if eos_count > 1 {
       findings.push({
         severity: Severity::Error,
         message: "serial=" +
-          sid +
-          " 出现 " +
-          eos_count.to_string() +
-          " 个 EOS 页（一条流只应有一个结尾）",
+        sid +
+        " 出现 " +
+        eos_count.to_string() +
+        " 个 EOS 页（一条流只应有一个结尾）",
       })
     }
     let last = pages[group[group.length() - 1]]
     if (last.header_type.to_int() & flag_eos().to_int()) == 0 {
       findings.push({
         severity: Severity::Warning,
-        message: "serial=" + sid + " 末页缺 EOS 标志（文件可能被截断）",
+        message: "serial=" +
+        sid +
+        " 末页缺 EOS 标志（文件可能被截断）",
       })
     }
     // EOS 之后不该再有这一流的页
@@ -296,10 +300,10 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
       findings.push({
         severity: Severity::Error,
         message: "serial=" +
-          sid +
-          " EOS 之后还有 " +
-          (group.length() - 1 - eos_at).to_string() +
-          " 页（流已经结束）",
+        sid +
+        " EOS 之后还有 " +
+        (group.length() - 1 - eos_at).to_string() +
+        " 页（流已经结束）",
       })
       let eos_page = pages[group[eos_at]]
       if !has_completion(eos_page) {
@@ -320,12 +324,12 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
           findings.push({
             severity: Severity::Error,
             message: "serial=" +
-              sid +
-              " 粒度回退：" +
-              prev_granule.to_string() +
-              " → " +
-              granule.to_string() +
-              "（时间倒流）",
+            sid +
+            " 粒度回退：" +
+            prev_granule.to_string() +
+            " → " +
+            granule.to_string() +
+            "（时间倒流）",
           })
         }
         prev_granule = granule

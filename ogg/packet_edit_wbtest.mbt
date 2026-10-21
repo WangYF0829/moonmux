@@ -2,13 +2,17 @@
 
 ///|
 /// 造一条四包四页的单流文件：标识包、注释包、两个音频包。
-fn four_packet_stream(serial : UInt) -> Array[Page] {
+fn four_packet_stream(serial : UInt32) -> Array[Page] {
   paginate(
     [
-      { data: b"IDHEADER01", granule_position: 0L, serial },
-      { data: b"COMMENT-HEADER-DATA", granule_position: 0L, serial },
-      { data: repeat_byte((0x41 : Byte), 100), granule_position: 960L, serial },
-      { data: repeat_byte((0x42 : Byte), 100), granule_position: 1920L, serial },
+      { data: b"IDHEADER01", granule_position: 0L, serial, },
+      { data: b"COMMENT-HEADER-DATA", granule_position: 0L, serial, },
+      { data: repeat_byte((0x41 : Byte), 100), granule_position: 960L, serial, },
+      {
+        data: repeat_byte((0x42 : Byte), 100),
+        granule_position: 1920L,
+        serial,
+      },
     ],
     serial,
   )
@@ -82,17 +86,25 @@ test "replacing in one stream leaves the others byte identical" {
     {
       serial: 1U,
       packets: [
-        { data: b"ID-ONE", granule_position: 0L, serial: 1U },
-        { data: b"COMMENT-ONE", granule_position: 0L, serial: 1U },
-        { data: repeat_byte((0x41 : Byte), 200), granule_position: 960L, serial: 1U },
+        { data: b"ID-ONE", granule_position: 0L, serial: 1U, },
+        { data: b"COMMENT-ONE", granule_position: 0L, serial: 1U, },
+        {
+          data: repeat_byte((0x41 : Byte), 200),
+          granule_position: 960L,
+          serial: 1U,
+        },
       ],
     },
     {
       serial: 2U,
       packets: [
-        { data: b"ID-TWO", granule_position: 0L, serial: 2U },
-        { data: b"COMMENT-TWO", granule_position: 0L, serial: 2U },
-        { data: repeat_byte((0x42 : Byte), 200), granule_position: 960L, serial: 2U },
+        { data: b"ID-TWO", granule_position: 0L, serial: 2U, },
+        { data: b"COMMENT-TWO", granule_position: 0L, serial: 2U, },
+        {
+          data: repeat_byte((0x42 : Byte), 200),
+          granule_position: 960L,
+          serial: 2U,
+        },
       ],
     },
   ])
@@ -111,7 +123,10 @@ test "replacing in one stream leaves the others byte identical" {
   let mine = reassemble(stream_pages(updated, 1U))
   assert_eq(mine[1].data.length(), 15)
   // 整文件结构仍然自洽
-  assert_eq(structure_problems(parse_pages(serialize_pages(updated))).length(), 0)
+  assert_eq(
+    structure_problems(parse_pages(serialize_pages(updated))).length(),
+    0,
+  )
 }
 
 ///|

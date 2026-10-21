@@ -2,11 +2,11 @@
 
 ///|
 /// 小端写 u32（测试里自己拼包用）。
-fn put_u32(buf : Buffer, v : Int) -> Unit {
+fn put_u32(buf : Buffer, v : Int32) -> Unit {
   buf.write_byte((v % 256).to_byte())
-  buf.write_byte(((v / 256) % 256).to_byte())
-  buf.write_byte(((v / 65536) % 256).to_byte())
-  buf.write_byte(((v / 16777216) % 256).to_byte())
+  buf.write_byte((v / 256 % 256).to_byte())
+  buf.write_byte((v / 65536 % 256).to_byte())
+  buf.write_byte((v / 16777216 % 256).to_byte())
 }
 
 ///|
@@ -140,8 +140,8 @@ test "encode then parse roundtrips" {
   let c : Comment = {
     vendor: "moonmux",
     tags: [
-      { key: "TITLE", value: "标题" },
-      { key: "ARTIST", value: "A=B" }, // 值里带 '='
+      { key: "TITLE", value: "标题", },
+      { key: "ARTIST", value: "A=B", }, // 值里带 '='
     ],
   }
   for kind in [CommentKind::Opus, CommentKind::Vorbis] {
@@ -162,7 +162,7 @@ test "encode then parse roundtrips" {
 ///|
 /// 填充只是在包尾加零，解析结果与无填充时一致。
 test "padding does not change parsed content" {
-  let c : Comment = { vendor: "v", tags: [{ key: "A", value: "1" }] }
+  let c : Comment = { vendor: "v", tags: [{ key: "A", value: "1", }], }
   let plain = encode_comment(CommentKind::Opus, c, 0)
   let padded = encode_comment(CommentKind::Opus, c, 64)
   assert_eq(padded.length(), plain.length() + 64)
@@ -181,9 +181,9 @@ test "set_tag replaces case-insensitively and collapses duplicates" {
   let c : Comment = {
     vendor: "v",
     tags: [
-      { key: "ARTIST", value: "first" },
-      { key: "TITLE", value: "t" },
-      { key: "artist", value: "second" },
+      { key: "ARTIST", value: "first", },
+      { key: "TITLE", value: "t", },
+      { key: "artist", value: "second", },
     ],
   }
   let updated = set_tag(c, "Artist", "new")
@@ -198,7 +198,7 @@ test "set_tag replaces case-insensitively and collapses duplicates" {
 ///|
 /// 设置不存在的键 → 追加到末尾。
 test "set_tag appends a new key" {
-  let c : Comment = { vendor: "v", tags: [{ key: "A", value: "1" }] }
+  let c : Comment = { vendor: "v", tags: [{ key: "A", value: "1", }], }
   let updated = set_tag(c, "B", "2")
   assert_eq(updated.tags.length(), 2)
   assert_eq(updated.tags[1].key, "B")
@@ -211,9 +211,9 @@ test "remove_tag drops every matching key" {
   let c : Comment = {
     vendor: "v",
     tags: [
-      { key: "ARTIST", value: "a" },
-      { key: "TITLE", value: "t" },
-      { key: "artist", value: "b" },
+      { key: "ARTIST", value: "a", },
+      { key: "TITLE", value: "t", },
+      { key: "artist", value: "b", },
     ],
   }
   let updated = remove_tag(c, "Artist")
@@ -235,7 +235,7 @@ test "key validation" {
 ///|
 /// `get_tag` 大小写不敏感。
 test "get_tag ignores case" {
-  let c : Comment = { vendor: "v", tags: [{ key: "TITLE", value: "x" }] }
+  let c : Comment = { vendor: "v", tags: [{ key: "TITLE", value: "x", }], }
   match get_tag(c, "title") {
     Some(v) => assert_eq(v, "x")
     None => assert_true(false)

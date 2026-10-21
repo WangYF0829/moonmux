@@ -23,8 +23,8 @@
 /// 失败情形：找不到该流、序号越界。
 pub fn replace_packet(
   pages : Array[Page],
-  serial : UInt,
-  index : Int,
+  serial : UInt32,
+  index : Int32,
   new_data : Bytes,
 ) -> Result[Array[Page], String] {
   let stream = stream_pages(pages, serial)
@@ -42,8 +42,8 @@ pub fn replace_packet(
     )
   }
   // 每页结束了多少个包，以及累计
-  let before : Array[Int] = []
-  let on_page : Array[Int] = []
+  let before : Array[Int32] = []
+  let on_page : Array[Int32] = []
   let mut acc = 0
   for page in stream {
     let mut ends = 0
@@ -67,12 +67,15 @@ pub fn replace_packet(
     p = p + 1
   }
   if end_page < 0 {
-    return Err("第 " + index.to_string() + " 个包在页序列里找不到结束位置")
+    return Err(
+      "第 " + index.to_string() + " 个包在页序列里找不到结束位置",
+    )
   }
   // 向前扩展到该页的起点：页首若是续包，说明目标包可能从上一页开始
   let mut start_page = end_page
   while start_page > 0 &&
-    (stream[start_page].header_type.to_int() & flag_continued().to_int()) != 0 {
+        (stream[start_page].header_type.to_int() & flag_continued().to_int()) !=
+        0 {
     start_page = start_page - 1
   }
   // 向后扩展到完整包的边界：末段为 255 说明还有包延伸到下一页
@@ -86,7 +89,11 @@ pub fn replace_packet(
   let mut k = first_pkt
   while k <= last_pkt {
     if k == index {
-      rebuilt_pkts.push({ data: new_data, granule_position: packets[k].granule_position, serial })
+      rebuilt_pkts.push({
+        data: new_data,
+        granule_position: packets[k].granule_position,
+        serial,
+      })
     } else {
       rebuilt_pkts.push(packets[k])
     }
@@ -104,7 +111,7 @@ pub fn replace_packet(
     let lo = before[g]
     let hi = before[g] + on_page[g]
     if hi > lo {
-      let segs : Array[Int] = []
+      let segs : Array[Int32] = []
       let buf = Buffer()
       let mut page_granule : Int64 = -1L
       let mut k = lo
@@ -254,7 +261,7 @@ pub fn replace_packet(
 
 ///|
 /// 一页的段表最后一项（空段表返回 0）。
-fn last_segment(page : Page) -> Int {
+fn last_segment(page : Page) -> Int32 {
   if page.segments.length() == 0 {
     0
   } else {

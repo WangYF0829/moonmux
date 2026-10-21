@@ -20,11 +20,11 @@
 /// 一次定位的结果。
 pub(all) struct SeekPoint {
   /// 该页在整个页序列中的下标
-  page_index : Int
+  page_index : Int32
   /// 该页的起始字节偏移（可直接用于文件 seek）
-  byte_offset : Int
+  byte_offset : Int32
   /// 页序号
-  sequence : UInt
+  sequence : UInt32
   /// 该页携带的粒度位置
   granule : Int64
 }
@@ -36,12 +36,12 @@ pub(all) struct SeekPoint {
 /// 拿它当路标会把定位带到错误的偏移上。
 pub fn seek_granule(
   pages : Array[Page],
-  serial : UInt,
+  serial : UInt32,
   target : Int64,
 ) -> SeekPoint? {
   // 收集路标：本流的、带真实粒度的页
   let offsets = page_offsets(pages)
-  let idx : Array[Int] = []
+  let idx : Array[Int32] = []
   let marks : Array[Int64] = []
   let mut i = 0
   while i < pages.length() {
@@ -95,7 +95,11 @@ pub fn seek_granule(
 
 ///|
 /// 组装一个定位结果。
-fn point_at(pages : Array[Page], offsets : Array[Int], page_index : Int) -> SeekPoint {
+fn point_at(
+  pages : Array[Page],
+  offsets : Array[Int32],
+  page_index : Int32,
+) -> SeekPoint {
   let page = pages[page_index]
   {
     page_index,
@@ -117,16 +121,19 @@ fn point_at(pages : Array[Page], offsets : Array[Int], page_index : Int) -> Seek
 /// 由调用方决定退回哪个落点。
 pub fn first_audio_page(
   pages : Array[Page],
-  serial : UInt,
-  header_packets : Int,
-) -> Int? {
+  serial : UInt32,
+  header_packets : Int32,
+) -> Int32? {
   let mut completed = 0
   let mut i = 0
   while i < pages.length() {
     let page = pages[i]
     if page.serial == serial {
       // 页首是续包时，本页第一个段不是一个新包的开始
-      let mut starts_here = (page.header_type.to_int() & flag_continued().to_int()) == 0
+      let mut starts_here = (
+          page.header_type.to_int() & flag_continued().to_int()
+        ) ==
+        0
       for seg in page.segments {
         if starts_here && completed == header_packets {
           return Some(i)

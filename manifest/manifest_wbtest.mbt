@@ -7,7 +7,7 @@
 ///|
 /// 解析失败时的空清单，供测试里兜底。
 fn empty_manifest() -> Manifest {
-  { serial: None, packets: None, chain: None, granules: [] }
+  { serial: None, packets: None, chain: None, granules: [], }
 }
 
 ///|
@@ -55,7 +55,8 @@ test "parse a legacy manifest without optional headers" {
 ///|
 /// CRLF、空行、注释行都不能影响解析。
 test "crlf and blank lines are tolerated" {
-  let m = match parse("# moonmux manifest v1\r\n# serial=7\r\n\r\n5\r\n-1\r\n") {
+  let m = match
+    parse("# moonmux manifest v1\r\n# serial=7\r\n\r\n5\r\n-1\r\n") {
     Ok(m) => m
     Err(_) => empty_manifest()
   }
