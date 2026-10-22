@@ -283,8 +283,9 @@ fn require_fully_parsed(
 ///|
 /// 当前平台是否使用 Windows 路径规则（由 current_dir 的形状判断）。
 fn windows_paths() -> Bool {
-  match @env.current_dir() {
-    Some(d) => d.length() >= 2 && d.get_char(1) == Some(':')
+  // Windows 总会设置 OS=Windows_NT；不要用 cwd 形状推断（UNC 路径与 current_dir 失败会误判）
+  match @env.get_env_var("OS") {
+    Some(v) => v == "Windows_NT"
     None => false
   }
 }
@@ -349,7 +350,44 @@ fn normalize_path(p : String) -> String {
         s.get_char(1) == Some('/') {
     s = s[2:].to_owned()
   }
+  if windows_paths() {
+    s = trim_windows_segments(s)
+  }
   s
+}
+
+///|
+/// 逐段去掉 Windows 目录组件的尾随点/空格（"srcdot." 与 "srcdot" 是同一目录）。
+fn trim_windows_segments(s : String) -> String {
+  let sb = StringBuilder()
+  let mut cur = ""
+  let mut i = 0
+  while i <= s.length() {
+    let ch = if i < s.length() { s.get_char(i) } else { Some('/') }
+    match ch {
+      Some(c) =>
+        if c == '/' {
+          let mut e = cur.length()
+          while e > 0 &&
+                (
+                  cur.get_char(e - 1) == Some('.') ||
+                  cur.get_char(e - 1) == Some(' ')
+                ) {
+            e = e - 1
+          }
+          sb.write_stringview(cur[0:e].to_owned())
+          if i < s.length() {
+            sb.write_char('/')
+          }
+          cur = ""
+        } else {
+          cur = cur + c.to_string()
+        }
+      None => ()
+    }
+    i = i + 1
+  }
+  sb.to_string()
 }
 
 ///|
@@ -484,6 +522,13 @@ fn reject_special_output(out : String) -> Unit {
 }
 
 ///|
+/// 读文件为 Option；读失败返回 None。
+fn read_optional(path : String) -> Bytes? {
+  let data = @fs.read_file_to_bytes(path) catch { IOError(_) => return None }
+  Some(data)
+}
+
+///|
 /// 逐字节比较（Bytes 的 `==` 不保证是内容比较）。
 fn bytes_same(a : Bytes, b : Bytes) -> Bool {
   if a.length() != b.length() {
@@ -503,7 +548,14 @@ fn bytes_same(a : Bytes, b : Bytes) -> Bool {
 /// 输入与输出指向同一个文件时拒绝执行：先写后读的命令会直接毁掉源文件。
 ///
 /// 覆盖大小写、相对/绝对与 `..`；硬链接/符号链接仍无法识别（@fs 没有 inode API）。
-fn reject_same_path(src : String, out : String) -> Unit {
+
+///|
+/// 同名检查的缓存版本：`out_bytes` 由调用方预先读好（cat 有多个输入时只读一次输出）。
+fn reject_same_path_preloaded(
+  src : String,
+  out : String,
+  out_bytes : Bytes?,
+) -> Unit {
   reject_special_output(out)
   if absolute_path(src) == absolute_path(out) {
     fail(
@@ -512,20 +564,26 @@ fn reject_same_path(src : String, out : String) -> Unit {
       "\n  请指定不同的输出路径（本工具不做原地改写）",
     )
   }
-  // 路径不同但可能指向同一文件（硬链接、符号链接、大小写别名）。
-  // @fs 没有 inode API，退而用内容比较；输出已存在且与输入逐字节相同就拒绝。
-  // 这会把「输出是输入的副本」也挡下，属于保守但安全的取舍。
-  if @fs.path_exists(out) {
-    let a = @fs.read_file_to_bytes(src) catch { IOError(_) => return }
-    let b = @fs.read_file_to_bytes(out) catch { IOError(_) => return }
-    if bytes_same(a, b) {
-      fail(
-        "错误: 输入与输出内容相同（可能是指向同一文件的硬链接或别名）—— " +
-        out +
-        "\n  请指定不同的输出路径",
-      )
+  match out_bytes {
+    Some(ob) => {
+      let a = @fs.read_file_to_bytes(src) catch { IOError(_) => return }
+      if bytes_same(a, ob) {
+        fail(
+          "错误: 输入与输出内容相同（可能是指向同一文件的硬链接或别名）—— " +
+          out +
+          "\n  请指定不同的输出路径",
+        )
+      }
     }
+    None => ()
   }
+}
+
+///|
+/// 输入与输出指向同一个文件时拒绝执行：先写后读的命令会直接毁掉源文件。
+fn reject_same_path(src : String, out : String) -> Unit {
+  let ob = if @fs.path_exists(out) { read_optional(out) } else { None }
+  reject_same_path_preloaded(src, out, ob)
 }
 
 ///|
@@ -1339,8 +1397,10 @@ fn run_mux(dir : String, out : String) -> Unit {
 /// 冲突时后一方的相撞流换新流号重新分页。这里只做 I/O 与逐个衔接，
 /// 中途有一个文件读不出或不是 Ogg，就整趟不出（半截链没有意义）。
 fn run_cat(inputs : Array[String], out : String) -> Unit {
+  // 输出只读一次：cat 可能有几百个输入，逐输入重读输出会放大成 GB 级 I/O
+  let out_bytes = if @fs.path_exists(out) { read_optional(out) } else { None }
   for input in inputs {
-    reject_same_path(input, out)
+    reject_same_path_preloaded(input, out, out_bytes)
   }
   let mut acc : Array[@ogg.Page] = []
   let mut ok = true
@@ -2379,7 +2439,7 @@ fn run_towav(src : String, out : String, bits : Int32) -> Unit {
                 "，但回读校验未通过，已恢复原文件（若有）",
               )
             }
-            Some(f) =>
+            Some(f) => {
               println(
                 "已写出 " +
                 out +
@@ -2393,6 +2453,8 @@ fn run_towav(src : String, out : String, bits : Int32) -> Unit {
                 f.data.length().to_string() +
                 " 字节 PCM",
               )
+              commit_output(bak)
+            }
           }
         }
       }
