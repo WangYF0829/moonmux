@@ -244,14 +244,6 @@ fn require_fully_parsed(
   }
   if consumed < data.length() {
     let extra = data.length() - consumed
-    let mut nonzero = 0
-    let mut i = consumed
-    while i < data.length() {
-      if data[i].to_int() != 0 {
-        nonzero = nonzero + 1
-      }
-      i = i + 1
-    }
     if extra > 1048576 {
       fail_data(
         "错误: " +
@@ -261,6 +253,14 @@ fn require_fully_parsed(
         " 字节无法解析（超过 1 MiB 的填充上限）——\n  拒绝写出；请先用 verify 查看",
       )
       return
+    }
+    let mut nonzero = 0
+    let mut i = consumed
+    while i < data.length() {
+      if data[i].to_int() != 0 {
+        nonzero = nonzero + 1
+      }
+      i = i + 1
     }
     if nonzero > 0 {
       fail_data(
@@ -279,6 +279,15 @@ fn require_fully_parsed(
 }
 
 ///|
+
+///|
+/// 当前平台是否使用 Windows 路径规则（由 current_dir 的形状判断）。
+fn windows_paths() -> Bool {
+  match @env.current_dir() {
+    Some(d) => d.length() >= 2 && d.get_char(1) == Some(':')
+    None => false
+  }
+}
 
 ///|
 /// 单字符小写（ASCII 路径）。
@@ -300,7 +309,13 @@ fn normalize_path(p : String) -> String {
   while i < p.length() {
     match p.get_char(i) {
       Some(c0) => {
-        let c = lower_char(if c0 == '\\' { '/' } else { c0 })
+        let c = if windows_paths() {
+          lower_char(if c0 == '\\' { '/' } else { c0 })
+        } else if c0 == '\\' {
+          '/'
+        } else {
+          c0
+        }
         if c == '/' {
           if !last_slash {
             sb.write_char('/')
@@ -316,6 +331,16 @@ fn normalize_path(p : String) -> String {
     i = i + 1
   }
   let mut s = sb.to_string()
+  // Windows 会把 "a.ogg." / "a.ogg " 解析成 "a.ogg"，规范化时按同样规则折叠
+  if windows_paths() {
+    while s.length() > 1 &&
+          (
+            s.get_char(s.length() - 1) == Some('.') ||
+            s.get_char(s.length() - 1) == Some(' ')
+          ) {
+      s = s[0:s.length() - 1].to_owned()
+    }
+  }
   while s.length() > 1 && s.get_char(s.length() - 1) == Some('/') {
     s = s[0:s.length() - 1].to_owned()
   }
@@ -383,13 +408,9 @@ fn absolute_path(p : String) -> String {
   if is_absolute_path(n) {
     return collapse_path(n)
   }
-  let base = match @env.get_env_var("PWD") {
+  let base = match @env.current_dir() {
     Some(d) => d
-    None =>
-      match @env.get_env_var("CD") {
-        Some(d) => d
-        None => ""
-      }
+    None => ""
   }
   if base == "" {
     return collapse_path(n)
@@ -400,6 +421,9 @@ fn absolute_path(p : String) -> String {
 ///|
 /// Windows 保留设备名（NUL / CON / COM1 …）：写入会"成功"但没有任何文件。
 fn is_reserved_device(path : String) -> Bool {
+  if !windows_paths() {
+    return false
+  }
   let n = normalize_path(path)
   let mut base = n
   let mut i = n.length() - 1
@@ -433,6 +457,23 @@ fn is_reserved_device(path : String) -> Bool {
 ///|
 /// 输出是 Windows 保留设备名时拒绝。
 fn reject_special_output(out : String) -> Unit {
+  if windows_paths() {
+    // 盘符之后还出现 ':' 是 NTFS 备用数据流（ADS），不是普通文件
+    let n = normalize_path(out)
+    let mut i = if n.length() >= 2 && n.get_char(1) == Some(':') {
+      2
+    } else {
+      0
+    }
+    while i < n.length() {
+      if n.get_char(i) == Some(':') {
+        fail(
+          "错误: 不支持 NTFS 备用数据流（ADS）输出 —— " + out,
+        )
+      }
+      i = i + 1
+    }
+  }
   if is_reserved_device(out) {
     fail(
       "错误: 输出路径是 Windows 保留设备名 —— " +
@@ -440,6 +481,22 @@ fn reject_special_output(out : String) -> Unit {
       "\n  请换一个普通文件名",
     )
   }
+}
+
+///|
+/// 逐字节比较（Bytes 的 `==` 不保证是内容比较）。
+fn bytes_same(a : Bytes, b : Bytes) -> Bool {
+  if a.length() != b.length() {
+    return false
+  }
+  let mut i = 0
+  while i < a.length() {
+    if a[i] != b[i] {
+      return false
+    }
+    i = i + 1
+  }
+  true
 }
 
 ///|
@@ -454,6 +511,20 @@ fn reject_same_path(src : String, out : String) -> Unit {
       out +
       "\n  请指定不同的输出路径（本工具不做原地改写）",
     )
+  }
+  // 路径不同但可能指向同一文件（硬链接、符号链接、大小写别名）。
+  // @fs 没有 inode API，退而用内容比较；输出已存在且与输入逐字节相同就拒绝。
+  // 这会把「输出是输入的副本」也挡下，属于保守但安全的取舍。
+  if @fs.path_exists(out) {
+    let a = @fs.read_file_to_bytes(src) catch { IOError(_) => return }
+    let b = @fs.read_file_to_bytes(out) catch { IOError(_) => return }
+    if bytes_same(a, b) {
+      fail(
+        "错误: 输入与输出内容相同（可能是指向同一文件的硬链接或别名）—— " +
+        out +
+        "\n  请指定不同的输出路径",
+      )
+    }
   }
 }
 
