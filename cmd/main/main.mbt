@@ -63,22 +63,31 @@ enum OutputBackup {
 
 ///|
 /// 备份已有输出；目标不存在返回 NoOriginal，备份失败返回 Unavailable。
+///
+/// 备份名必须独占：固定叫 `.moonmux.bak` 会覆盖用户已有的同名文件，成功后还会把它删掉。
 fn backup_output(path : String) -> OutputBackup {
   if !@fs.path_exists(path) {
     return NoOriginal
   }
-  let bak = path + ".moonmux.bak"
   let data = @fs.read_file_to_bytes(path) catch {
     IOError(_) => return Unavailable
   }
-  @fs.write_bytes_to_file(bak, data) catch {
-    IOError(_) => return Unavailable
+  let mut n = 0
+  while n < 100 {
+    let bak = path + ".moonmux.bak." + n.to_string()
+    if !@fs.path_exists(bak) {
+      @fs.write_bytes_to_file(bak, data) catch {
+        IOError(_) => return Unavailable
+      }
+      return Saved(bak)
+    }
+    n = n + 1
   }
-  Saved(bak)
+  Unavailable
 }
 
 ///|
-/// 写成功：删掉备份。
+/// 写成功：删掉本轮备份（只删自己创建的那一个）。
 fn commit_output(bak : OutputBackup) -> Unit {
   match bak {
     Saved(b) => @fs.remove_file(b) catch { _ => () }
@@ -88,13 +97,36 @@ fn commit_output(bak : OutputBackup) -> Unit {
 
 ///|
 /// 写失败：有备份就恢复，没有备份则删掉本次写出的半截文件。
+///
+/// 只有恢复写成功后才删备份；恢复失败时备份是唯一副本，必须保留并报出路径。
 fn restore_output(path : String, bak : OutputBackup) -> Unit {
   match bak {
     NoOriginal => @fs.remove_file(path) catch { _ => () }
     Saved(b) => {
-      let data = @fs.read_file_to_bytes(b) catch { IOError(_) => return }
+      let data = @fs.read_file_to_bytes(b) catch {
+        IOError(msg) => {
+          println(
+            "警告: 无法读取备份 " +
+            b +
+            "（" +
+            msg +
+            "），备份保留",
+          )
+          return
+        }
+      }
       @fs.write_bytes_to_file(path, data) catch {
-        IOError(_) => ()
+        IOError(msg) => {
+          println(
+            "警告: 恢复 " +
+            path +
+            " 失败（" +
+            msg +
+            "），备份保留在 " +
+            b,
+          )
+          return
+        }
       }
       @fs.remove_file(b) catch {
         _ => ()
@@ -110,12 +142,22 @@ fn rollback_demux(
   dir : String,
   created_dir : Bool,
   created_subs : Array[String],
+  created_files : Array[String],
 ) -> Unit {
   if created_dir {
+    // 整个目录是本轮建的，归本命令所有
     remove_dir_tree(dir)
   } else {
+    // 目录是用户原有的：只删本命令写出的文件，绝不递归删可能被别的进程写入的目录
+    for f in created_files {
+      @fs.remove_file(f) catch {
+        _ => ()
+      }
+    }
     for sub in created_subs {
-      remove_dir_tree(sub)
+      @fs.remove_dir(sub) catch {
+        _ => ()
+      }
     }
   }
 }
@@ -210,6 +252,16 @@ fn require_fully_parsed(
       }
       i = i + 1
     }
+    if extra > 1048576 {
+      fail_data(
+        "错误: " +
+        path +
+        " 末尾有 " +
+        extra.to_string() +
+        " 字节无法解析（超过 1 MiB 的填充上限）——\n  拒绝写出；请先用 verify 查看",
+      )
+      return
+    }
     if nonzero > 0 {
       fail_data(
         "错误: " +
@@ -227,17 +279,29 @@ fn require_fully_parsed(
 }
 
 ///|
-/// 路径规范化：统一分隔符、折叠重复斜杠、去掉尾部斜杠与开头的 `./`。
-///
-/// 只做词法比较，不解析符号链接、不处理大小写（Windows 大小写差异不在覆盖范围内）。
+
+///|
+/// 单字符小写（ASCII 路径）。
+fn lower_char(c : Char) -> Char {
+  let n = c.to_int()
+  if n >= 65 && n <= 90 {
+    (n + 32).unsafe_to_char()
+  } else {
+    c
+  }
+}
+
+///|
+/// 路径词法规范化：分隔符、大小写、重复斜杠、尾部斜杠、开头的 `./`。
 fn normalize_path(p : String) -> String {
   let sb = StringBuilder()
   let mut last_slash = true
   let mut i = 0
   while i < p.length() {
     match p.get_char(i) {
-      Some(c) =>
-        if c == '\\' || c == '/' {
+      Some(c0) => {
+        let c = lower_char(if c0 == '\\' { '/' } else { c0 })
+        if c == '/' {
           if !last_slash {
             sb.write_char('/')
             last_slash = true
@@ -246,6 +310,7 @@ fn normalize_path(p : String) -> String {
           sb.write_char(c)
           last_slash = false
         }
+      }
       None => ()
     }
     i = i + 1
@@ -263,13 +328,152 @@ fn normalize_path(p : String) -> String {
 }
 
 ///|
+/// 是否绝对路径（POSIX 根或 Windows 盘符）。
+fn is_absolute_path(p : String) -> Bool {
+  if p.length() == 0 {
+    return false
+  }
+  if p.get_char(0) == Some('/') {
+    return true
+  }
+  p.length() >= 2 && p.get_char(1) == Some(':')
+}
+
+///|
+/// 折叠 `.` 与 `..` 段（纯词法，不解析符号链接）。
+fn collapse_path(p : String) -> String {
+  let absolute = p.length() > 0 && p.get_char(0) == Some('/')
+  let segs : Array[String] = []
+  let mut cur = ""
+  let mut i = 0
+  while i <= p.length() {
+    let ch = if i < p.length() { p.get_char(i) } else { Some('/') }
+    match ch {
+      Some(c) =>
+        if c == '/' {
+          if cur == ".." {
+            let _ = segs.pop()
+          } else if cur != "" && cur != "." {
+            segs.push(cur)
+          }
+          cur = ""
+        } else {
+          cur = cur + c.to_string()
+        }
+      None => ()
+    }
+    i = i + 1
+  }
+  let mut out = if absolute { "/" } else { "" }
+  let mut j = 0
+  while j < segs.length() {
+    if j > 0 {
+      out = out + "/"
+    }
+    out = out + segs[j]
+    j = j + 1
+  }
+  out
+}
+
+///|
+/// 绝对化：相对路径用 PWD / CD 环境变量补前缀；拿不到就退回词法结果。
+fn absolute_path(p : String) -> String {
+  let n = normalize_path(p)
+  if is_absolute_path(n) {
+    return collapse_path(n)
+  }
+  let base = match @env.get_env_var("PWD") {
+    Some(d) => d
+    None =>
+      match @env.get_env_var("CD") {
+        Some(d) => d
+        None => ""
+      }
+  }
+  if base == "" {
+    return collapse_path(n)
+  }
+  collapse_path(normalize_path(base) + "/" + n)
+}
+
+///|
+/// Windows 保留设备名（NUL / CON / COM1 …）：写入会"成功"但没有任何文件。
+fn is_reserved_device(path : String) -> Bool {
+  let n = normalize_path(path)
+  let mut base = n
+  let mut i = n.length() - 1
+  while i >= 0 {
+    if n.get_char(i) == Some('/') {
+      base = n[i + 1:].to_owned()
+      break
+    }
+    i = i - 1
+  }
+  let stem = match base.find(".") {
+    Some(at) => base[0:at].to_owned()
+    None => base
+  }
+  if stem == "con" || stem == "prn" || stem == "aux" || stem == "nul" {
+    return true
+  }
+  if stem.length() == 4 {
+    let p3 = stem[0:3].to_owned()
+    let last = stem.get_char(3)
+    if (p3 == "com" || p3 == "lpt") &&
+      last is Some(c) &&
+      c.to_int() >= 49 &&
+      c.to_int() <= 57 {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// 输出是 Windows 保留设备名时拒绝。
+fn reject_special_output(out : String) -> Unit {
+  if is_reserved_device(out) {
+    fail(
+      "错误: 输出路径是 Windows 保留设备名 —— " +
+      out +
+      "\n  请换一个普通文件名",
+    )
+  }
+}
+
+///|
 /// 输入与输出指向同一个文件时拒绝执行：先写后读的命令会直接毁掉源文件。
+///
+/// 覆盖大小写、相对/绝对与 `..`；硬链接/符号链接仍无法识别（@fs 没有 inode API）。
 fn reject_same_path(src : String, out : String) -> Unit {
-  if normalize_path(src) == normalize_path(out) {
+  reject_special_output(out)
+  if absolute_path(src) == absolute_path(out) {
     fail(
       "错误: 输入与输出是同一个文件 —— " +
       out +
       "\n  请指定不同的输出路径（本工具不做原地改写）",
+    )
+  }
+}
+
+///|
+/// 输出文件落在输入包目录内时拒绝：`mux dir dir/s1/packet_000000.bin`
+/// 会把包文件本身覆盖成 Ogg。
+fn reject_output_inside_dir(dir : String, out : String) -> Unit {
+  reject_special_output(out)
+  let d = absolute_path(dir)
+  let o = absolute_path(out)
+  if o == d ||
+    (
+      o.length() > d.length() &&
+      o.get_char(d.length()) == Some('/') &&
+      o[0:d.length()].to_owned() == d
+    ) {
+    fail(
+      "错误: 输出文件位于输入目录内 —— " +
+      out +
+      "\n  请把输出放到目录外，避免覆盖包文件",
     )
   }
 }
@@ -590,6 +794,7 @@ fn run_demux(src : String, dir : String) -> Unit {
       // （复用已存在目录的情况在入口已被拒绝，所以这里的目录只可能是我们的。）
       let created_dir = !@fs.path_exists(dir)
       let created_subs : Array[String] = []
+      let created_files : Array[String] = []
       if created_dir {
         @fs.create_dir(dir) catch {
           IOError(msg) => {
@@ -604,7 +809,7 @@ fn run_demux(src : String, dir : String) -> Unit {
         if !@fs.path_exists(sub) {
           @fs.create_dir(sub) catch {
             IOError(msg) => {
-              rollback_demux(dir, created_dir, created_subs)
+              rollback_demux(dir, created_dir, created_subs, created_files)
               fail("错误: 无法创建目录 " + sub + " —— " + msg)
               return
             }
@@ -615,12 +820,13 @@ fn run_demux(src : String, dir : String) -> Unit {
         let mut i = 0
         while i < group.length() {
           let name = sub + "/packet_" + pad6(i) + ".bin"
+          created_files.push(name)
           @fs.write_bytes_to_file(name, group[i].data) catch {
             IOError(msg) => {
               // 已经写出的前 i 个文件不能留在磁盘上，否则是一个
               // 「看起来成功、实际缺包」的包目录；若整个目录是本轮建的，
               // 连父目录一起删，避免后续 mux 把残留的 sN 当完整输入。
-              rollback_demux(dir, created_dir, created_subs)
+              rollback_demux(dir, created_dir, created_subs, created_files)
               fail("错误: 无法写入 " + name + " —— " + msg)
               return
             }
@@ -651,9 +857,10 @@ fn run_demux(src : String, dir : String) -> Unit {
           chain_index_of(chains, streams[si].serial),
           granule_list,
         )
+        created_files.push(sub + "/manifest.txt")
         @fs.write_string_to_file(sub + "/manifest.txt", manifest) catch {
           IOError(msg) => {
-            rollback_demux(dir, created_dir, created_subs)
+            rollback_demux(dir, created_dir, created_subs, created_files)
             fail(
               "错误: 无法写入清单 " +
               sub +
@@ -1013,6 +1220,7 @@ fn plan_mux(dir : String) -> Result[MuxPlan, String] {
 /// 以及多流时 BOS 页置顶、数据页按粒度升序交织。
 /// 这些规则手工拼页时极易写错（尤其是超长包），放在容器层才能被测试钉住。
 fn run_mux(dir : String, out : String) -> Unit {
+  reject_output_inside_dir(dir, out)
   match plan_mux(dir) {
     Err(msg) =>
       // plan_mux 的失败分两类：读不到目录/清单/包文件是 I/O（2），

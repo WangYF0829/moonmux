@@ -444,8 +444,8 @@ fn vorbis_pcm(data : Bytes, bits : Int32) -> Result[Pcm, String] {
           if c < pcm.length() && f < pcm[c].length() {
             write_sample(buf, pcm[c][f].to_double(), bits)
           } else {
-            // 声道数据缺失时补静音，保持帧对齐
-            write_i16_le(buf, 0)
+            // 声道数据缺失时补静音，保持帧对齐（24 位必须写 3 字节）
+            write_sample(buf, 0.0, bits)
           }
           c = c + 1
         }

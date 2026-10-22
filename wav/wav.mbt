@@ -134,6 +134,7 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
       }
       let channels = rd_u16(bytes, body + 2)
       let sample_rate = rd_u32(bytes, body + 4).to_int()
+      let block_align = rd_u16(bytes, body + 12)
       let bits_per_sample = rd_u16(bytes, body + 14)
       // 声道数、采样率、位深为 0 都不是可用的音频格式。
       // 放过去的话，下游按 block_align = 0 去切帧会得到无穷循环或空结果。
@@ -147,6 +148,15 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
         bits_per_sample != 16 &&
         bits_per_sample != 24 &&
         bits_per_sample != 32 {
+        return None
+      }
+      // 帧大小以 block_align 为准：它和 channels × 位深不一致时，帧数/时长都会算错。
+      let expected_align = channels * (bits_per_sample / 8)
+      if block_align != expected_align {
+        return None
+      }
+      let byte_rate = rd_u32(bytes, body + 8).to_int()
+      if byte_rate != sample_rate * block_align {
         return None
       }
       format = Some({ channels, sample_rate, bits_per_sample, })
