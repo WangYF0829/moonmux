@@ -283,10 +283,15 @@ fn require_fully_parsed(
 ///|
 /// 当前平台是否使用 Windows 路径规则（由 current_dir 的形状判断）。
 fn windows_paths() -> Bool {
-  // Windows 总会设置 OS=Windows_NT；不要用 cwd 形状推断（UNC 路径与 current_dir 失败会误判）
-  match @env.get_env_var("OS") {
-    Some(v) => v == "Windows_NT"
-    None => false
+  // 不用 OS 环境变量（可被父进程清除）；用文件系统事实判断。
+  // Windows 一定有 C://；SystemRoot 作为兜底（系统装在别的盘时）。
+  if @fs.path_exists("C:////") {
+    true
+  } else {
+    match @env.get_env_var("SystemRoot") {
+      Some(_) => true
+      None => false
+    }
   }
 }
 
@@ -368,12 +373,15 @@ fn trim_windows_segments(s : String) -> String {
       Some(c) =>
         if c == '/' {
           let mut e = cur.length()
-          while e > 0 &&
-                (
-                  cur.get_char(e - 1) == Some('.') ||
-                  cur.get_char(e - 1) == Some(' ')
-                ) {
-            e = e - 1
+          // "." 与 ".." 必须原样保留，交给 collapse_path 处理
+          if cur != "." && cur != ".." {
+            while e > 0 &&
+                  (
+                    cur.get_char(e - 1) == Some('.') ||
+                    cur.get_char(e - 1) == Some(' ')
+                  ) {
+              e = e - 1
+            }
           }
           sb.write_stringview(cur[0:e].to_owned())
           if i < s.length() {
@@ -589,8 +597,51 @@ fn reject_same_path(src : String, out : String) -> Unit {
 ///|
 /// 输出文件落在输入包目录内时拒绝：`mux dir dir/s1/packet_000000.bin`
 /// 会把包文件本身覆盖成 Ogg。
+
+///|
+/// 文件名是否像包目录里的成员（`packet_000000.bin` / `manifest.txt`）。
+/// 8.3 短名无法用词法解析，这一层兜底防止 mux 覆盖包文件。
+fn looks_like_packet_member(path : String) -> Bool {
+  let n = normalize_path(path)
+  let mut base = n
+  let mut i = n.length() - 1
+  while i >= 0 {
+    if n.get_char(i) == Some('/') {
+      base = n[i + 1:].to_owned()
+      break
+    }
+    i = i - 1
+  }
+  if base == "manifest.txt" {
+    return true
+  }
+  if base.length() != 17 ||
+    !base[0:7].to_owned().has_prefix("packet_") ||
+    !base[13:17].to_owned().has_suffix(".bin") {
+    return false
+  }
+  let mut j = 7
+  while j < 13 {
+    let c = base.get_char(j)
+    match c {
+      Some(ch) => if ch.to_int() < 48 || ch.to_int() > 57 { return false }
+      None => return false
+    }
+    j = j + 1
+  }
+  true
+}
+
+///|
 fn reject_output_inside_dir(dir : String, out : String) -> Unit {
   reject_special_output(out)
+  if looks_like_packet_member(out) {
+    fail(
+      "错误: 输出路径看起来是包目录内的文件 —— " +
+      out +
+      "\n  mux 的输出应是新的 .ogg，不要指向 packet_*.bin 或 manifest.txt",
+    )
+  }
   let d = absolute_path(dir)
   let o = absolute_path(out)
   if o == d ||
