@@ -11,7 +11,7 @@
 /// 一条解析后的命令。
 pub(all) enum Command {
   /// 查看 Ogg 文件的容器信息
-  Info(String)
+  Info(String, Bool)
   /// 从 Ogg 文件拆出包，写入指定目录
   Demux(String, String)
   /// 把目录中的包封装成 Ogg 文件
@@ -31,7 +31,7 @@ pub(all) enum Command {
   /// 按时间（毫秒）定位到页；第三个参数是物理流（链）序号，1 起算
   Seek(String, Int32, Int32)
   /// 逐页重算 CRC，报告通过率
-  Verify(String)
+  Verify(String, Bool)
   /// 把 Ogg（Opus / Vorbis）转码为 WAV；第三个参数是位深（16 / 24）
   ToWav(String, String, Int32)
   /// 按毫秒区间裁剪（页精度）：输入、输出、起、止
@@ -50,7 +50,7 @@ pub fn usage() -> String {
   "moonmux —— MoonBit 音频容器工具\n" +
   "\n" +
   "用法:\n" +
-  "  moonmux info <file>              查看容器信息（Ogg 或 WAV）\n" +
+  "  moonmux info <file> [--json]     查看容器信息（Ogg 或 WAV；--json 结构化输出）\n" +
   "  moonmux demux <file.ogg> <dir>   按逻辑流拆到目录（每流一个子目录）\n" +
   "  moonmux mux <dir> <out.ogg>      把包封装成 Ogg（子目录即逻辑流）\n" +
   "  moonmux cat <in1.ogg> <in2.ogg> ... <out.ogg>\n" +
@@ -64,7 +64,7 @@ pub fn usage() -> String {
   "                                  改写注释，未指定的键原样保留；KEY= 表示删除\n" +
   "  moonmux seek <file.ogg> <ms> [chain]\n" +
   "                                  按时间定位到页（可选：第几段物理流）\n" +
-  "  moonmux verify <file.ogg>        结构体检（CRC / 页序号 / BOS·EOS）\n" +
+  "  moonmux verify <file.ogg> [--json] 结构体检（--json 输出问题列表）\n" +
   "  moonmux to-wav <in.ogg> <out.wav> [16|24]\n" +
   "                                  转码为 WAV，默认 16 位\n" +
   "  moonmux chop <in.ogg> <out.ogg> <起ms> <止ms>\n" +
@@ -111,7 +111,8 @@ pub fn usage_for(topic : String) -> String {
     "  [chain] 是 1 起算的物理流序号（链接流用），默认第 1 段\n" +
     "  Opus 解码侧还需提前 80 ms 开始解码（RFC 7845 §4.6 的 pre-roll）"
   } else if topic == "verify" {
-    "用法: moonmux verify <file.ogg>"
+    "用法: moonmux verify <file.ogg> [--json]\n" +
+    "  逐页校验 CRC、页序号、BOS/EOS、粒度；--json 输出结构化结果"
   } else if topic == "to-wav" {
     "用法: moonmux to-wav <in.ogg> <out.wav> [16|24]\n" +
     "  默认 16 位；24 位从解码器的浮点采样直接量化\n" +
@@ -201,10 +202,18 @@ pub fn parse(args : Array[String]) -> Command {
   if sub == "info" {
     if n < 1 {
       Command::Bad("info 需要一个 Ogg 文件路径", usage_for("info"))
-    } else if n > 1 {
-      Command::Bad(arity_msg("info", n, 1), usage_for("info"))
+    } else if n > 2 {
+      Command::Bad(
+        "info 至多接受 文件路径 与 --json",
+        usage_for("info"),
+      )
+    } else if n == 2 && args[2] != "--json" {
+      Command::Bad(
+        "info 只认识 --json，实际是「" + args[2] + "」",
+        usage_for("info"),
+      )
     } else {
-      Command::Info(args[1])
+      Command::Info(args[1], n == 2)
     }
   } else if sub == "demux" {
     if n < 2 {
@@ -365,10 +374,18 @@ pub fn parse(args : Array[String]) -> Command {
   } else if sub == "verify" {
     if n < 1 {
       Command::Bad("verify 需要一个 Ogg 文件路径", usage_for("verify"))
-    } else if n > 1 {
-      Command::Bad(arity_msg("verify", n, 1), usage_for("verify"))
+    } else if n > 2 {
+      Command::Bad(
+        "verify 至多接受 文件路径 与 --json",
+        usage_for("verify"),
+      )
+    } else if n == 2 && args[2] != "--json" {
+      Command::Bad(
+        "verify 只认识 --json，实际是「" + args[2] + "」",
+        usage_for("verify"),
+      )
     } else {
-      Command::Verify(args[1])
+      Command::Verify(args[1], n == 2)
     }
   } else if sub == "chop" {
     if n < 4 {

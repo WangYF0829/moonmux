@@ -119,6 +119,10 @@ check $? "chop 越界区间报数据错误（1）"
 
 "$BIN" dump testdata/opus_sample.opus --hex | head -1 | grep -q '^00000000: 4f67 6753'
 check $? "dump --hex 首行与 xxd 兼容"
+"$BIN" info testdata/opus_sample.opus --json | grep -q '"format":"ogg"'
+check $? "info --json 输出 Ogg 结构"
+"$BIN" verify testdata/opus_sample.opus --json | grep -q '"crc_ok":9'
+check $? "verify --json 输出 CRC 统计"
 
 echo "== 5. 定位 =="
 "$BIN" seek testdata/opus_sample.opus 2500 >/dev/null 2>&1

@@ -118,15 +118,15 @@ fn read_all(path : String) -> Bytes? {
 /// 甚至非音频的逻辑流）都能给出页数、包数与流号；
 /// WAV 则给出声道、采样率与时长。
 /// 识别依据是文件头（`OggS` / `RIFF`），不是扩展名。
-fn run_info(path : String) -> Unit {
+fn run_info(path : String, json : Bool) -> Unit {
   match read_all(path) {
     None => ()
     Some(data) =>
       if @ogg.is_page_start(data, 0) {
-        show_ogg_info(path, data)
+        show_ogg_info(path, data, json)
       } else {
         match @wav.WavFile::parse(data) {
-          Some(f) => show_wav_info(path, data, f)
+          Some(f) => show_wav_info(path, data, f, json)
           None =>
             fail_data("错误: 既不是 Ogg 也不是 WAV —— " + path)
         }
@@ -149,13 +149,17 @@ fn run_info(path : String) -> Unit {
 /// 物理流与逻辑流是两层：一个文件里可以串接多条物理流（链接流），
 /// 每条物理流里再交织多条逻辑流。链接流要单独说明 ——
 /// 它的页数、包数是所有段的总和，只看总数会以为是一条很长的流。
-fn show_ogg_info(path : String, data : Bytes) -> Unit {
+fn show_ogg_info(path : String, data : Bytes, json : Bool) -> Unit {
   let pages = @ogg.parse_pages(data)
   if pages.length() == 0 {
     fail_data("错误: 不是合法的 Ogg 文件 —— " + path)
     return
   }
   let packets = @ogg.reassemble(pages)
+  if json {
+    print_ogg_json(path, data, pages, packets)
+    return
+  }
   let consumed = {
     let mut n = 0
     for p in pages {
@@ -309,7 +313,16 @@ fn show_ogg_info(path : String, data : Bytes) -> Unit {
 ///
 /// 时长按帧数换算：帧数 = PCM 字节数 ÷（声道 × 位深/8），
 /// 秒 = 帧数 ÷ 采样率。全部用整数算，避免浮点把「6 秒」显示成 5.999。
-fn show_wav_info(path : String, data : Bytes, f : @wav.WavFile) -> Unit {
+fn show_wav_info(
+  path : String,
+  data : Bytes,
+  f : @wav.WavFile,
+  json : Bool,
+) -> Unit {
+  if json {
+    print_wav_json(path, data, f)
+    return
+  }
   println("文件:   " + path)
   println("格式:   WAV（RIFF/PCM）")
   println("字节数: " + data.length().to_string())
@@ -1508,7 +1521,7 @@ fn run_seek(path : String, ms : Int32, chain_no : Int32) -> Unit {
 /// 段表与负载是否一致、每条流的页序号是否连续、首末页 BOS / EOS 是否到位。
 /// CRC 全绿只说明字节没坏 —— 页序号跳号意味着丢页，缺 BOS / EOS
 /// 意味着头尾被截，这些都要到播放时才出症状，这里提前指出来。
-fn run_verify(path : String) -> Unit {
+fn run_verify(path : String, json : Bool) -> Unit {
   match read_all(path) {
     None => ()
     Some(data) => {
@@ -1563,51 +1576,90 @@ fn run_verify(path : String) -> Unit {
           @ogg.Severity::Info => ()
         }
       }
-      println("文件:     " + path)
-      println("字节数:   " + data.length().to_string())
-      println("页数:     " + pages.length().to_string())
-      println("物理流:   " + @ogg.split_chains(pages).length().to_string())
-      println("逻辑流:   " + @ogg.serials_of(pages).length().to_string())
-      println("CRC 通过: " + ok.to_string() + "  失败: " + bad.to_string())
-      println(
-        "结构问题: " +
-        findings.length().to_string() +
-        "（error " +
-        errors.to_string() +
-        " / warn " +
-        warnings.to_string() +
-        "）",
-      )
-      // 只铺前 10 条：坏了大半的文件逐条打出来只会淹没结论，
-      // 但省略要明说 —— 闷声少报等于把问题藏起来
-      let mut shown = 0
-      for f in findings {
-        if shown < 10 {
-          println("  [" + @ogg.severity_label(f.severity) + "] " + f.message)
-          shown = shown + 1
+      if json {
+        let sb = StringBuilder()
+        sb.write_stringview("{\"file\":")
+        sb.write_stringview(json_string(path))
+        sb.write_stringview(",\"bytes\":")
+        sb.write_stringview(data.length().to_string())
+        sb.write_stringview(",\"pages\":")
+        sb.write_stringview(pages.length().to_string())
+        sb.write_stringview(",\"chains\":")
+        sb.write_stringview(@ogg.split_chains(pages).length().to_string())
+        sb.write_stringview(",\"streams\":")
+        sb.write_stringview(@ogg.serials_of(pages).length().to_string())
+        sb.write_stringview(",\"crc_ok\":")
+        sb.write_stringview(ok.to_string())
+        sb.write_stringview(",\"crc_bad\":")
+        sb.write_stringview(bad.to_string())
+        sb.write_stringview(",\"errors\":")
+        sb.write_stringview(errors.to_string())
+        sb.write_stringview(",\"warnings\":")
+        sb.write_stringview(warnings.to_string())
+        sb.write_stringview(",\"findings\":[")
+        let mut fi = 0
+        for f in findings {
+          if fi > 0 {
+            sb.write_stringview(",")
+          }
+          sb.write_stringview("{\"severity\":")
+          sb.write_stringview(json_string(@ogg.severity_label(f.severity)))
+          sb.write_stringview(",\"message\":")
+          sb.write_stringview(json_string(f.message))
+          sb.write_stringview("}")
+          fi = fi + 1
         }
-      }
-      if findings.length() > 10 {
-        println(
-          "  ……另有 " +
-          (findings.length() - 10).to_string() +
-          " 处（以上为前 10 处）",
-        )
-      }
-      if bad == 0 && findings.length() == 0 {
-        println(
-          "结论:     结构完好（CRC、页序号、BOS·EOS、粒度全部自洽）",
-        )
+        sb.write_stringview("]}")
+        println(sb.to_string())
       } else {
+        println("文件:     " + path)
+        println("字节数:   " + data.length().to_string())
+        println("页数:     " + pages.length().to_string())
+        println("物理流:   " + @ogg.split_chains(pages).length().to_string())
+        println("逻辑流:   " + @ogg.serials_of(pages).length().to_string())
         println(
-          "结论:     " +
-          errors.to_string() +
-          " 个 error / " +
-          warnings.to_string() +
-          " 个 warn / " +
-          bad.to_string() +
-          " 页 CRC 失败",
+          "CRC 通过: " + ok.to_string() + "  失败: " + bad.to_string(),
         )
+        println(
+          "结构问题: " +
+          findings.length().to_string() +
+          "（error " +
+          errors.to_string() +
+          " / warn " +
+          warnings.to_string() +
+          "）",
+        )
+        // 只铺前 10 条：坏了大半的文件逐条打出来只会淹没结论，
+        // 但省略要明说 —— 闷声少报等于把问题藏起来
+        let mut shown = 0
+        for f in findings {
+          if shown < 10 {
+            println("  [" + @ogg.severity_label(f.severity) + "] " + f.message)
+            shown = shown + 1
+          }
+        }
+        if findings.length() > 10 {
+          println(
+            "  ……另有 " +
+            (findings.length() - 10).to_string() +
+            " 处（以上为前 10 处）",
+          )
+        }
+        if bad == 0 && findings.length() == 0 {
+          println(
+            "结论:     结构完好（CRC、页序号、BOS·EOS、粒度全部自洽）",
+          )
+        } else {
+          println(
+            "结论:     " +
+            errors.to_string() +
+            " 个 error / " +
+            warnings.to_string() +
+            " 个 warn / " +
+            bad.to_string() +
+            " 页 CRC 失败",
+          )
+        }
       }
       // 退出码只反映 error：CI 不该因为「末页缺 EOS」这种可疑形态红掉，
       // 但缺 BOS、页序号断裂这类直接不可解码的问题必须让流水线失败。
@@ -1870,6 +1922,188 @@ fn pad2(n : Int32) -> String {
 
 ///|
 /// 入口：剥掉 argv[0]，其余交给 cli 解析。
+
+///|
+/// JSON 字符串转义：引号、反斜杠、控制字符。
+fn json_escape(s : String) -> String {
+  let sb = StringBuilder()
+  let mut i = 0
+  while i < s.length() {
+    match s.get_char(i) {
+      Some(c) =>
+        match c {
+          '"' => sb.write_stringview("\\\"")
+          '\\' => sb.write_stringview("\\\\")
+          '\n' => sb.write_stringview("\\n")
+          '\r' => sb.write_stringview("\\r")
+          '\t' => sb.write_stringview("\\t")
+          _ =>
+            if c.to_int() < 0x20 {
+              sb.write_stringview("\\u00")
+              sb.write_char(hex_digit((c.to_int() >> 4) & 0xF))
+              sb.write_char(hex_digit(c.to_int() & 0xF))
+            } else {
+              sb.write_char(c)
+            }
+        }
+      None => ()
+    }
+    i = i + 1
+  }
+  sb.to_string()
+}
+
+///|
+/// 一位十六进制字符（大写）。
+fn hex_digit(n : Int32) -> Char {
+  let digits = "0123456789ABCDEF"
+  match digits.get_char(n) {
+    Some(c) => c
+    None => '0'
+  }
+}
+
+///|
+/// 加引号的 JSON 字符串。
+fn json_string(s : String) -> String {
+  "\"" + json_escape(s) + "\""
+}
+
+///|
+/// Ogg 信息的 JSON 版本（单行）。统计逻辑与文本版一致，只是渲染不同。
+fn print_ogg_json(
+  path : String,
+  data : Bytes,
+  pages : Array[@ogg.Page],
+  packets : Array[@ogg.Packet],
+) -> Unit {
+  let chains = @ogg.split_chains(pages)
+  let serials = @ogg.serials_of(pages)
+  let index_of : Map[UInt32, Int32] = Map([])
+  let mut k = 0
+  while k < serials.length() {
+    index_of.set(serials[k], k)
+    k = k + 1
+  }
+  let page_counts = Array::make(serials.length(), 0)
+  let byte_counts = Array::make(serials.length(), 0)
+  let first_granules = Array::make(serials.length(), -1L)
+  let last_granules = Array::make(serials.length(), -1L)
+  let has_granules = Array::make(serials.length(), false)
+  for page in pages {
+    match index_of.get(page.serial) {
+      Some(idx) => {
+        page_counts[idx] = page_counts[idx] + 1
+        byte_counts[idx] = byte_counts[idx] + page.payload.length()
+        if page.granule_position >= 0L {
+          if !has_granules[idx] {
+            first_granules[idx] = page.granule_position
+          }
+          last_granules[idx] = page.granule_position
+          has_granules[idx] = true
+        }
+      }
+      None => ()
+    }
+  }
+  let heads : Array[Bytes?] = Array::make(serials.length(), None)
+  for pkt in packets {
+    match index_of.get(pkt.serial) {
+      Some(idx) =>
+        match heads[idx] {
+          None => heads[idx] = Some(pkt.data)
+          Some(_) => ()
+        }
+      None => ()
+    }
+  }
+  let sb = StringBuilder()
+  sb.write_stringview("{\"file\":")
+  sb.write_stringview(json_string(path))
+  sb.write_stringview(",\"format\":\"ogg\",\"bytes\":")
+  sb.write_stringview(data.length().to_string())
+  sb.write_stringview(",\"pages\":")
+  sb.write_stringview(pages.length().to_string())
+  sb.write_stringview(",\"packets\":")
+  sb.write_stringview(packets.length().to_string())
+  sb.write_stringview(",\"chains\":")
+  sb.write_stringview(chains.length().to_string())
+  sb.write_stringview(",\"streams\":[")
+  let mut i = 0
+  while i < serials.length() {
+    if i > 0 {
+      sb.write_stringview(",")
+    }
+    sb.write_stringview("{\"index\":")
+    sb.write_stringview((i + 1).to_string())
+    sb.write_stringview(",\"serial\":")
+    sb.write_stringview(serials[i].to_string())
+    sb.write_stringview(",\"pages\":")
+    sb.write_stringview(page_counts[i].to_string())
+    sb.write_stringview(",\"payload_bytes\":")
+    sb.write_stringview(byte_counts[i].to_string())
+    if has_granules[i] {
+      sb.write_stringview(",\"last_granule\":")
+      sb.write_stringview(last_granules[i].to_string())
+    }
+    match heads[i] {
+      Some(head) =>
+        match @codec.parse_audio_header(head) {
+          Some(info) => {
+            sb.write_stringview(",\"codec\":")
+            sb.write_stringview(json_string(info.codec))
+            sb.write_stringview(",\"channels\":")
+            sb.write_stringview(info.channels.to_string())
+            sb.write_stringview(",\"sample_rate\":")
+            sb.write_stringview(info.sample_rate.to_string())
+            if has_granules[i] {
+              let secs = @codec.duration_seconds(
+                info,
+                first_granules[i],
+                last_granules[i],
+              )
+              let ms = (secs * 1000.0 + 0.5).to_int64()
+              sb.write_stringview(",\"duration_ms\":")
+              sb.write_stringview(ms.to_string())
+            }
+          }
+          None => ()
+        }
+      None => ()
+    }
+    sb.write_stringview("}")
+    i = i + 1
+  }
+  sb.write_stringview("]}")
+  println(sb.to_string())
+}
+
+///|
+/// WAV 信息的 JSON 版本（单行）。
+fn print_wav_json(path : String, data : Bytes, f : @wav.WavFile) -> Unit {
+  let frame_size = f.format.channels * (f.format.bits_per_sample / 8)
+  let sb = StringBuilder()
+  sb.write_stringview("{\"file\":")
+  sb.write_stringview(json_string(path))
+  sb.write_stringview(",\"format\":\"wav\",\"bytes\":")
+  sb.write_stringview(data.length().to_string())
+  sb.write_stringview(",\"channels\":")
+  sb.write_stringview(f.format.channels.to_string())
+  sb.write_stringview(",\"sample_rate\":")
+  sb.write_stringview(f.format.sample_rate.to_string())
+  sb.write_stringview(",\"bits\":")
+  sb.write_stringview(f.format.bits_per_sample.to_string())
+  sb.write_stringview(",\"pcm_bytes\":")
+  sb.write_stringview(f.data.length().to_string())
+  if frame_size > 0 && f.format.sample_rate > 0 {
+    sb.write_stringview(",\"frames\":")
+    sb.write_stringview((f.data.length() / frame_size).to_string())
+  }
+  sb.write_stringview("}")
+  println(sb.to_string())
+}
+
+///|
 fn main {
   let argv = @env.args()
   let rest : Array[String] = []
@@ -1879,7 +2113,7 @@ fn main {
     i = i + 1
   }
   match @cli.parse(rest) {
-    @cli.Command::Info(path) => run_info(path)
+    @cli.Command::Info(path, json) => run_info(path, json)
     @cli.Command::Demux(src, dir) => run_demux(src, dir)
     @cli.Command::Mux(dir, out) => run_mux(dir, out)
     @cli.Command::Cat(inputs, out) => run_cat(inputs, out)
@@ -1889,7 +2123,7 @@ fn main {
     @cli.Command::Tags(path) => run_tags(path)
     @cli.Command::TagWrite(src, out, assigns) => run_tag(src, out, assigns)
     @cli.Command::Seek(path, ms, chain) => run_seek(path, ms, chain)
-    @cli.Command::Verify(path) => run_verify(path)
+    @cli.Command::Verify(path, json) => run_verify(path, json)
     @cli.Command::ToWav(src, out, bits) => run_towav(src, out, bits)
     @cli.Command::Chop(src, out, start_ms, end_ms) =>
       run_chop(src, out, start_ms, end_ms)

@@ -244,3 +244,12 @@ test "plan_mux rejects empty and mixed layouts" {
   }
   remove_dir_tree(mixed)
 }
+
+///|
+/// JSON 转义：引号、反斜杠、换行与控制字符。
+test "json escaping handles quotes, backslashes and controls" {
+  assert_eq(json_escape("a\"b\\c"), "a\\\"b\\\\c")
+  assert_eq(json_escape("a\nb"), "a\\nb")
+  assert_eq(json_escape("\u0001"), "\\u0001")
+  assert_eq(json_string("x"), "\"x\"")
+}

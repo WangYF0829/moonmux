@@ -29,7 +29,10 @@ test "info without file reports arity error" {
 /// 正常路径：`info <file>`。
 test "info with file" {
   match parse(["info", "a.ogg"]) {
-    Command::Info(p) => assert_eq(p, "a.ogg")
+    Command::Info(p, json) => {
+      assert_eq(p, "a.ogg")
+      assert_false(json)
+    }
     _ => assert_true(false)
   }
 }
@@ -160,7 +163,10 @@ test "verify arity" {
     _ => assert_true(false)
   }
   match parse(["verify", "a.ogg"]) {
-    Command::Verify(p) => assert_eq(p, "a.ogg")
+    Command::Verify(p, json) => {
+      assert_eq(p, "a.ogg")
+      assert_false(json)
+    }
     _ => assert_true(false)
   }
   match parse(["verify", "a.ogg", "b.ogg"]) {
