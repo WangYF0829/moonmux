@@ -142,6 +142,13 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
       if channels <= 0 || sample_rate <= 0 || bits_per_sample <= 0 {
         return None
       }
+      // 只接受整字节位深：帧大小按 bits/8 计算，12 位这类值会把帧数算错。
+      if bits_per_sample != 8 &&
+        bits_per_sample != 16 &&
+        bits_per_sample != 24 &&
+        bits_per_sample != 32 {
+        return None
+      }
       format = Some({ channels, sample_rate, bits_per_sample, })
     } else if tag_is(bytes, pos, 0x64, 0x61, 0x74, 0x61) {
       // "data"。经过上面的边界检查后 size 必然小于等于文件长度，

@@ -53,38 +53,164 @@ fn fail_data(msg : String) -> Unit {
 }
 
 ///|
-/// 严格解析后若还有未消费的字节，说明文件被截断或中间有垃圾。
+/// 写出前的备份。`@fs` 没有 rename，做不到原子替换；退而求其次：
+/// 目标已存在时先复制一份，写坏/自检失败就恢复，绝不直接删除用户文件。
+enum OutputBackup {
+  NoOriginal
+  Saved(String)
+  Unavailable
+}
+
+///|
+/// 备份已有输出；目标不存在返回 NoOriginal，备份失败返回 Unavailable。
+fn backup_output(path : String) -> OutputBackup {
+  if !@fs.path_exists(path) {
+    return NoOriginal
+  }
+  let bak = path + ".moonmux.bak"
+  let data = @fs.read_file_to_bytes(path) catch {
+    IOError(_) => return Unavailable
+  }
+  @fs.write_bytes_to_file(bak, data) catch {
+    IOError(_) => return Unavailable
+  }
+  Saved(bak)
+}
+
+///|
+/// 写成功：删掉备份。
+fn commit_output(bak : OutputBackup) -> Unit {
+  match bak {
+    Saved(b) => @fs.remove_file(b) catch { _ => () }
+    _ => ()
+  }
+}
+
+///|
+/// 写失败：有备份就恢复，没有备份则删掉本次写出的半截文件。
+fn restore_output(path : String, bak : OutputBackup) -> Unit {
+  match bak {
+    NoOriginal => @fs.remove_file(path) catch { _ => () }
+    Saved(b) => {
+      let data = @fs.read_file_to_bytes(b) catch { IOError(_) => return }
+      @fs.write_bytes_to_file(path, data) catch {
+        IOError(_) => ()
+      }
+      @fs.remove_file(b) catch {
+        _ => ()
+      }
+    }
+    Unavailable => ()
+  }
+}
+
+///|
+/// demux 失败时的回滚：整目录是本轮建的就连根删，否则只删本轮创建的子目录。
+fn rollback_demux(
+  dir : String,
+  created_dir : Bool,
+  created_subs : Array[String],
+) -> Unit {
+  if created_dir {
+    remove_dir_tree(dir)
+  } else {
+    for sub in created_subs {
+      remove_dir_tree(sub)
+    }
+  }
+}
+
+///|
+/// 写命令的统一输入闸门：CRC、EOS、尾部非零数据，任一不过就拒绝写。
 ///
-/// 对**会写产物**的命令这必须拒绝：产出的会是半截文件，而退出码和
-/// 正常情况一样是 0 —— 用户以为拆完了，实际只拿到前一段。
+/// 只依赖 `structure_findings` 的 Error 不够：缺 EOS 只是 warn，而「按页边界截断」
+/// 的文件根本走不到尾部检查 —— 写出去就是少一页的产物，还会被重新序列化成 CRC 全绿。
 fn require_fully_parsed(
   path : String,
   pages : Array[@ogg.Page],
   data : Bytes,
 ) -> Unit {
+  if pages.length() == 0 {
+    fail_data("错误: 不是合法的 Ogg 文件 —— " + path)
+    return
+  }
+  // 1) CRC：输入损坏时重写会把坏页重新算出正确 CRC，等于把损坏「洗白」
+  let mut crc_bad = 0
+  for p in pages {
+    if !@ogg.page_crc_ok(p) {
+      crc_bad = crc_bad + 1
+    }
+  }
+  if crc_bad > 0 {
+    fail_data(
+      "错误: " +
+      path +
+      " 有 " +
+      crc_bad.to_string() +
+      " 页 CRC 校验失败（数据已损坏）——\n  拒绝写出；请先用 verify 查看损坏位置",
+    )
+    return
+  }
+  // 2) 结构层的 error（缺 BOS、页序断裂、跨段重号等）同样不能写出
+  let mut struct_bad = 0
+  for f in @ogg.structure_findings(pages) {
+    match f.severity {
+      @ogg.Severity::Error => struct_bad = struct_bad + 1
+      _ => ()
+    }
+  }
+  if struct_bad > 0 {
+    fail_data(
+      "错误: " +
+      path +
+      " 有 " +
+      struct_bad.to_string() +
+      " 处结构错误（缺 BOS / 页序断裂等）——\n  拒绝写出；请先用 verify 查看",
+    )
+    return
+  }
+  // 3) 每条逻辑流的末页必须带 EOS：缺 EOS 说明被截断，写出去就是半截产物
+  let serials = @ogg.serials_of(pages)
+  let closed : Map[UInt32, Bool] = Map([])
+  for p in pages {
+    closed.set(
+      p.serial,
+      (p.header_type.to_int() & @ogg.flag_eos().to_int()) != 0,
+    )
+  }
+  let mut open = 0
+  for s in serials {
+    match closed.get(s) {
+      Some(true) => ()
+      _ => open = open + 1
+    }
+  }
+  if open > 0 {
+    fail_data(
+      "错误: " +
+      path +
+      " 有 " +
+      open.to_string() +
+      " 条逻辑流缺少 EOS（文件可能被截断）——\n  拒绝写出半截产物；请先用 verify 查看",
+    )
+    return
+  }
+  // 4) 尾部只允许全零填充；非零尾部可能是一整段被丢弃的流
   let mut consumed = 0
   for p in pages {
     consumed = consumed + 27 + p.segments.length() + p.payload.length()
   }
   if consumed < data.length() {
     let extra = data.length() - consumed
-    // 所有流都以 EOS 收尾时，尾部多出来的字节是填充/垃圾，不影响已解析内容；
-    // 没有 EOS 才说明是截断 —— 那才是"半截产物"。
-    let mut all_closed = true
-    for s in @ogg.serials_of(pages) {
-      let sp = @ogg.stream_pages(pages, s)
-      let last = sp[sp.length() - 1]
-      if (last.header_type.to_int() & @ogg.flag_eos().to_int()) == 0 {
-        all_closed = false
+    let mut nonzero = 0
+    let mut i = consumed
+    while i < data.length() {
+      if data[i].to_int() != 0 {
+        nonzero = nonzero + 1
       }
+      i = i + 1
     }
-    if all_closed {
-      println(
-        "注意: 文件末尾有 " +
-        extra.to_string() +
-        " 字节无法解析（所有流都已 EOS，按尾部填充忽略）",
-      )
-    } else {
+    if nonzero > 0 {
       fail_data(
         "错误: " +
         path +
@@ -92,10 +218,59 @@ fn require_fully_parsed(
         consumed.to_string() +
         " 之后还有 " +
         extra.to_string() +
-        " 字节无法解析（文件可能被截断或中间损坏）——\n" +
-        "  拒绝写出半截产物；请先用 verify 查看损坏位置",
+        " 字节非零数据（可能包含未解析的流，或文件被截断）——\n  拒绝写出；请先用 verify 查看",
       )
+      return
     }
+    println("注意: 忽略末尾 " + extra.to_string() + " 字节全零填充")
+  }
+}
+
+///|
+/// 路径规范化：统一分隔符、折叠重复斜杠、去掉尾部斜杠与开头的 `./`。
+///
+/// 只做词法比较，不解析符号链接、不处理大小写（Windows 大小写差异不在覆盖范围内）。
+fn normalize_path(p : String) -> String {
+  let sb = StringBuilder()
+  let mut last_slash = true
+  let mut i = 0
+  while i < p.length() {
+    match p.get_char(i) {
+      Some(c) =>
+        if c == '\\' || c == '/' {
+          if !last_slash {
+            sb.write_char('/')
+            last_slash = true
+          }
+        } else {
+          sb.write_char(c)
+          last_slash = false
+        }
+      None => ()
+    }
+    i = i + 1
+  }
+  let mut s = sb.to_string()
+  while s.length() > 1 && s.get_char(s.length() - 1) == Some('/') {
+    s = s[0:s.length() - 1].to_owned()
+  }
+  while s.length() >= 2 &&
+        s.get_char(0) == Some('.') &&
+        s.get_char(1) == Some('/') {
+    s = s[2:].to_owned()
+  }
+  s
+}
+
+///|
+/// 输入与输出指向同一个文件时拒绝执行：先写后读的命令会直接毁掉源文件。
+fn reject_same_path(src : String, out : String) -> Unit {
+  if normalize_path(src) == normalize_path(out) {
+    fail(
+      "错误: 输入与输出是同一个文件 —— " +
+      out +
+      "\n  请指定不同的输出路径（本工具不做原地改写）",
+    )
   }
 }
 
@@ -217,9 +392,11 @@ fn show_ogg_info(path : String, data : Bytes, json : Bool) -> Unit {
   // 每条流的首个包（标识头）：同样一趟扫描，取首次出现
   // 每条流只取首个包（标识头），不重组整条流
   let heads : Array[Bytes?] = Array::make(serials.length(), None)
+  // 一次扫描取所有流的首包，避免「每流扫全部页」的 O(流数 × 页数)
+  let firsts = @ogg.first_packets(pages)
   let mut hi = 0
   while hi < serials.length() {
-    heads[hi] = @ogg.first_packet(pages, serials[hi])
+    heads[hi] = firsts.get(serials[hi])
     hi = hi + 1
   }
   let mut si = 0
@@ -412,6 +589,7 @@ fn run_demux(src : String, dir : String) -> Unit {
       // 目录是本轮创建的：中途失败就把整个目录回滚，不留半套 sN。
       // （复用已存在目录的情况在入口已被拒绝，所以这里的目录只可能是我们的。）
       let created_dir = !@fs.path_exists(dir)
+      let created_subs : Array[String] = []
       if created_dir {
         @fs.create_dir(dir) catch {
           IOError(msg) => {
@@ -426,13 +604,12 @@ fn run_demux(src : String, dir : String) -> Unit {
         if !@fs.path_exists(sub) {
           @fs.create_dir(sub) catch {
             IOError(msg) => {
-              if created_dir {
-                remove_dir_tree(dir)
-              }
+              rollback_demux(dir, created_dir, created_subs)
               fail("错误: 无法创建目录 " + sub + " —— " + msg)
               return
             }
           }
+          created_subs.push(sub)
         }
         let group = streams[si].packets
         let mut i = 0
@@ -443,11 +620,7 @@ fn run_demux(src : String, dir : String) -> Unit {
               // 已经写出的前 i 个文件不能留在磁盘上，否则是一个
               // 「看起来成功、实际缺包」的包目录；若整个目录是本轮建的，
               // 连父目录一起删，避免后续 mux 把残留的 sN 当完整输入。
-              if created_dir {
-                remove_dir_tree(dir)
-              } else {
-                remove_dir_tree(sub)
-              }
+              rollback_demux(dir, created_dir, created_subs)
               fail("错误: 无法写入 " + name + " —— " + msg)
               return
             }
@@ -480,11 +653,7 @@ fn run_demux(src : String, dir : String) -> Unit {
         )
         @fs.write_string_to_file(sub + "/manifest.txt", manifest) catch {
           IOError(msg) => {
-            if created_dir {
-              remove_dir_tree(dir)
-            } else {
-              remove_dir_tree(sub)
-            }
+            rollback_demux(dir, created_dir, created_subs)
             fail(
               "错误: 无法写入清单 " +
               sub +
@@ -854,12 +1023,22 @@ fn run_mux(dir : String, out : String) -> Unit {
         fail_data("错误: " + msg)
       }
     Ok(plan) => {
+      let bak = backup_output(out)
+      match bak {
+        Unavailable => {
+          fail("错误: 无法备份已有输出 " + out + "，拒绝覆盖")
+          return
+        }
+        _ => ()
+      }
       @fs.write_bytes_to_file(out, @ogg.serialize_pages(plan.pages)) catch {
         IOError(msg) => {
+          restore_output(out, bak)
           fail("错误: 无法写入 " + out + " —— " + msg)
           return
         }
       }
+      commit_output(bak)
       println(
         "已写出 " +
         plan.packets.to_string() +
@@ -881,6 +1060,9 @@ fn run_mux(dir : String, out : String) -> Unit {
 /// 冲突时后一方的相撞流换新流号重新分页。这里只做 I/O 与逐个衔接，
 /// 中途有一个文件读不出或不是 Ogg，就整趟不出（半截链没有意义）。
 fn run_cat(inputs : Array[String], out : String) -> Unit {
+  for input in inputs {
+    reject_same_path(input, out)
+  }
   let mut acc : Array[@ogg.Page] = []
   let mut ok = true
   let mut i = 0
@@ -907,12 +1089,22 @@ fn run_cat(inputs : Array[String], out : String) -> Unit {
     i = i + 1
   }
   if ok {
+    let bak = backup_output(out)
+    match bak {
+      Unavailable => {
+        fail("错误: 无法备份已有输出 " + out + "，拒绝覆盖")
+        return
+      }
+      _ => ()
+    }
     @fs.write_bytes_to_file(out, @ogg.serialize_pages(acc)) catch {
       IOError(msg) => {
+        restore_output(out, bak)
         fail("错误: 无法写入 " + out + " —— " + msg)
         return
       }
     }
+    commit_output(bak)
     println(
       "已链接 " +
       inputs.length().to_string() +
@@ -1041,6 +1233,7 @@ fn run_split(src : String, dir : String) -> Unit {
 /// 适合拿去处理音频数据），`extract` 抽到**流**（保持页级原样，
 /// 适合把文件里的某一条轨道单独取出来用）。
 fn run_extract(src : String, index : Int32, out : String) -> Unit {
+  reject_same_path(src, out)
   match read_all(src) {
     None => ()
     Some(data) => {
@@ -1072,12 +1265,22 @@ fn run_extract(src : String, index : Int32, out : String) -> Unit {
         }
       }
       let stream = @ogg.stream_pages(pages, serial)
+      let bak = backup_output(out)
+      match bak {
+        Unavailable => {
+          fail("错误: 无法备份已有输出 " + out + "，拒绝覆盖")
+          return
+        }
+        _ => ()
+      }
       @fs.write_bytes_to_file(out, @ogg.serialize_pages(stream)) catch {
         IOError(msg) => {
+          restore_output(out, bak)
           fail("错误: 无法写入 " + out + " —— " + msg)
           return
         }
       }
+      commit_output(bak)
       println(
         "已抽出第 " +
         index.to_string() +
@@ -1226,6 +1429,7 @@ fn run_tags(path : String) -> Unit {
 /// 这样连页序号都不用重编号，产物只有那一页的字节不同。
 /// 注释变长时补不下，则重写该包所在的页并给同流后续页重编号。
 fn run_tag(src : String, out : String, assignments : Array[String]) -> Unit {
+  reject_same_path(src, out)
   match read_all(src) {
     None => ()
     Some(data) => {
@@ -1294,8 +1498,17 @@ fn run_tag(src : String, out : String, assignments : Array[String]) -> Unit {
         }
       }
       let blob = @ogg.serialize_pages(updated)
+      let bak = backup_output(out)
+      match bak {
+        Unavailable => {
+          fail("错误: 无法备份已有输出 " + out + "，拒绝覆盖")
+          return
+        }
+        _ => ()
+      }
       @fs.write_bytes_to_file(out, blob) catch {
         IOError(msg) => {
+          restore_output(out, bak)
           fail("错误: 无法写入 " + out + " —— " + msg)
           return
         }
@@ -1337,14 +1550,13 @@ fn run_tag(src : String, out : String, assignments : Array[String]) -> Unit {
       )
       // 自己写出的文件自己都通不过校验，必须让退出码体现出来
       if written_errors > 0 || crc_bad > 0 {
-        // 先写盘后自检：失败时不能把坏文件留在原地
-        @fs.remove_file(out) catch {
-          _ => ()
-        }
+        restore_output(out, bak)
         fail_data(
-          "错误: 写出的文件未通过自检，已删除 —— " + out,
+          "错误: 写出的文件未通过自检，已恢复原文件（若有）—— " +
+          out,
         )
       }
+      commit_output(bak)
     }
   }
 }
@@ -1741,6 +1953,7 @@ fn run_chop(
   start_ms : Int32,
   end_ms : Int32,
 ) -> Unit {
+  reject_same_path(src, out)
   match read_all(src) {
     None => ()
     Some(data) => {
@@ -1767,8 +1980,17 @@ fn run_chop(
       let end_g = end_ms.to_int64() * rate / 1000L
       let chopped = chop_or_exit(pages, serial, start_g, end_g)
       let bytes = @ogg.serialize_pages(chopped)
+      let bak = backup_output(out)
+      match bak {
+        Unavailable => {
+          fail("错误: 无法备份已有输出 " + out + "，拒绝覆盖")
+          return
+        }
+        _ => ()
+      }
       @fs.write_bytes_to_file(out, bytes) catch {
         IOError(msg) => {
+          restore_output(out, bak)
           fail("错误: 无法写入 " + out + " —— " + msg)
           return
         }
@@ -1789,12 +2011,14 @@ fn run_chop(
         }
       }
       if back.length() != chopped.length() || bad > 0 || errors > 0 {
-        @fs.remove_file(out) catch {
-          _ => ()
-        }
-        fail_data("错误: 写出后自检失败，已删除 —— " + out)
+        restore_output(out, bak)
+        fail_data(
+          "错误: 写出后自检失败，已恢复原文件（若有）—— " +
+          out,
+        )
         return
       }
+      commit_output(bak)
       // 容器层已把粒度减去起点，这里直接用它当片段时长
       let last_g = back[back.length() - 1].granule_position
       let span = last_g
@@ -1825,6 +2049,7 @@ fn run_chop(
 /// 转码取每段的第一条可识别音频流；输入不是单流时先把这件事说清楚，
 /// 免得用户以为文件里的其余轨道也进了 WAV。
 fn run_towav(src : String, out : String, bits : Int32) -> Unit {
+  reject_same_path(src, out)
   match read_all(src) {
     None => ()
     Some(data) => {
@@ -1848,8 +2073,19 @@ fn run_towav(src : String, out : String, bits : Int32) -> Unit {
       match @pipeline.ogg_to_wav_pages_bits(pages, pcm_budget_bytes(), bits) {
         Err(msg) => fail_data("错误: 转码失败 —— " + msg)
         Ok(wav) => {
+          let bak = backup_output(out)
+          match bak {
+            Unavailable => {
+              fail(
+                "错误: 无法备份已有输出 " + out + "，拒绝覆盖",
+              )
+              return
+            }
+            _ => ()
+          }
           @fs.write_bytes_to_file(out, wav) catch {
             IOError(msg) => {
+              restore_output(out, bak)
               fail("错误: 无法写入 " + out + " —— " + msg)
               return
             }
@@ -1857,13 +2093,11 @@ fn run_towav(src : String, out : String, bits : Int32) -> Unit {
           // 回读一遍，确认产出的 WAV 能被子模块自己解析回来
           match @wav.WavFile::parse(wav) {
             None => {
-              @fs.remove_file(out) catch {
-                _ => ()
-              }
+              restore_output(out, bak)
               fail_data(
                 "错误: 已写出 " +
                 out +
-                "，但回读校验未通过，已删除",
+                "，但回读校验未通过，已恢复原文件（若有）",
               )
             }
             Some(f) =>
@@ -2002,9 +2236,11 @@ fn print_ogg_json(
   }
   // 每条流只取首个包（标识头），不重组整条流
   let heads : Array[Bytes?] = Array::make(serials.length(), None)
+  // 一次扫描取所有流的首包，避免「每流扫全部页」的 O(流数 × 页数)
+  let firsts = @ogg.first_packets(pages)
   let mut hi = 0
   while hi < serials.length() {
-    heads[hi] = @ogg.first_packet(pages, serials[hi])
+    heads[hi] = firsts.get(serials[hi])
     hi = hi + 1
   }
   let sb = StringBuilder()

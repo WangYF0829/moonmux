@@ -98,6 +98,11 @@ pub fn Page::parse(data : Bytes, offset : Int32) -> (Page, Int32)? {
   if !is_page_start(data, offset) {
     return None
   }
+  // RFC 3533 只定义 version 0。以前这里既不校验也不保存 version，
+  // 序列化时又硬写 0，于是「version 被改成 1」的文件 CRC 仍然全绿。
+  if data[offset + 4].to_int() != 0 {
+    return None
+  }
   let header_type = data[offset + 5]
   let granule_position = read_u64_le(data, offset + 6).reinterpret_as_int64()
   let serial = read_u32_le(data, offset + 14)

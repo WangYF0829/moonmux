@@ -208,7 +208,7 @@ fn first_packet_bytes(pages : Array[@ogg.Page], serial : UInt32) -> Bytes? {
 ///|
 /// 估算整份输出需要多少 16 位 PCM 字节：逐段按「末粒度 − 首粒度 − pre-skip」
 /// 乘声道数。复杂度 O(页数)，不解码、不重组。
-fn estimate_pcm_bytes(chains : Array[Array[@ogg.Page]]) -> Int64 {
+fn estimate_pcm_bytes(chains : Array[Array[@ogg.Page]], bits : Int32) -> Int64 {
   let mut total : Int64 = 0L
   for part in chains {
     // 找该段的第一条音频流：逐流取头部包解析
@@ -256,7 +256,9 @@ fn estimate_pcm_bytes(chains : Array[Array[@ogg.Page]]) -> Int64 {
     if samples <= 0L {
       continue
     }
-    let per_sample = channels.to_int64() * 2L
+    // 每样本字节数由位深决定：16 位是 2，24 位是 3；固定写 2 会让 24 位低估 1/3
+    let bytes_per_sample = if bits == 24 { 3L } else { 2L }
+    let per_sample = channels.to_int64() * bytes_per_sample
     // 乘法前检查：损坏的 granule（例如 INT64_MAX）会让乘法回绕成负数，
     // 上限就永远不触发 —— 直接当成「超限」处理。
     if per_sample <= 0L || samples > (9223372036854775807L - total) / per_sample {
@@ -309,7 +311,7 @@ pub fn ogg_to_wav_pages_bits(
     return Err("不是合法的 Ogg 文件（没有解析出任何页）")
   }
   let chains = @ogg.split_chains(pages)
-  let estimated = estimate_pcm_bytes(chains)
+  let estimated = estimate_pcm_bytes(chains, bits)
   if estimated > limit {
     // 估算函数在数值异常（粒度溢出）时返回 MAX+1 的哨兵值，
     // 直接打印会变成「预计 256 MiB 超过 256 MiB」这种自相矛盾的话。

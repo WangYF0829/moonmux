@@ -160,7 +160,7 @@ test "estimate pcm bytes from headers" {
   ]
   let pages = @ogg.paginate(packets, 1U)
   // (48000 - 0 - 312) × 2 声道 × 2 字节
-  assert_eq(estimate_pcm_bytes([pages]), (48000L - 312L) * 4L)
+  assert_eq(estimate_pcm_bytes([pages], 16), (48000L - 312L) * 4L)
 }
 
 ///|
@@ -194,7 +194,7 @@ test "an absurd granule cannot bypass the budget" {
   ]
   let pages = @ogg.paginate(packets, 1U)
   // 估算应当直接判为超限，而不是回绕成负数
-  assert_true(estimate_pcm_bytes([pages]) > 268435456L)
+  assert_true(estimate_pcm_bytes([pages], 16) > 268435456L)
 }
 
 ///|

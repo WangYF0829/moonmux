@@ -34,20 +34,17 @@ pub(all) struct LogicalStream {
 pub fn group_by_stream(packets : Array[Packet]) -> Array[LogicalStream] {
   let serials : Array[UInt32] = []
   let groups : Array[Array[Packet]] = []
+  // 流号 → 下标；逐包线性查在「很多流」的目录上会退化成 O(包数 × 流数)
+  let index_of : Map[UInt32, Int32] = Map([])
   for pkt in packets {
-    let mut found = -1
-    let mut i = 0
-    while i < serials.length() {
-      if serials[i] == pkt.serial {
-        found = i
+    match index_of.get(pkt.serial) {
+      Some(i) => groups[i].push(pkt)
+      None => {
+        let i = serials.length()
+        serials.push(pkt.serial)
+        groups.push([pkt])
+        index_of.set(pkt.serial, i)
       }
-      i = i + 1
-    }
-    if found < 0 {
-      serials.push(pkt.serial)
-      groups.push([pkt])
-    } else {
-      groups[found].push(pkt)
     }
   }
   let out : Array[LogicalStream] = []

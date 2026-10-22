@@ -73,7 +73,28 @@ pub fn chop_pages(
     j = j + 1
   }
   // 数据页：页的时间范围是 (上一页粒度, 本页粒度]
-  let mut prev = pages[first_audio - 1].granule_position
+  // first_audio 可能为 0（第一页就带粒度），此时没有「上一页」，起点按 0 算。
+  let mut prev = if first_audio > 0 {
+    pages[first_audio - 1].granule_position
+  } else {
+    0L
+  }
+  // 终点超过末粒度说明请求区间越界：截短后返回成功会让调用方以为拿到了完整区间
+  let mut stream_last = 0L
+  for p in pages {
+    if p.granule_position > stream_last {
+      stream_last = p.granule_position
+    }
+  }
+  if end > stream_last {
+    return Err(
+      "裁剪终点 " +
+      end.to_string() +
+      " 超过流的末粒度 " +
+      stream_last.to_string() +
+      "（按采样数计）",
+    )
+  }
   let mut kept = 0
   let mut skipping_partial = true
   let mut k = first_audio

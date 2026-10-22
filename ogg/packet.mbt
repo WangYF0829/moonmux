@@ -457,3 +457,58 @@ pub fn first_packet(pages : Array[Page], serial : UInt32) -> Bytes? {
   }
   None
 }
+
+///|
+/// 一次扫描取所有流的首包（标识头）。
+///
+/// `first_packet` 每调用一次都要从头扫全部页，按流逐个调用是 O(流数 × 页数)。
+/// 这里用「流号 → 状态」的 Map 控制推进：未开始 / 累积中 / 已完成 / 无效。
+pub fn first_packets(pages : Array[Page]) -> Map[UInt32, Bytes] {
+  let out : Map[UInt32, Bytes] = Map([])
+  let accs : Map[UInt32, Buffer] = Map([])
+  // 0 = 未开始，1 = 累积中，2 = 已完成，3 = 无效（首页 continued 或结构不符）
+  let state : Map[UInt32, Int32] = Map([])
+  for p in pages {
+    let st = match state.get(p.serial) {
+      Some(s) => s
+      None => 0
+    }
+    if st == 2 || st == 3 {
+      continue
+    }
+    if st == 0 {
+      if (p.header_type.to_int() & flag_continued().to_int()) != 0 {
+        state.set(p.serial, 3)
+        continue
+      }
+      accs.set(p.serial, Buffer())
+      state.set(p.serial, 1)
+    }
+    let acc = match accs.get(p.serial) {
+      Some(a) => a
+      None => {
+        state.set(p.serial, 3)
+        continue
+      }
+    }
+    let mut off = 0
+    let mut bad = false
+    for seg in p.segments {
+      if off + seg > p.payload.length() {
+        bad = true
+        break
+      }
+      acc.write_bytes(p.payload[off:off + seg])
+      off = off + seg
+      if seg < 255 {
+        out.set(p.serial, acc.to_bytes())
+        state.set(p.serial, 2)
+        break
+      }
+    }
+    if bad {
+      state.set(p.serial, 3)
+    }
+  }
+  out
+}

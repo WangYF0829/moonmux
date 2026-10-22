@@ -71,7 +71,7 @@ test "chop rejects a range without audio pages" {
   ]
   match chop_pages(pages, 1U, 5000L, 6000L) {
     Ok(_) => assert_true(false)
-    Err(msg) => assert_true(msg.contains("没有音频页"))
+    Err(msg) => assert_true(msg.contains("超过流的末粒度"))
   }
   match chop_pages(pages, 1U, 100L, 100L) {
     Ok(_) => assert_true(false)
@@ -116,7 +116,7 @@ test "chop drops a leading continued page" {
     chop_mk_page(b"b", 960L, 1U, 3U, flag_continued()),
     chop_mk_page(b"c", 1440L, 1U, 4U, flag_eos()),
   ]
-  let out = match chop_pages(pages, 1U, 500L, 2000L) {
+  let out = match chop_pages(pages, 1U, 500L, 1440L) {
     Ok(v) => v
     Err(msg) => abort(msg)
   }
@@ -124,4 +124,18 @@ test "chop drops a leading continued page" {
   assert_eq(out.length(), 3)
   assert_eq(out[2].granule_position, 940L) // 1440 - 500
   assert_true((out[2].header_type.to_int() & flag_eos().to_int()) != 0)
+}
+
+///|
+/// 终点超过末粒度：明确报错，避免「请求 2 秒、实际给 1 秒」的静默截短。
+test "chop rejects an end beyond the last granule" {
+  let pages : Array[Page] = [
+    chop_mk_page(b"head", 0L, 1U, 0U, flag_bos()),
+    chop_mk_page(b"tags", 0L, 1U, 1U, 0),
+    chop_mk_page(b"a", 960L, 1U, 2U, flag_eos()),
+  ]
+  match chop_pages(pages, 1U, 0L, 2000L) {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("超过流的末粒度"))
+  }
 }
