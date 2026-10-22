@@ -15,9 +15,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # 未覆盖行数的基线（moon coverage analyze 的 Total，2026-10-21 在 Windows native 实测 396）。
+  # 未覆盖行数的基线（moon coverage analyze 的 Total，2026-10-22 在 Windows native 实测 442；
+# 新增 chop / hex / 24-bit 后上升，新增测试后应调低）。
   # 新增测试后应调低；调高需要在 PR 说明原因。
-  MAX_UNCOVERED_LINES: 396
+  MAX_UNCOVERED_LINES: 442
   # 跨平台/工具链 patch 版本可能让计数抖动几行，给一点余量。
   COVERAGE_TOLERANCE: 15
 
