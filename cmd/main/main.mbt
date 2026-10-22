@@ -1777,7 +1777,7 @@ fn run_chop(
 /// 输入可能同时含多条逻辑流与多段链接流，而 WAV 里只装得下一条音轨。
 /// 转码取每段的第一条可识别音频流；输入不是单流时先把这件事说清楚，
 /// 免得用户以为文件里的其余轨道也进了 WAV。
-fn run_towav(src : String, out : String) -> Unit {
+fn run_towav(src : String, out : String, bits : Int32) -> Unit {
   match read_all(src) {
     None => ()
     Some(data) => {
@@ -1798,7 +1798,7 @@ fn run_towav(src : String, out : String) -> Unit {
           " 条逻辑流，只转码每段的第一条可识别音频流",
         )
       }
-      match @pipeline.ogg_to_wav_pages(pages, pcm_budget_bytes()) {
+      match @pipeline.ogg_to_wav_pages_bits(pages, pcm_budget_bytes(), bits) {
         Err(msg) => fail_data("错误: 转码失败 —— " + msg)
         Ok(wav) => {
           @fs.write_bytes_to_file(out, wav) catch {
@@ -1890,7 +1890,7 @@ fn main {
     @cli.Command::TagWrite(src, out, assigns) => run_tag(src, out, assigns)
     @cli.Command::Seek(path, ms, chain) => run_seek(path, ms, chain)
     @cli.Command::Verify(path) => run_verify(path)
-    @cli.Command::ToWav(src, out) => run_towav(src, out)
+    @cli.Command::ToWav(src, out, bits) => run_towav(src, out, bits)
     @cli.Command::Chop(src, out, start_ms, end_ms) =>
       run_chop(src, out, start_ms, end_ms)
     @cli.Command::Version => println(@moonmux.describe())

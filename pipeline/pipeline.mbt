@@ -50,10 +50,31 @@ fn write_i16_le(buf : Buffer, v : Int32) -> Unit {
 ///
 /// 夹住而不是回绕：解码器偶尔会给出略微越界的值（浮点误差），
 /// 回绕会让一个 1.0001 的样本变成满量程负值，听上去是一声爆音。
-fn write_sample(buf : Buffer, s : Double) -> Unit {
-  let v = (s * 32767.0).to_int()
-  let q = if v > 32767 { 32767 } else if v < -32768 { -32768 } else { v }
-  write_i16_le(buf, q)
+fn write_sample(buf : Buffer, s : Double, bits : Int32) -> Unit {
+  if bits == 24 {
+    let v = (s * 8388607.0).to_int()
+    let q = if v > 8388607 {
+      8388607
+    } else if v < -8388608 {
+      -8388608
+    } else {
+      v
+    }
+    write_i24_le(buf, q)
+  } else {
+    let v = (s * 32767.0).to_int()
+    let q = if v > 32767 { 32767 } else if v < -32768 { -32768 } else { v }
+    write_i16_le(buf, q)
+  }
+}
+
+///|
+/// 24 位小端：先折到 24 位无符号区间再拆三个字节（与 write_i16_le 同思路）。
+fn write_i24_le(buf : Buffer, v : Int32) -> Unit {
+  let u = if v < 0 { v + 16777216 } else { v }
+  buf.write_byte((u % 256).to_byte())
+  buf.write_byte((u / 256 % 256).to_byte())
+  buf.write_byte((u / 65536).to_byte())
 }
 
 ///|
@@ -274,6 +295,16 @@ pub fn ogg_to_wav_pages(
   pages : Array[@ogg.Page],
   limit : Int64,
 ) -> Result[Bytes, String] {
+  ogg_to_wav_pages_bits(pages, limit, 16)
+}
+
+///|
+/// 同 `ogg_to_wav_pages`，但从解码到量化都按 `bits`（16 或 24）输出。
+pub fn ogg_to_wav_pages_bits(
+  pages : Array[@ogg.Page],
+  limit : Int64,
+  bits : Int32,
+) -> Result[Bytes, String] {
   if pages.length() == 0 {
     return Err("不是合法的 Ogg 文件（没有解析出任何页）")
   }
@@ -315,7 +346,7 @@ pub fn ogg_to_wav_pages(
     let codec = target.1
     // 抽成独立的单流 Ogg 再交给解码器（见文件头说明）
     let one = @ogg.serialize_pages(@ogg.stream_pages(part, serial))
-    let decoded = match decode_stream(one, codec) {
+    let decoded = match decode_stream(one, codec, bits) {
       Ok(d) => d
       Err(msg) => return Err("第 " + (seg + 1).to_string() + " 段：" + msg)
     }
@@ -343,16 +374,24 @@ pub fn ogg_to_wav_pages(
   if channels == 0 || sample_rate == 0 {
     return Err("没有解出任何音频数据")
   }
-  let format : @wav.WavFormat = { channels, sample_rate, bits_per_sample: 16, }
+  let format : @wav.WavFormat = {
+    channels,
+    sample_rate,
+    bits_per_sample: bits,
+  }
   Ok(@wav.encode_wav(format, buf.to_bytes()))
 }
 
 ///|
 /// 按编码格式分派到对应的解码路径。
-fn decode_stream(data : Bytes, codec : Codec) -> Result[Pcm, String] {
+fn decode_stream(
+  data : Bytes,
+  codec : Codec,
+  bits : Int32,
+) -> Result[Pcm, String] {
   match codec {
-    Codec::Opus => opus_pcm(data)
-    Codec::Vorbis => vorbis_pcm(data)
+    Codec::Opus => opus_pcm(data, bits)
+    Codec::Vorbis => vorbis_pcm(data, bits)
   }
 }
 
@@ -361,13 +400,13 @@ fn decode_stream(data : Bytes, codec : Codec) -> Result[Pcm, String] {
 ///
 /// `moonopus` 输出 48 kHz 单声道 Double PCM —— Opus 的解码采样率固定为
 /// 48 kHz，与编码时的原始采样率无关（`input_sample_rate` 只是元数据）。
-fn opus_pcm(data : Bytes) -> Result[Pcm, String] {
+fn opus_pcm(data : Bytes, bits : Int32) -> Result[Pcm, String] {
   match @moonopus.decode_opus_pcm(data) {
     Err(e) => Err("Opus 解码失败：" + e)
     Ok(samples) => {
       let buf = Buffer()
       for s in samples {
-        write_sample(buf, s)
+        write_sample(buf, s, bits)
       }
       Ok({ channels: 1, sample_rate: 48000, data: buf.to_bytes(), })
     }
@@ -380,7 +419,7 @@ fn opus_pcm(data : Bytes) -> Result[Pcm, String] {
 /// `moonvorbis` 输出的 PCM 是**按声道分轨**的（每声道一个 Float 数组），
 /// 而 WAV 要求按帧交错，所以要在这里做一次转置。
 /// 采样率与声道数取自解码出的流信息，不写死 —— Vorbis 两者都是可变的。
-fn vorbis_pcm(data : Bytes) -> Result[Pcm, String] {
+fn vorbis_pcm(data : Bytes, bits : Int32) -> Result[Pcm, String] {
   match @moonvorbis.decode_ogg(data) {
     Err(e) => Err("Vorbis 解码失败：" + e)
     Ok(stream) => {
@@ -401,7 +440,7 @@ fn vorbis_pcm(data : Bytes) -> Result[Pcm, String] {
         let mut c = 0
         while c < channels {
           if c < pcm.length() && f < pcm[c].length() {
-            write_sample(buf, pcm[c][f].to_double())
+            write_sample(buf, pcm[c][f].to_double(), bits)
           } else {
             // 声道数据缺失时补静音，保持帧对齐
             write_i16_le(buf, 0)

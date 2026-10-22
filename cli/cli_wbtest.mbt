@@ -128,10 +128,19 @@ test "to-wav arity" {
     _ => assert_true(false)
   }
   match parse(["to-wav", "a.ogg", "b.wav"]) {
-    Command::ToWav(a, b) => {
+    Command::ToWav(a, b, bits) => {
       assert_eq(a, "a.ogg")
       assert_eq(b, "b.wav")
+      assert_eq(bits, 16)
     }
+    _ => assert_true(false)
+  }
+  match parse(["to-wav", "a.ogg", "b.wav", "24"]) {
+    Command::ToWav(_, _, bits) => assert_eq(bits, 24)
+    _ => assert_true(false)
+  }
+  match parse(["to-wav", "a.ogg", "b.wav", "32"]) {
+    Command::Bad(_, _) => assert_true(true)
     _ => assert_true(false)
   }
   match parse(["to-wav", "a.ogg", "b.wav", "c"]) {

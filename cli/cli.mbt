@@ -32,8 +32,8 @@ pub(all) enum Command {
   Seek(String, Int32, Int32)
   /// 逐页重算 CRC，报告通过率
   Verify(String)
-  /// 把 Ogg（Opus / Vorbis）转码为 WAV
-  ToWav(String, String)
+  /// 把 Ogg（Opus / Vorbis）转码为 WAV；第三个参数是位深（16 / 24）
+  ToWav(String, String, Int32)
   /// 按毫秒区间裁剪（页精度）：输入、输出、起、止
   Chop(String, String, Int32, Int32)
   /// 打印版本
@@ -65,7 +65,8 @@ pub fn usage() -> String {
   "  moonmux seek <file.ogg> <ms> [chain]\n" +
   "                                  按时间定位到页（可选：第几段物理流）\n" +
   "  moonmux verify <file.ogg>        结构体检（CRC / 页序号 / BOS·EOS）\n" +
-  "  moonmux to-wav <in.ogg> <out.wav> 转码为 WAV\n" +
+  "  moonmux to-wav <in.ogg> <out.wav> [16|24]\n" +
+  "                                  转码为 WAV，默认 16 位\n" +
   "  moonmux chop <in.ogg> <out.ogg> <起ms> <止ms>\n" +
   "                                  按时间裁剪（页精度，头页保留）\n" +
   "  moonmux version                  打印版本\n" +
@@ -112,7 +113,9 @@ pub fn usage_for(topic : String) -> String {
   } else if topic == "verify" {
     "用法: moonmux verify <file.ogg>"
   } else if topic == "to-wav" {
-    "用法: moonmux to-wav <in.ogg> <out.wav>"
+    "用法: moonmux to-wav <in.ogg> <out.wav> [16|24]\n" +
+    "  默认 16 位；24 位从解码器的浮点采样直接量化\n" +
+    "  PCM 预算由 MOONMUX_MAX_PCM_MB 控制（默认 256 MiB）"
   } else if topic == "chop" {
     "用法: moonmux chop <in.ogg> <out.ogg> <起ms> <止ms>\n" +
     "  页精度：保留与区间有交集的整页，两端可能各多出不到一页的音频\n" +
@@ -407,10 +410,25 @@ pub fn parse(args : Array[String]) -> Command {
         "to-wav 需要输入文件与输出文件",
         usage_for("to-wav"),
       )
-    } else if n > 2 {
-      Command::Bad(arity_msg("to-wav", n, 2), usage_for("to-wav"))
+    } else if n > 3 {
+      Command::Bad(arity_msg("to-wav", n, 3), usage_for("to-wav"))
     } else {
-      Command::ToWav(args[1], args[2])
+      let bits = if n == 3 {
+        match parse_uint(args[3]) {
+          Some(16) => 16
+          Some(24) => 24
+          _ =>
+            return Command::Bad(
+              "to-wav 的位深只支持 16 或 24，实际是「" +
+              args[3] +
+              "」",
+              usage_for("to-wav"),
+            )
+        }
+      } else {
+        16
+      }
+      Command::ToWav(args[1], args[2], bits)
     }
   } else if sub == "version" {
     if n > 0 {

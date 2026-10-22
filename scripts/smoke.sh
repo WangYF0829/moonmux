@@ -103,6 +103,9 @@ check $? "Opus → WAV（576044 字节）"
 "$BIN" to-wav testdata/vorbis_sample.ogg "$TMP/v.wav" >/dev/null 2>&1
 [ $? -eq 0 ] && [ "$(wc -c < "$TMP/v.wav")" -eq 176444 ]
 check $? "Vorbis → WAV（176444 字节）"
+"$BIN" to-wav testdata/opus_sample.opus "$TMP/o24.wav" 24 >/dev/null 2>&1
+[ $? -eq 0 ] && [ "$(wc -c < "$TMP/o24.wav")" -eq 864044 ]
+check $? "Opus → WAV 24 位（864044 字节）"
 
 echo "== 4c. 裁剪 =="
 "$BIN" chop testdata/opus_sample.opus "$TMP/chop.ogg" 1000 3000 >/dev/null 2>&1

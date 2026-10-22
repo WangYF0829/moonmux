@@ -196,3 +196,19 @@ test "an absurd granule cannot bypass the budget" {
   // 估算应当直接判为超限，而不是回绕成负数
   assert_true(estimate_pcm_bytes([pages]) > 268435456L)
 }
+
+///|
+/// 24 位量化：满量程夹住、负值写补码、三个字节小端。
+test "24-bit sample writer clamps and packs three bytes" {
+  let buf = Buffer()
+  write_sample(buf, 1.0, 24) // 0x7FFFFF
+  write_sample(buf, -1.0, 24) // -8388607 -> 0x800001
+  write_sample(buf, 0.0, 24) // 0
+  write_sample(buf, 2.0, 24) // 夹到 0x7FFFFF
+  let b = buf.to_bytes()
+  assert_eq(b.length(), 12)
+  assert_eq([b[0], b[1], b[2]], [0xFF, 0xFF, 0x7F].map(fn(x) { x.to_byte() }))
+  assert_eq([b[3], b[4], b[5]], [0x01, 0x00, 0x80].map(fn(x) { x.to_byte() }))
+  assert_eq([b[6], b[7], b[8]], [0x00, 0x00, 0x00].map(fn(x) { x.to_byte() }))
+  assert_eq([b[9], b[10], b[11]], [0xFF, 0xFF, 0x7F].map(fn(x) { x.to_byte() }))
+}
