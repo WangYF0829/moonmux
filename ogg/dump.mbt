@@ -161,3 +161,57 @@ pub fn for_each_page_line(pages : Array[Page], emit : (String) -> Unit) -> Unit 
     i = i + 1
   }
 }
+
+///|
+/// 按 xxd 的排版输出十六进制：`00000000: 4f67 6753 ...`。
+///
+/// 每行 16 字节、两字节一组，偏移是全局的 —— 直接 `xxd -r` 就能还原成原文件。
+/// 用回调而不是先攒数组：百万页的文件不该在内存里多一份十六进制文本。
+pub fn for_each_hex_line(bytes : Bytes, emit : (String) -> Unit) -> Unit {
+  let mut offset = 0
+  while offset < bytes.length() {
+    let mut line = pad_hex(offset, 8) + ": "
+    let mut i = 0
+    while i < 16 {
+      if offset + i < bytes.length() {
+        line = line + hex_byte(bytes[offset + i])
+        // 每两个字节加一个空格，读起来与 xxd 一致
+        if i % 2 == 1 {
+          line = line + " "
+        }
+      } else {
+        line = line + "  "
+        if i % 2 == 1 {
+          line = line + " "
+        }
+      }
+      i = i + 1
+    }
+    emit(line)
+    offset = offset + 16
+  }
+}
+
+///|
+/// 小写十六进制，固定宽度（不足左侧补 0）。
+fn pad_hex(n : Int32, width : Int32) -> String {
+  let digits = "0123456789abcdef"
+  let mut out = ""
+  let mut shift = (width - 1) * 4
+  while shift >= 0 {
+    let d = (n >> shift) & 0xF
+    out = out + digits[d:d + 1].to_owned()
+    shift = shift - 4
+  }
+  out
+}
+
+///|
+/// 一个字节的两位十六进制。
+fn hex_byte(b : Byte) -> String {
+  let digits = "0123456789abcdef"
+  let v = b.to_int()
+  let hi = (v >> 4) & 0xF
+  let lo = v & 0xF
+  digits[hi:hi + 1].to_owned() + digits[lo:lo + 1].to_owned()
+}

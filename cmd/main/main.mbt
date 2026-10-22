@@ -1092,7 +1092,7 @@ fn run_extract(src : String, index : Int32, out : String) -> Unit {
 /// `info` 给汇总、`verify` 给结论，这张表给的是**页本身长什么样** ——
 /// `verify` 报出「serial=2 页序号从 202 跳到 204」之后，
 /// 要接着看的就是 200 号附近那几页。偏移列可以直接和十六进制编辑器对照。
-fn run_dump(path : String) -> Unit {
+fn run_dump(path : String, hex : Bool) -> Unit {
   match read_all(path) {
     None => ()
     Some(data) => {
@@ -1102,6 +1102,11 @@ fn run_dump(path : String) -> Unit {
         return
       }
       println("文件: " + path)
+      if hex {
+        // 十六进制直接照抄整份文件，便于与 xxd 对拍 / 还原
+        @ogg.for_each_hex_line(data, fn(line) { println(line) })
+        return
+      }
       println("页数: " + pages.length().to_string())
       // dump 用严格解析（遇到坏页即停）：这里不静默少给，明说到底读了多少
       let consumed = {
@@ -1880,7 +1885,7 @@ fn main {
     @cli.Command::Cat(inputs, out) => run_cat(inputs, out)
     @cli.Command::Split(src, dir) => run_split(src, dir)
     @cli.Command::Extract(src, index, out) => run_extract(src, index, out)
-    @cli.Command::Dump(path) => run_dump(path)
+    @cli.Command::Dump(path, hex) => run_dump(path, hex)
     @cli.Command::Tags(path) => run_tags(path)
     @cli.Command::TagWrite(src, out, assigns) => run_tag(src, out, assigns)
     @cli.Command::Seek(path, ms, chain) => run_seek(path, ms, chain)

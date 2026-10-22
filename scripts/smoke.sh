@@ -114,6 +114,9 @@ check $? "chop 结果通过 verify"
 [ $? -eq 1 ]
 check $? "chop 越界区间报数据错误（1）"
 
+"$BIN" dump testdata/opus_sample.opus --hex | head -1 | grep -q '^00000000: 4f67 6753'
+check $? "dump --hex 首行与 xxd 兼容"
+
 echo "== 5. 定位 =="
 "$BIN" seek testdata/opus_sample.opus 2500 >/dev/null 2>&1
 check $? "seek 正常工作"

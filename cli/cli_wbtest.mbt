@@ -282,7 +282,21 @@ test "dump arity" {
     _ => assert_true(false)
   }
   match parse(["dump", "a.ogg"]) {
-    Command::Dump(p) => assert_eq(p, "a.ogg")
+    Command::Dump(p, hex) => {
+      assert_eq(p, "a.ogg")
+      assert_false(hex)
+    }
+    _ => assert_true(false)
+  }
+  match parse(["dump", "a.ogg", "--hex"]) {
+    Command::Dump(p, hex) => {
+      assert_eq(p, "a.ogg")
+      assert_true(hex)
+    }
+    _ => assert_true(false)
+  }
+  match parse(["dump", "a.ogg", "--bogus"]) {
+    Command::Bad(_, _) => assert_true(true)
     _ => assert_true(false)
   }
   match parse(["dump", "a.ogg", "b.ogg"]) {

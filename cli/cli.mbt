@@ -22,8 +22,8 @@ pub(all) enum Command {
   Split(String, String)
   /// 抽出第 n 条逻辑流，写成独立的 Ogg 文件
   Extract(String, Int32, String)
-  /// 转储页级结构
-  Dump(String)
+  /// 转储页级结构；第二个参数为真时输出十六进制（xxd 兼容）
+  Dump(String, Bool)
   /// 列出注释（vendor + KEY=VALUE）
   Tags(String)
   /// 改写注释并写入新文件（KEY= 表示删除该键）
@@ -58,7 +58,7 @@ pub fn usage() -> String {
   "  moonmux split <file.ogg> <dir>   把链接流按链接点拆开（输出 part1/2…）\n" +
   "  moonmux extract <file.ogg> <n> <out.ogg>\n" +
   "                                  抽出第 n 条逻辑流（序号见 info）\n" +
-  "  moonmux dump <file.ogg>          转储页级结构（偏移/流号/页序/粒度/标志）\n" +
+  "  moonmux dump <file.ogg> [--hex]  转储页级结构；--hex 输出十六进制（xxd 兼容）\n" +
   "  moonmux tags <file.ogg>          列出注释（vendor + KEY=VALUE）\n" +
   "  moonmux tag <in.ogg> <out.ogg> KEY=VALUE ...\n" +
   "                                  改写注释，未指定的键原样保留；KEY= 表示删除\n" +
@@ -95,8 +95,9 @@ pub fn usage_for(topic : String) -> String {
     "  <n> 是 1 起算的逻辑流序号，与 info 列出的顺序一致\n" +
     "  抽出的文件与该流在输入里的那几页逐字节相同"
   } else if topic == "dump" {
-    "用法: moonmux dump <file.ogg>\n" +
-    "  逐页列出偏移、流号、页序、粒度位置、头标志、段数与负载字节"
+    "用法: moonmux dump <file.ogg> [--hex]\n" +
+    "  默认打印页表：偏移 / 流号 / 页序 / 粒度 / 标志 / 段数 / 负载\n" +
+    "  --hex 输出整文件的十六进制（每行 16 字节，偏移与 xxd 一致，可用 xxd -r 还原）"
   } else if topic == "tags" {
     "用法: moonmux tags <file.ogg>"
   } else if topic == "tag" {
@@ -271,10 +272,18 @@ pub fn parse(args : Array[String]) -> Command {
   } else if sub == "dump" {
     if n < 1 {
       Command::Bad("dump 需要一个 Ogg 文件路径", usage_for("dump"))
-    } else if n > 1 {
-      Command::Bad(arity_msg("dump", n, 1), usage_for("dump"))
+    } else if n > 2 {
+      Command::Bad(
+        "dump 至多接受 文件路径 与 --hex",
+        usage_for("dump"),
+      )
+    } else if n == 2 && args[2] != "--hex" {
+      Command::Bad(
+        "dump 只认识 --hex，实际是「" + args[2] + "」",
+        usage_for("dump"),
+      )
     } else {
-      Command::Dump(args[1])
+      Command::Dump(args[1], n == 2)
     }
   } else if sub == "tags" {
     if n < 1 {
