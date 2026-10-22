@@ -1101,12 +1101,12 @@ fn run_dump(path : String, hex : Bool) -> Unit {
         fail_data("错误: 不是合法的 Ogg 文件 —— " + path)
         return
       }
-      println("文件: " + path)
       if hex {
-        // 十六进制直接照抄整份文件，便于与 xxd 对拍 / 还原
+        // 纯十六进制、不带任何前缀：`dump --hex | xxd -r` 可直接还原
         @ogg.for_each_hex_line(data, fn(line) { println(line) })
         return
       }
+      println("文件: " + path)
       println("页数: " + pages.length().to_string())
       // dump 用严格解析（遇到坏页即停）：这里不静默少给，明说到底读了多少
       let consumed = {
