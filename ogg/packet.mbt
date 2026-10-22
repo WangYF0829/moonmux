@@ -20,19 +20,6 @@ pub(all) struct Packet {
 }
 
 ///|
-/// 查找逻辑流序号在 `serials` 中的下标；未出现过返回 -1。
-fn serial_index(serials : Array[UInt32], s : UInt32) -> Int32 {
-  let mut i = 0
-  while i < serials.length() {
-    if serials[i] == s {
-      return i
-    }
-    i = i + 1
-  }
-  -1
-}
-
-///|
 /// 把一列页重组成包。
 ///
 /// 仅做重组，不做校验。两条不变量：
@@ -47,14 +34,18 @@ pub fn reassemble(pages : Array[Page]) -> Array[Packet] {
   let packets : Array[Packet] = []
   let serials : Array[UInt32] = []
   let accs : Array[Buffer] = []
+  // 流号 → 累加器下标：逐页线性查流号在「每页一个新流号」的损坏文件上是 O(n²)
+  let acc_index : Map[UInt32, Int32] = Map([])
   for page in pages {
-    let idx = serial_index(serials, page.serial)
-    let ai = if idx >= 0 {
-      idx
-    } else {
-      serials.push(page.serial)
-      accs.push(Buffer())
-      serials.length() - 1
+    let ai = match acc_index.get(page.serial) {
+      Some(i) => i
+      None => {
+        serials.push(page.serial)
+        accs.push(Buffer())
+        let idx = serials.length() - 1
+        acc_index.set(page.serial, idx)
+        idx
+      }
     }
     let acc = accs[ai]
     // 段表各项之和必须恰好等于负载长度 —— Page::parse 产出的页天然满足，

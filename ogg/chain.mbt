@@ -30,10 +30,17 @@ fn has_serial(serials : Array[UInt32], s : UInt32) -> Bool {
 ///
 /// 这个顺序也是各流 BOS 页的先后顺序。
 pub fn serials_of(pages : Array[Page]) -> Array[UInt32] {
+  // 用 Map 而不是逐页线性查重：一个每页换流号的损坏文件会让线性版本退化成 O(n²)
+  // （实测 4 万页 6 秒），而这里只需要按首次出现顺序收集。
+  let seen : Map[UInt32, Bool] = Map([])
   let serials : Array[UInt32] = []
   for p in pages {
-    if !has_serial(serials, p.serial) {
-      serials.push(p.serial)
+    match seen.get(p.serial) {
+      Some(_) => ()
+      None => {
+        seen.set(p.serial, true)
+        serials.push(p.serial)
+      }
     }
   }
   serials
@@ -179,6 +186,9 @@ pub fn split_chains(pages : Array[Page]) -> Array[Array[Page]] {
   // 软警告，损坏文件反而通过了体检。
   let mut seen : Array[UInt32] = []
   let mut closed : Array[UInt32] = []
+  // 与数组并行的集合：数组只用来取数量，成员判断走 Map，避免 O(n²)
+  let mut seen_set : Map[UInt32, Bool] = Map([])
+  let mut closed_set : Map[UInt32, Bool] = Map([])
   for page in pages {
     if is_bos(page) && saw_plain && seen.length() == closed.length() {
       chains.push(current)
@@ -186,15 +196,27 @@ pub fn split_chains(pages : Array[Page]) -> Array[Array[Page]] {
       saw_plain = false
       seen = []
       closed = []
+      seen_set = Map([])
+      closed_set = Map([])
     }
     if !is_bos(page) {
       saw_plain = true
     }
-    if !has_serial(seen, page.serial) {
-      seen.push(page.serial)
+    match seen_set.get(page.serial) {
+      Some(_) => ()
+      None => {
+        seen_set.set(page.serial, true)
+        seen.push(page.serial)
+      }
     }
-    if is_eos(page) && !has_serial(closed, page.serial) {
-      closed.push(page.serial)
+    if is_eos(page) {
+      match closed_set.get(page.serial) {
+        Some(_) => ()
+        None => {
+          closed_set.set(page.serial, true)
+          closed.push(page.serial)
+        }
+      }
     }
     current.push(page)
   }

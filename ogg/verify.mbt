@@ -67,18 +67,19 @@ pub fn structure_findings(pages : Array[Page]) -> Array[Finding] {
   let chains = split_chains(pages)
   // 跨段流号重复是硬错误（RFC 3533 §4：同一物理流内必须全局唯一）。
   // 读取端会把两段当成同一条流，页序号与包都错乱。
-  let seen : Array[UInt32] = []
+  // 跨段判重同样走 Map：逐条线性查在「每页换流号」的损坏文件上是 O(n²)
+  let seen : Map[UInt32, Bool] = Map([])
   for chain in chains {
     for s in serials_of(chain) {
-      if has_serial(seen, s) {
-        findings.push({
-          severity: Severity::Error,
-          message: "serial=" +
-          s.to_string() +
-          " 在多段物理流中重复（RFC 3533 §4 要求全局唯一）",
-        })
-      } else {
-        seen.push(s)
+      match seen.get(s) {
+        Some(_) =>
+          findings.push({
+            severity: Severity::Error,
+            message: "serial=" +
+            s.to_string() +
+            " 在多段物理流中重复（RFC 3533 §4 要求全局唯一）",
+          })
+        None => seen.set(s, true)
       }
     }
   }
@@ -94,6 +95,7 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
   // 按流分组（保持首次出现顺序），记录各流页下标
   let serials : Array[UInt32] = []
   let members : Array[Array[Int32]] = []
+  let index_of : Map[UInt32, Int32] = Map([])
   let mut i = 0
   while i < pages.length() {
     let page = pages[i]
@@ -145,19 +147,14 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
         "（应为 -1）",
       })
     }
-    let mut idx = -1
-    let mut j = 0
-    while j < serials.length() {
-      if serials[j] == page.serial {
-        idx = j
+    match index_of.get(page.serial) {
+      Some(j) => members[j].push(i)
+      None => {
+        let j = serials.length()
+        serials.push(page.serial)
+        members.push([i])
+        index_of.set(page.serial, j)
       }
-      j = j + 1
-    }
-    if idx < 0 {
-      serials.push(page.serial)
-      members.push([i])
-    } else {
-      members[idx].push(i)
     }
     i = i + 1
   }
