@@ -491,3 +491,61 @@ test "sized pagination keeps unknown granules as minus one" {
   let restored = reassemble(parse_pages(serialize_pages(pages)))
   assert_eq(restored.length(), 2)
 }
+
+///|
+/// 包数按「段 < 255」计数，不需要重组。
+test "count_packets counts packet ends in the segment table" {
+  let a = chop_mk_page(b"abc", 0L, 1U, 0U, flag_bos())
+  let multi : Page = {
+    header_type: 0,
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 1U,
+    crc: 0U,
+    segments: [255, 10],
+    payload: Bytes::make(265, b'\x00'),
+  }
+  let two : Page = {
+    header_type: 0,
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 2U,
+    crc: 0U,
+    segments: [10, 10],
+    payload: Bytes::make(20, b'\x00'),
+  }
+  assert_eq(count_packets([a]), 1)
+  assert_eq(count_packets([multi]), 1)
+  assert_eq(count_packets([two]), 2)
+}
+
+///|
+/// 首包跨页时要把两页拼起来；首页 continued 则返回 None。
+test "first_packet reassembles across a page boundary" {
+  let p0 : Page = {
+    header_type: flag_bos(),
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [255],
+    payload: Bytes::make(255, b'\x01'),
+  }
+  let p1 : Page = {
+    header_type: flag_continued(),
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 1U,
+    crc: 0U,
+    segments: [5],
+    payload: Bytes::make(5, b'\x02'),
+  }
+  match first_packet([p0, p1], 1U) {
+    Some(pkt) => assert_eq(pkt.length(), 260)
+    None => assert_true(false)
+  }
+  match first_packet([p1], 1U) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+}

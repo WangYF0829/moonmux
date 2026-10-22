@@ -155,9 +155,8 @@ fn show_ogg_info(path : String, data : Bytes, json : Bool) -> Unit {
     fail_data("错误: 不是合法的 Ogg 文件 —— " + path)
     return
   }
-  let packets = @ogg.reassemble(pages)
   if json {
-    print_ogg_json(path, data, pages, packets)
+    print_ogg_json(path, data, pages)
     return
   }
   let consumed = {
@@ -171,7 +170,7 @@ fn show_ogg_info(path : String, data : Bytes, json : Bool) -> Unit {
   println("格式:   Ogg")
   println("字节数: " + data.length().to_string())
   println("页数:   " + pages.length().to_string())
-  println("包数:   " + packets.length().to_string())
+  println("包数:   " + @ogg.count_packets(pages).to_string())
   if consumed < data.length() {
     println(
       "注意:   只解析到偏移 " +
@@ -216,16 +215,12 @@ fn show_ogg_info(path : String, data : Bytes, json : Bool) -> Unit {
     }
   }
   // 每条流的首个包（标识头）：同样一趟扫描，取首次出现
+  // 每条流只取首个包（标识头），不重组整条流
   let heads : Array[Bytes?] = Array::make(serials.length(), None)
-  for pkt in packets {
-    match index_of.get(pkt.serial) {
-      Some(idx) =>
-        match heads[idx] {
-          None => heads[idx] = Some(pkt.data)
-          Some(_) => ()
-        }
-      None => ()
-    }
+  let mut hi = 0
+  while hi < serials.length() {
+    heads[hi] = @ogg.first_packet(pages, serials[hi])
+    hi = hi + 1
   }
   let mut si = 0
   while si < serials.length() {
@@ -1975,7 +1970,6 @@ fn print_ogg_json(
   path : String,
   data : Bytes,
   pages : Array[@ogg.Page],
-  packets : Array[@ogg.Packet],
 ) -> Unit {
   let chains = @ogg.split_chains(pages)
   let serials = @ogg.serials_of(pages)
@@ -2006,16 +2000,12 @@ fn print_ogg_json(
       None => ()
     }
   }
+  // 每条流只取首个包（标识头），不重组整条流
   let heads : Array[Bytes?] = Array::make(serials.length(), None)
-  for pkt in packets {
-    match index_of.get(pkt.serial) {
-      Some(idx) =>
-        match heads[idx] {
-          None => heads[idx] = Some(pkt.data)
-          Some(_) => ()
-        }
-      None => ()
-    }
+  let mut hi = 0
+  while hi < serials.length() {
+    heads[hi] = @ogg.first_packet(pages, serials[hi])
+    hi = hi + 1
   }
   let sb = StringBuilder()
   sb.write_stringview("{\"file\":")
@@ -2025,7 +2015,7 @@ fn print_ogg_json(
   sb.write_stringview(",\"pages\":")
   sb.write_stringview(pages.length().to_string())
   sb.write_stringview(",\"packets\":")
-  sb.write_stringview(packets.length().to_string())
+  sb.write_stringview(@ogg.count_packets(pages).to_string())
   sb.write_stringview(",\"chains\":")
   sb.write_stringview(chains.length().to_string())
   sb.write_stringview(",\"streams\":[")

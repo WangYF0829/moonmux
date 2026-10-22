@@ -74,7 +74,8 @@ moon add WangYF0829/moonmux
 | chained 拆分 | 整段都由单页流组成时无法拆分 | 与「一段内交织两条单页流」字节相同，规格上不可判定（保守不切） |
 | 裁剪流时长 | 上界 | 容器层拿不到首个音频页的样本数，精确值需解码 |
 
-内存量级：所有命令都整文件读入（约 1–2× 文件大小）；`cat`/`mux` 写出时再加一份输出副本（实测 3.7×）；`to-wav` 还要叠加解码器的 Double PCM（约 4–5× 输出）。
+内存量级（实测，19 MB / 300 段输入）：`info` 约 2.5×、`verify` 约 2.6×、`cat`/`mux` 约 3.5×；
+`to-wav` 还要叠加解码器的 Double PCM（约 4–5× 输出）。所有命令整文件读入，没有流式写接口。
 
 ## 构建与测试
 
@@ -107,11 +108,13 @@ moon test
 #   WAV：声道、采样率、位深、PCM 字节数、帧数与时长
 moonmux info input.ogg
 moonmux info input.wav
+moonmux info input.ogg --json    # 单行 JSON，便于脚本处理
 #   注：时长为「末粒度 − 首粒度 − pre-skip」，对裁剪过的流是上界（见 docs/design.md）
 
 # 结构体检：逐页 CRC + 页序号连续性 + BOS / EOS 完备性 + 段表一致性
 #   用于判断文件是容器损坏还是编码问题，并给出损坏的具体位置
 moonmux verify input.ogg
+moonmux verify input.ogg --json  # 完整 findings（文本只铺前 10 条）
 
 # 解复用：按逻辑流拆出包，每条流一个子目录（s1/、s2/……）
 moonmux demux input.ogg ./packets/
@@ -134,6 +137,7 @@ moonmux extract input.ogg 2 single.ogg
 
 # 页级转储：偏移 / 流号 / 页序 / 粒度 / 标志 / 段数 / 负载
 moonmux dump input.ogg
+moonmux dump input.ogg --hex     # xxd 兼容，可 `| xxd -r` 还原
 
 # 注释：读取与改写（KEY= 表示删除该键）
 moonmux tags input.ogg
@@ -144,8 +148,12 @@ moonmux tag input.ogg tagged.ogg TITLE=月光 ARTIST=王轶凡
 moonmux seek input.ogg 2500
 moonmux seek chained.ogg 500 2
 
-# 转码：Ogg（Opus / Vorbis）→ WAV（16 位 PCM）
+# 转码：Ogg（Opus / Vorbis）→ WAV；默认 16 位，可选 24 位
 moonmux to-wav input.ogg output.wav
+moonmux to-wav input.ogg output24.wav 24
+
+# 裁剪：按毫秒区间裁剪（页精度，头页保留，时间轴归零）
+moonmux chop input.ogg clip.ogg 1000 3000
 ```
 
 构建命令行工具需要 native 后端（MSVC）：
@@ -212,11 +220,11 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测），
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` 十三个子命令，
-204 个测试（native；wasm-gc 193，cmd/main 只支持 native）通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+206 个测试（native；wasm-gc 195，cmd/main 只支持 native）通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）与转码验证。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`wasm-gc` 与 `native` 双后端
-204 个测试（native；wasm-gc 193，cmd/main 只支持 native）、35 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI（ubuntu + windows 矩阵，
+206 个测试（native；wasm-gc 195，cmd/main 只支持 native）、35 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI（ubuntu + windows 矩阵，
 外加覆盖率非回归门禁与 native 冒烟）。
 变更记录见 `CHANGELOG.md`，协作约定见 `AGENTS.md`，开发过程与取舍见 `docs/开发历程.md`。
 

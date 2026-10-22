@@ -24,14 +24,15 @@ fi
 mkdir -p _build
 # 被强制中断（SIGKILL / 终端关闭）或 Windows 句柄延迟时 trap 可能失败；
 # 清掉 5 分钟前的遗留（一次冒烟约 100 秒（含 Vorbis 转码），不会误删并发实例）。
-find _build -maxdepth 1 -type d -name 'smoke.*' -mmin +5 -exec rm -rf {} + 2>/dev/null || true
+find _build -maxdepth 1 -type d -name 'smoke.*' -mmin +1 -exec rm -rf {} + 2>/dev/null || true
 TMP="$(mktemp -d -p _build smoke.XXXXXX)"
 # Windows 上文件句柄释放有延迟，rm -rf 可能第一次删不干净；
 # 重试几次，失败也不影响检查结果（下次运行前的陈旧目录清理会兜底）。
 cleanup() {
   # Windows 上文件句柄释放有延迟：多试几次，仍失败就留一句提示
   # （目录在 _build/ 内，下一次运行前的陈旧清理会兜底）。
-  for _ in 1 2 3 4 5; do
+  # 2544 个文件的目录在 Windows 上删除本身要几秒，重试要给足时间
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
     rm -rf "$TMP" 2>/dev/null
     [ -d "$TMP" ] || return 0
     sleep 0.5

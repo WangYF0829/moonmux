@@ -416,3 +416,53 @@ pub fn paginate_sized(
   }
   out
 }
+
+///|
+/// 数包数而不重组：段表里每个小于 255 的段就是一次包结束。
+///
+/// `reassemble` 会把每个包复制一份，`info` 只需要数字时没必要付这份代价。
+pub fn count_packets(pages : Array[Page]) -> Int32 {
+  let mut n = 0
+  for p in pages {
+    for s in p.segments {
+      if s < 255 {
+        n = n + 1
+      }
+    }
+  }
+  n
+}
+
+///|
+/// 取某条逻辑流的第一个包（标识头），跨页时继续拼接。
+///
+/// 只读该流的前几页，不重组整条流；首页带 continued 标志说明包的开头不在文件里，
+/// 直接返回 None（调用方不该拿半个头去解析）。
+pub fn first_packet(pages : Array[Page], serial : UInt32) -> Bytes? {
+  let buf = Buffer()
+  let mut found = false
+  for p in pages {
+    if p.serial != serial {
+      continue
+    }
+    if !found {
+      if (p.header_type.to_int() & flag_continued().to_int()) != 0 {
+        return None
+      }
+      found = true
+    }
+    let mut off = 0
+    for s in p.segments {
+      let len = s
+      if off + len > p.payload.length() {
+        return None
+      }
+      buf.write_bytes(p.payload[off:off + len])
+      off = off + len
+      if s < 255 {
+        return Some(buf.to_bytes())
+      }
+    }
+  }
+  None
+}
