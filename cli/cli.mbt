@@ -34,6 +34,8 @@ pub(all) enum Command {
   Verify(String)
   /// 把 Ogg（Opus / Vorbis）转码为 WAV
   ToWav(String, String)
+  /// 按毫秒区间裁剪（页精度）：输入、输出、起、止
+  Chop(String, String, Int32, Int32)
   /// 打印版本
   Version
   /// 打印总用法
@@ -64,6 +66,8 @@ pub fn usage() -> String {
   "                                  按时间定位到页（可选：第几段物理流）\n" +
   "  moonmux verify <file.ogg>        结构体检（CRC / 页序号 / BOS·EOS）\n" +
   "  moonmux to-wav <in.ogg> <out.wav> 转码为 WAV\n" +
+  "  moonmux chop <in.ogg> <out.ogg> <起ms> <止ms>\n" +
+  "                                  按时间裁剪（页精度，头页保留）\n" +
   "  moonmux version                  打印版本\n" +
   "  moonmux help                     显示本帮助"
 }
@@ -108,6 +112,11 @@ pub fn usage_for(topic : String) -> String {
     "用法: moonmux verify <file.ogg>"
   } else if topic == "to-wav" {
     "用法: moonmux to-wav <in.ogg> <out.wav>"
+  } else if topic == "chop" {
+    "用法: moonmux chop <in.ogg> <out.ogg> <起ms> <止ms>\n" +
+    "  页精度：保留与区间有交集的整页，两端可能各多出不到一页的音频\n" +
+    "  头页（OpusHead/OpusTags、Vorbis 三头）整段保留；粒度值保持原样\n" +
+    "  只支持单段、单逻辑流；链接流请先 split，多流请先 extract"
   } else if topic == "version" {
     "用法: moonmux version"
   } else if topic == "help" {
@@ -348,6 +357,40 @@ pub fn parse(args : Array[String]) -> Command {
       Command::Bad(arity_msg("verify", n, 1), usage_for("verify"))
     } else {
       Command::Verify(args[1])
+    }
+  } else if sub == "chop" {
+    if n < 4 {
+      Command::Bad(
+        "chop 需要 输入 / 输出 / 起点毫秒 / 终点毫秒 四个参数",
+        usage_for("chop"),
+      )
+    } else if n > 4 {
+      Command::Bad(arity_msg("chop", n, 4), usage_for("chop"))
+    } else {
+      match (parse_uint(args[3]), parse_uint(args[4])) {
+        (Some(a), Some(b)) =>
+          if b <= a {
+            Command::Bad(
+              "chop 的终点必须大于起点（" +
+              a.to_string() +
+              " ms / " +
+              b.to_string() +
+              " ms）",
+              usage_for("chop"),
+            )
+          } else {
+            Command::Chop(args[1], args[2], a, b)
+          }
+        _ =>
+          Command::Bad(
+            "chop 的起止必须是毫秒整数，实际是「" +
+            args[3] +
+            "」「" +
+            args[4] +
+            "」",
+            usage_for("chop"),
+          )
+      }
     }
   } else if sub == "to-wav" {
     if n < 2 {

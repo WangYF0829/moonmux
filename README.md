@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml/badge.svg)](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-196%20passing-brightgreen.svg)](#构建与测试)
+[![Tests](https://img.shields.io/badge/tests-200%20passing-brightgreen.svg)](#构建与测试)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](CHANGELOG.md)
 
 纯 MoonBit 实现的音频容器工具包，补上 MoonBit 生态中「能解码、不能封装」的最后一环。
@@ -61,7 +61,7 @@ moon add WangYF0829/moonmux
 
 脚本与 CI 可直接据此判断，不必 grep 中文输出。
 
-**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（28 项，覆盖往返、退出码、截断与清单异常）。
+**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（31 项，覆盖往返、退出码、截断与清单异常）。
 
 ## 能力边界
 
@@ -205,12 +205,12 @@ moonmux/
 
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测），
-`info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` 十二个子命令，
-196 个测试（native；wasm-gc 186，cmd/main 只支持 native）通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+`info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` 十三个子命令，
+200 个测试（native；wasm-gc 190，cmd/main 只支持 native）通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）与转码验证。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`wasm-gc` 与 `native` 双后端
-196 个测试（native；wasm-gc 186，cmd/main 只支持 native）、28 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI（ubuntu + windows 矩阵，
+200 个测试（native；wasm-gc 190，cmd/main 只支持 native）、31 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI（ubuntu + windows 矩阵，
 外加覆盖率非回归门禁与 native 冒烟）。
 变更记录见 `CHANGELOG.md`，协作约定见 `AGENTS.md`，开发过程与取舍见 `docs/开发历程.md`。
 

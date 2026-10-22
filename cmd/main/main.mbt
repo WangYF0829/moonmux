@@ -1656,6 +1656,113 @@ fn budget_from_text(v : String) -> Int64 {
 }
 
 ///|
+/// 调容器层的 chop；失败时按「用法/数据」分流退出。
+/// 末尾的空数组不可达（fail 直接退出），只为满足类型。
+fn chop_or_exit(
+  pages : Array[@ogg.Page],
+  serial : UInt32,
+  start : Int64,
+  end : Int64,
+) -> Array[@ogg.Page] {
+  match @ogg.chop_pages(pages, serial, start, end) {
+    Ok(v) => v
+    Err(msg) => {
+      if msg.contains("只处理") || msg.contains("一次只处理") {
+        fail("错误: " + msg)
+      } else {
+        fail_data("错误: " + msg)
+      }
+      []
+    }
+  }
+}
+
+///|
+/// `chop`：按毫秒区间裁剪，页精度。
+///
+/// 容器层只认粒度，所以这里先用 `audio_stream_info` 取得采样率，
+/// 把毫秒换算成 granule。输出保留原粒度（时间轴不变），
+/// 并补 EOS；写盘后回读自检，坏文件不留在磁盘上。
+fn run_chop(
+  src : String,
+  out : String,
+  start_ms : Int32,
+  end_ms : Int32,
+) -> Unit {
+  match read_all(src) {
+    None => ()
+    Some(data) => {
+      let pages = @ogg.parse_pages(data)
+      if pages.length() == 0 {
+        fail_data("错误: 不是合法的 Ogg 文件 —— " + src)
+        return
+      }
+      require_fully_parsed(src, pages, data)
+      let info = match audio_stream_info(pages) {
+        Ok(v) => v
+        Err(msg) => {
+          fail_data("错误: " + msg)
+          return
+        }
+      }
+      let (serial, audio, _, _) = info
+      let rate = audio.sample_rate.to_int64()
+      if rate <= 0L {
+        fail_data("错误: 采样率无效，无法把毫秒换算成粒度")
+        return
+      }
+      let start_g = start_ms.to_int64() * rate / 1000L
+      let end_g = end_ms.to_int64() * rate / 1000L
+      let chopped = chop_or_exit(pages, serial, start_g, end_g)
+      let bytes = @ogg.serialize_pages(chopped)
+      @fs.write_bytes_to_file(out, bytes) catch {
+        IOError(msg) => {
+          fail("错误: 无法写入 " + out + " —— " + msg)
+          return
+        }
+      }
+      // 自检：读回、逐页 CRC、结构问题都必须干净
+      let back = @ogg.parse_pages(bytes)
+      let mut bad = 0
+      for p in back {
+        if !@ogg.page_crc_ok(p) {
+          bad = bad + 1
+        }
+      }
+      let mut errors = 0
+      for f in @ogg.structure_findings(back) {
+        match f.severity {
+          @ogg.Severity::Error => errors = errors + 1
+          _ => ()
+        }
+      }
+      if back.length() != chopped.length() || bad > 0 || errors > 0 {
+        @fs.remove_file(out) catch {
+          _ => ()
+        }
+        fail_data("错误: 写出后自检失败，已删除 —— " + out)
+        return
+      }
+      // 容器层已把粒度减去起点，这里直接用它当片段时长
+      let last_g = back[back.length() - 1].granule_position
+      let span = last_g
+      let hundredths = if span > 0L { span * 100L / rate } else { 0L }
+      println(
+        "已写出 " +
+        out +
+        "  " +
+        chopped.length().to_string() +
+        " 页  约 " +
+        (hundredths / 100L).to_string() +
+        "." +
+        pad2((hundredths % 100L).to_int()) +
+        " 秒",
+      )
+    }
+  }
+}
+
+///|
 /// `to-wav`：把 Ogg（Opus / Vorbis）转码成 WAV（16 位 PCM）。
 ///
 /// 这一层只做 I/O：识别与解码都在 `pipeline/` 里，WAV 编码在 `wav/` 里。
@@ -1779,6 +1886,8 @@ fn main {
     @cli.Command::Seek(path, ms, chain) => run_seek(path, ms, chain)
     @cli.Command::Verify(path) => run_verify(path)
     @cli.Command::ToWav(src, out) => run_towav(src, out)
+    @cli.Command::Chop(src, out, start_ms, end_ms) =>
+      run_chop(src, out, start_ms, end_ms)
     @cli.Command::Version => println(@moonmux.describe())
     @cli.Command::Help => println(@cli.usage())
     @cli.Command::Bad(msg, usage) => {

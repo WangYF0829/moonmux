@@ -104,6 +104,16 @@ check $? "Opus → WAV（576044 字节）"
 [ $? -eq 0 ] && [ "$(wc -c < "$TMP/v.wav")" -eq 176444 ]
 check $? "Vorbis → WAV（176444 字节）"
 
+echo "== 4c. 裁剪 =="
+"$BIN" chop testdata/opus_sample.opus "$TMP/chop.ogg" 1000 3000 >/dev/null 2>&1
+[ $? -eq 0 ] && [ -s "$TMP/chop.ogg" ]
+check $? "chop 输出非空"
+"$BIN" verify "$TMP/chop.ogg" 2>/dev/null | grep -q "结构完好"
+check $? "chop 结果通过 verify"
+"$BIN" chop testdata/opus_sample.opus "$TMP/chop2.ogg" 7000 8000 >/dev/null 2>&1
+[ $? -eq 1 ]
+check $? "chop 越界区间报数据错误（1）"
+
 echo "== 5. 定位 =="
 "$BIN" seek testdata/opus_sample.opus 2500 >/dev/null 2>&1
 check $? "seek 正常工作"
