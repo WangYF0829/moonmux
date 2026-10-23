@@ -615,13 +615,30 @@ fn looks_like_packet_member(path : String) -> Bool {
   if base == "manifest.txt" {
     return true
   }
-  if base.length() != 17 ||
-    !base[0:7].to_owned().has_prefix("packet_") ||
-    !base[13:17].to_owned().has_suffix(".bin") {
+  // 8.3 短名：packet_000000.bin → PACKET~1.BIN，manifest.txt → MANIFE~1.TXT
+  if base.has_prefix("manife~") && base.has_suffix(".txt") {
+    return true
+  }
+  let mut start = -1
+  let mut end = -1
+  if base.length() >= 12 &&
+    base.has_prefix("packet~") &&
+    base.has_suffix(".bin") {
+    start = 7
+    end = base.length() - 4
+  } else if base.length() == 17 &&
+    base.has_prefix("packet_") &&
+    base.has_suffix(".bin") {
+    start = 7
+    end = 13
+  } else {
     return false
   }
-  let mut j = 7
-  while j < 13 {
+  if end <= start {
+    return false
+  }
+  let mut j = start
+  while j < end {
     let c = base.get_char(j)
     match c {
       Some(ch) => if ch.to_int() < 48 || ch.to_int() > 57 { return false }
