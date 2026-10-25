@@ -281,6 +281,39 @@ test "reject granule values beyond int64" {
 
 ///|
 /// 流号是 32 位字段：超出范围要报错，而不是静默截断。
+test "reject packets and chain values beyond int32" {
+  match parse("# packets=2147483648\n0\n") {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("packets"))
+  }
+  match parse("# packets=4294967297\n0\n") {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("packets"))
+  }
+  match parse("# chain=2147483648\n0\n") {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("chain"))
+  }
+  match parse("# chain=4294967297\n0\n") {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("chain"))
+  }
+  // 边界值本身仍可用
+  let m = match parse("# packets=2147483647\n# chain=2147483647\n0\n") {
+    Ok(m) => m
+    Err(_) => empty_manifest()
+  }
+  match (m.packets, m.chain) {
+    (Some(p), Some(c)) => {
+      assert_eq(p, 2147483647)
+      assert_eq(c, 2147483647)
+    }
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// 流号是 32 位字段：超出范围要报错，而不是静默截断。
 test "reject serial values beyond 32 bits" {
   match parse("# serial=4294967296\n0\n") {
     Ok(_) => assert_true(false)

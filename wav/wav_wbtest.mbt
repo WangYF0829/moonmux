@@ -210,6 +210,92 @@ fn build_wav_ext(sub : Int32, bits : Int32) -> Bytes {
 }
 
 ///|
+/// 奇数长度 data 块必须补 RIFF 对齐字节，RIFF size 也要把它算进去。
+test "odd data chunks are padded and roundtrip" {
+  for bits in [8, 24] {
+    let fmt : WavFormat = {
+      channels: 1,
+      sample_rate: 8000,
+      bits_per_sample: bits,
+    }
+    let data : Bytes = b"\x01\x02\x03"
+    let encoded = encode_wav(fmt, data)
+    assert_eq(encoded.length(), 44 + 4)
+    // RIFF size = 36 + 3 字节数据 + 1 字节 padding
+    let declared = encoded[4].to_int() |
+      (encoded[5].to_int() << 8) |
+      (encoded[6].to_int() << 16) |
+      (encoded[7].to_int() << 24)
+    assert_eq(declared, 40)
+    assert_eq(encoded[encoded.length() - 1].to_int(), 0)
+    match WavFile::parse(encoded) {
+      Some(w) => {
+        assert_eq(w.data.length(), 3)
+        assert_eq(w.format.bits_per_sample, bits)
+      }
+      None => assert_true(false)
+    }
+  }
+}
+
+///|
+/// 奇数 data 块缺少 padding、RIFF 声明过小、数据不是完整帧都必须拒绝。
+test "reject malformed riff boundaries and pcm alignment" {
+  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 24, }
+  let good = encode_wav(fmt, b"\x01\x02\x03")
+  // 去掉 padding 并把 RIFF size 改为与实际物理长度一致
+  let sliced = good[0:good.length() - 1]
+  let no_pad = Buffer()
+  let mut i = 0
+  while i < sliced.length() {
+    if i == 4 {
+      no_pad.write_byte((39 : Byte))
+      no_pad.write_byte((0 : Byte))
+      no_pad.write_byte((0 : Byte))
+      no_pad.write_byte((0 : Byte))
+      i = i + 4
+    } else {
+      no_pad.write_byte(sliced[i])
+      i = i + 1
+    }
+  }
+  match WavFile::parse(no_pad.to_bytes()) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+
+  // RIFF 逻辑上只含 "WAVE"，物理文件后的块不能被当成容器内容
+  let too_small = Buffer()
+  let mut j = 0
+  while j < good.length() {
+    if j == 4 {
+      too_small.write_byte((4 : Byte))
+      too_small.write_byte((0 : Byte))
+      too_small.write_byte((0 : Byte))
+      too_small.write_byte((0 : Byte))
+      j = j + 4
+    } else {
+      too_small.write_byte(good[j])
+      j = j + 1
+    }
+  }
+  match WavFile::parse(too_small.to_bytes()) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+
+  // 16 位单声道 data 不是 2 字节的整数倍 → 缺半帧
+  let misaligned = encode_wav(
+    { channels: 1, sample_rate: 8000, bits_per_sample: 16, },
+    b"\x01\x02\x03\x04\x05",
+  )
+  match WavFile::parse(misaligned) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+}
+
+///|
 /// EXTENSIBLE + PCM 子格式应当接受。
 test "accept extensible wav whose subformat is pcm" {
   match WavFile::parse(build_wav_ext(1, 16)) {

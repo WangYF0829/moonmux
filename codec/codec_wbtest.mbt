@@ -85,6 +85,47 @@ test "reject vorbis id with absurd sample rate" {
 }
 
 ///|
+/// 复制 Vorbis 识别头并替换一个字节。
+fn vorbis_with(index : Int32, value : Int32) -> Bytes {
+  let buf = Buffer()
+  let mut i = 0
+  while i < vorbis_id_2ch.length() {
+    if i == index {
+      buf.write_byte(value.to_byte())
+    } else {
+      buf.write_byte(vorbis_id_2ch[i])
+    }
+    i = i + 1
+  }
+  buf.to_bytes()
+}
+
+///|
+/// Vorbis 识别头的版本、块大小与 framing 标志都是可判定的硬约束。
+test "reject vorbis id with invalid required fields" {
+  // version 必须为 0（偏移 7..10）
+  match parse_vorbis_id(vorbis_with(7, 1)) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+  // blocksize_0 必须 >= 6：这里把低四位改成 0
+  match parse_vorbis_id(vorbis_with(28, 0)) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+  // 两个块大小颠倒（8 > 6）同样不合法
+  match parse_vorbis_id(vorbis_with(28, 0x68)) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+  // framing 标志必须置位
+  match parse_vorbis_id(vorbis_with(29, 0)) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+}
+
+///|
 /// 版本号不为 1 的 OpusHead 应当拒绝：字段布局只对版本 1 有保证，
 /// 硬着头皮读下去只会得到错误参数。
 test "reject opus head with unknown version" {

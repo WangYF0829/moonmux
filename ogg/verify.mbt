@@ -241,9 +241,30 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
     let mut bos_count = 0
     let mut eos_count = 0
     let mut eos_at = -1
+    // 上一页是否留下了跨页包；必须与下一页的 continued 标志严格对应。
+    let mut pending = false
     let mut m = 0
     while m < group.length() {
       let pg = pages[group[m]]
+      let continued = (pg.header_type.to_int() & flag_continued().to_int()) != 0
+      // 0 段页不含包边界，对跨页包状态透明（RFC 3533 允许空页）。
+      if pg.segments.length() > 0 {
+        if continued != pending {
+          findings.push({
+            severity: Severity::Error,
+            message: "serial=" +
+            sid +
+            " sequence=" +
+            pg.sequence.to_string() +
+            (if continued {
+              " 设置了 continued 标志，但上一页没有未完成的包"
+            } else {
+              " 延续上一页的包，却缺少 continued 标志"
+            }),
+          })
+        }
+        pending = pg.segments[pg.segments.length() - 1] == 255
+      }
       if (pg.header_type.to_int() & flag_bos().to_int()) != 0 {
         bos_count = bos_count + 1
       }
@@ -281,6 +302,15 @@ fn chain_findings(pages : Array[Page], findings : Array[Finding]) -> Unit {
         " 出现 " +
         eos_count.to_string() +
         " 个 EOS 页（一条流只应有一个结尾）",
+      })
+    }
+    // 流已经结束，最后一个包却还缺收尾段：写命令若放行会静默少一个包。
+    if pending {
+      findings.push({
+        severity: Severity::Error,
+        message: "serial=" +
+        sid +
+        " 的末页仍有一个未完成的包（流被截断）",
       })
     }
     let last = pages[group[group.length() - 1]]

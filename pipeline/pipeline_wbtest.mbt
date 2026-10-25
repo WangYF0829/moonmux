@@ -198,6 +198,26 @@ test "an absurd granule cannot bypass the budget" {
 }
 
 ///|
+/// 公开入口只接受 16/24 位，且拒绝负预算；否则格式块与实际字节会不一致。
+test "pipeline rejects unsupported bits and negative budget" {
+  let data = @ogg.serialize_pages(
+    @ogg.paginate(
+      [{ data: b"RandomJunk", granule_position: 0L, serial: 1U, }],
+      1U,
+    ),
+  )
+  let pages = @ogg.parse_pages(data)
+  match ogg_to_wav_pages_bits(pages, 1024L, 8) {
+    Err(msg) => assert_true(msg.contains("16 或 24"))
+    Ok(_) => assert_true(false)
+  }
+  match ogg_to_wav_pages_bits(pages, -1L, 16) {
+    Err(msg) => assert_true(msg.contains("预算"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
 /// 24 位量化：满量程夹住、负值写补码、三个字节小端。
 test "24-bit sample writer clamps and packs three bytes" {
   let buf = Buffer()

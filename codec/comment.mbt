@@ -110,6 +110,17 @@ pub fn comment_kind(packet : Bytes) -> CommentKind? {
 /// 失败情形都写在返回的字符串里，便于命令行原样转述：
 /// 前缀不符、长度字段越界、framing 位缺失。
 pub fn parse_comment(packet : Bytes) -> Result[(CommentKind, Comment), String] {
+  match parse_comment_until(packet) {
+    Ok((kind, comment, _)) => Ok((kind, comment))
+    Err(msg) => Err(msg)
+  }
+}
+
+///|
+/// 解析注释内容，并返回注释结束后的第一个字节偏移（用于保留 Opus 二进制后缀）。
+fn parse_comment_until(
+  packet : Bytes,
+) -> Result[(CommentKind, Comment, Int32), String] {
   let kind = match comment_kind(packet) {
     Some(k) => k
     None => return Err("不是 VorbisComment / OpusTags 注释包")
@@ -184,10 +195,11 @@ pub fn parse_comment(packet : Bytes) -> Result[(CommentKind, Comment), String] {
       if (packet[offset].to_int() & 0x01) == 0 {
         return Err("Vorbis 注释包的 framing 位未置位")
       }
+      offset = offset + 1
     }
     CommentKind::Opus => ()
   }
-  Ok((kind, { vendor, tags, }))
+  Ok((kind, { vendor, tags, }, offset))
 }
 
 ///|
@@ -228,6 +240,55 @@ pub fn encode_comment(
     i = i + 1
   }
   buf.to_bytes()
+}
+
+///|
+/// 编码注释，同时保留原 OpusTags 包尾部的二进制后缀。
+///
+/// RFC 7845 §5.2：OpusTags 的注释列表之后允许附加数据，其首字节最低位为 1
+/// 时表示二进制后缀；编辑器应原样保留。首字节最低位为 0 的尾部只是填充，
+/// 由 `padding` 参数重新决定。
+pub fn encode_comment_preserving(
+  kind : CommentKind,
+  comment : Comment,
+  padding : Int32,
+  original : Bytes,
+) -> Result[Bytes, String] {
+  let (original_kind, _, end) = match parse_comment_until(original) {
+    Ok(v) => v
+    Err(msg) => return Err(msg)
+  }
+  let same_kind = match (kind, original_kind) {
+    (CommentKind::Opus, CommentKind::Opus) => true
+    (CommentKind::Vorbis, CommentKind::Vorbis) => true
+    _ => false
+  }
+  if !same_kind {
+    return Err("原注释包的类型与要写出的类型不一致")
+  }
+  let keep_suffix = match kind {
+    CommentKind::Opus =>
+      end < original.length() && (original[end].to_int() & 1) != 0
+    CommentKind::Vorbis => false
+  }
+  // 二进制后缀必须紧贴注释列表；若先写 padding，首字节变成 0，
+  // 后续读取者会把整个后缀当填充丢弃。
+  let encoded = encode_comment(
+    kind,
+    comment,
+    if keep_suffix {
+      0
+    } else {
+      padding
+    },
+  )
+  if !keep_suffix {
+    return Ok(encoded)
+  }
+  let buf = Buffer(size_hint=encoded.length() + original.length() - end)
+  buf.write_bytes(encoded.exact_view())
+  buf.write_bytes(original[end:original.length()])
+  Ok(buf.to_bytes())
 }
 
 ///|

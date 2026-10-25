@@ -69,7 +69,10 @@ def main():
         "peak_mb=%.1f wall_s=%.2f rc=%d"
         % (peak / (1024 * 1024), elapsed, proc.returncode)
     )
-    return 0
+    # 负值（被信号终止）按 shell 约定映射到 128+N，避免 sys.exit 再取模。
+    if proc.returncode < 0:
+        return 128 - proc.returncode
+    return proc.returncode
 
 
 if __name__ == "__main__":

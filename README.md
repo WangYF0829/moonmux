@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml/badge.svg)](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-207%20passing-brightgreen.svg)](#构建与测试)
+[![Tests](https://img.shields.io/badge/tests-237%20passing-brightgreen.svg)](#构建与测试)
 ![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)
 
 纯 MoonBit 实现的音频容器工具包，补上 MoonBit 生态中「能解码、不能封装」的最后一环。
@@ -65,11 +65,10 @@ moon add WangYF0829/moonmux
 缺 EOS 的直播流会被拒绝（本工具面向静态文件）。`verify` 对缺 EOS 只报 warn（退出 0），
 写命令则按数据错误处理（退出 1）。
 输入与输出路径相同（含大小写别名、`..`、硬链接）会被拒绝；内容与输入完全相同的已有输出也会被拒绝。
-写命令面向单写者：不要并发写同一个输出文件。
-输入与输出路径相同（含大小写别名、`..`、硬链接）会被拒绝；内容与输入完全相同的已有输出也会被拒绝。
+`mux` 还会把已有输出与实际读取的每个包/清单做身份比较，拦截目录外任意文件名的硬链接别名。
 写命令面向单写者：不要并发写同一个输出文件。
 
-**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（35 项，覆盖往返、退出码、截断与清单异常）。
+**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav` / `chop`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（POSIX 42 项 / Windows 40 项，覆盖往返、退出码、截断、清单异常、FIFO 与输出别名防护）。
 
 ## 能力边界
 
@@ -77,7 +76,8 @@ moon add WangYF0829/moonmux
 |---|---|---|
 | 单文件大小 | **2 GiB** | MoonBit `Int` 是 32 位，页偏移与长度都用它；`@fs` 也只有整文件 API |
 | `demux` 包数 | **999999** | 包文件名固定 6 位，超过后字典序错乱、`mux` 读回顺序不对 |
-| `to-wav` PCM 预算 | **256 MiB**（`MOONMUX_MAX_PCM_MB` 可调大） | 整条链路没有流式写接口，PCM 必须攒齐再落盘；实测峰值约为预算的 3–4 倍 |
+| `to-wav` PCM 预算 | **256 MiB**（`MOONMUX_MAX_PCM_MB` 可调大） | 整条链路没有流式写接口，PCM 必须攒齐再落盘；实测峰值约为预算的 3–4 倍。外部解码器一次返回整段 PCM，恶意伪造的 granule 仍可能造成超出预算的瞬时分配 |
+| `chop` Opus 时间戳 | 页精度，约 ±1 页 | 不重写 OpusHead 的 pre-skip；裁剪后首个数据页可能多带不到一页的前导样本 |
 | `to-wav` 速度 | Opus 约 1.5× 实时；**Vorbis 约 80× 实时** | 纯 MoonBit 解码器；Vorbis 路径明显更慢，长文件请先 `split` |
 | chained 拆分 | 整段都由单页流组成时无法拆分 | 与「一段内交织两条单页流」字节相同，规格上不可判定（保守不切） |
 | 裁剪流时长 | 上界 | 容器层拿不到首个音频页的样本数，精确值需解码 |
@@ -227,11 +227,11 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测），
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` / `chop` 十三个子命令，
-207 个测试（native；wasm-gc 196，cmd/main 只支持 native）通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+237 个测试（Windows native；Linux native 236，跳过 Windows 专属设备名用例；wasm-gc 224）通过，并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）与转码验证。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`wasm-gc` 与 `native` 双后端
-207 个测试（native；wasm-gc 196，cmd/main 只支持 native）、35 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI（ubuntu + windows 矩阵，
+237 个测试（Windows native；Linux native 236；wasm-gc 224）、POSIX 42 项 / Windows 40 项端到端检查（`scripts/smoke.sh`）、GitHub Actions CI（ubuntu + windows 矩阵，
 外加覆盖率非回归门禁与 native 冒烟）。
 变更记录见 GitHub Releases。
 

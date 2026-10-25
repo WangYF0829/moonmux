@@ -130,6 +130,116 @@ test "replacing in one stream leaves the others byte identical" {
 }
 
 ///|
+/// 替换首包/末包时必须保留源流真的有的 BOS/EOS，不能重建后丢失。
+test "replacing edge packets preserves BOS and EOS" {
+  let single = paginate(
+    [{ data: b"only", granule_position: 0L, serial: 3U, }],
+    3U,
+  )
+  assert_true((single[0].header_type.to_int() & flag_bos().to_int()) != 0)
+  assert_true((single[0].header_type.to_int() & flag_eos().to_int()) != 0)
+  let replaced = match replace_packet(single, 3U, 0, b"new!") {
+    Ok(p) => p
+    Err(msg) => {
+      assert_true(false)
+      abort(msg)
+    }
+  }
+  assert_eq(replaced.length(), 1)
+  assert_true((replaced[0].header_type.to_int() & flag_bos().to_int()) != 0)
+  assert_true((replaced[0].header_type.to_int() & flag_eos().to_int()) != 0)
+  assert_true(same_bytes(reassemble(replaced)[0].data, b"new!"))
+
+  let multi = four_packet_stream(4U)
+  let first = match replace_packet(multi, 4U, 0, b"FIRST-EDGE") {
+    Ok(p) => p
+    Err(_) => []
+  }
+  assert_true((first[0].header_type.to_int() & flag_bos().to_int()) != 0)
+  let last_index = reassemble(multi).length() - 1
+  let last = match replace_packet(multi, 4U, last_index, b"LAST-EDGE") {
+    Ok(p) => p
+    Err(_) => []
+  }
+  let tail = last[last.length() - 1]
+  assert_true((tail.header_type.to_int() & flag_eos().to_int()) != 0)
+  assert_eq(structure_findings(first).length(), 0)
+  assert_eq(structure_findings(last).length(), 0)
+}
+
+///|
+/// 孤儿续页会让段表计数与 reassemble 的包数不一致，必须报错而不是越界。
+test "replace_packet rejects malformed continuation instead of panicking" {
+  let pages : Array[Page] = [
+    {
+      header_type: flag_bos() | flag_continued() | flag_eos(),
+      granule_position: 0L,
+      serial: 1U,
+      sequence: 0U,
+      crc: 0U,
+      segments: [5, 5],
+      payload: b"AAAAABBBBB",
+    },
+  ]
+  match replace_packet(pages, 1U, 0, b"x") {
+    Err(msg) => assert_true(msg.contains("结构") || msg.contains("包边界"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// 替换跨页包时夹着 0 段页：前后扩展都要跳过空页，输出结构仍自洽。
+test "replace_packet skips zero-segment pages when expanding a packet" {
+  let pages : Array[Page] = [
+    {
+      header_type: flag_bos(),
+      granule_position: 0L,
+      serial: 5U,
+      sequence: 0U,
+      crc: 0U,
+      segments: [2],
+      payload: b"ID",
+    },
+    {
+      header_type: 0,
+      granule_position: 0L,
+      serial: 5U,
+      sequence: 1U,
+      crc: 0U,
+      segments: [5, 255],
+      payload: Bytes::make(260, b'A'),
+    },
+    {
+      header_type: 0,
+      granule_position: -1L,
+      serial: 5U,
+      sequence: 2U,
+      crc: 0U,
+      segments: [],
+      payload: b"",
+    },
+    {
+      header_type: flag_continued() | flag_eos(),
+      granule_position: 960L,
+      serial: 5U,
+      sequence: 3U,
+      crc: 0U,
+      segments: [5],
+      payload: b"TAIL!",
+    },
+  ]
+  let updated = match replace_packet(pages, 5U, 1, b"TAGS!") {
+    Ok(v) => v
+    Err(msg) => abort(msg)
+  }
+  assert_eq(structure_findings(updated).length(), 0)
+  let packets = reassemble(updated)
+  assert_eq(packets.length(), 3)
+  assert_true(same_bytes(packets[1].data, b"TAGS!"))
+  assert_eq(packets[2].data.length(), 260)
+}
+
+///|
 /// 序号越界与流号不存在都要报错，而不是悄悄什么都不做。
 test "replace_packet reports bad input" {
   let pages = four_packet_stream(7U)

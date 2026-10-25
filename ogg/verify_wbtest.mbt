@@ -207,6 +207,77 @@ fn mk_page(
 }
 
 ///|
+/// 上一页留下未完成包，下一页却未带 continued → error。
+test "missing continued flag on a packet continuation is an error" {
+  let pages : Array[Page] = [
+    {
+      header_type: flag_bos(),
+      granule_position: -1L,
+      serial: 1U,
+      sequence: 0U,
+      crc: 0U,
+      segments: [255],
+      payload: repeat_byte((0x41 : Byte), 255),
+    },
+    mk_page(1U, 1U, 480L, flag_eos(), b"B"),
+  ]
+  let findings = structure_findings(pages)
+  assert_true(findings.length() >= 1)
+  let mut saw = false
+  for f in findings {
+    if f.message.contains("缺少 continued") {
+      saw = true
+      match f.severity {
+        Severity::Error => ()
+        _ => assert_true(false)
+      }
+    }
+  }
+  assert_true(saw)
+}
+
+///|
+/// 没有待续包却设置 continued → error（流的开头已丢失或标志损坏）。
+test "orphan continued flag is an error" {
+  let pages : Array[Page] = [
+    mk_page(1U, 0U, 0L, flag_bos(), b"A"),
+    mk_page(1U, 1U, 480L, flag_continued() | flag_eos(), b"B"),
+  ]
+  let findings = structure_findings(pages)
+  assert_eq(findings.length(), 1)
+  match findings[0].severity {
+    Severity::Error =>
+      assert_true(
+        findings[0].message.contains("上一页没有未完成的包"),
+      )
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// 流已结束但末包仍以 255 段结尾 → error；否则写命令会静默少一个包。
+test "unfinished final packet is an error" {
+  let pages : Array[Page] = [
+    {
+      header_type: flag_bos() | flag_eos(),
+      granule_position: -1L,
+      serial: 1U,
+      sequence: 0U,
+      crc: 0U,
+      segments: [255],
+      payload: repeat_byte((0x41 : Byte), 255),
+    },
+  ]
+  let findings = structure_findings(pages)
+  assert_eq(findings.length(), 1)
+  match findings[0].severity {
+    Severity::Error =>
+      assert_true(findings[0].message.contains("未完成的包"))
+    _ => assert_true(false)
+  }
+}
+
+///|
 /// 粒度倒流必须报 error：时间轴断了，播放器会跳回过去。
 test "granule going backwards is an error" {
   let pages : Array[Page] = [
@@ -235,11 +306,18 @@ test "granule on a page without packet completion is a warning" {
     ),
   ]
   let findings = structure_findings(pages)
-  assert_eq(findings.length(), 1)
-  match findings[0].severity {
-    Severity::Warning => assert_true(findings[0].message.contains("应为 -1"))
-    _ => assert_true(false)
+  // 另有一条“末包未完成”的 error；本用例只关心粒度 warning。
+  let mut saw_warning = false
+  for f in findings {
+    match f.severity {
+      Severity::Warning =>
+        if f.message.contains("应为 -1") {
+          saw_warning = true
+        }
+      _ => ()
+    }
   }
+  assert_true(saw_warning)
 }
 
 ///|

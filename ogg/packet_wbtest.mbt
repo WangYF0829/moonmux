@@ -65,6 +65,89 @@ test "packet spanning two pages" {
 }
 
 ///|
+/// 0 段页不含包边界，不能打断上一页留下的跨页包。
+test "zero-segment page is transparent to packet continuation" {
+  let p0 : Page = {
+    header_type: flag_bos(),
+    granule_position: -1L,
+    serial: 1U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [255],
+    payload: repeat_byte((0x41 : Byte), 255),
+  }
+  let empty : Page = {
+    header_type: 0,
+    granule_position: -1L,
+    serial: 1U,
+    sequence: 1U,
+    crc: 0U,
+    segments: [],
+    payload: b"",
+  }
+  let p2 : Page = {
+    header_type: flag_continued() | flag_eos(),
+    granule_position: 100L,
+    serial: 1U,
+    sequence: 2U,
+    crc: 0U,
+    segments: [1],
+    payload: b"Z",
+  }
+  let pages = [p0, empty, p2]
+  let packets = reassemble(pages)
+  assert_eq(packets.length(), 1)
+  assert_eq(packets[0].data.length(), 256)
+  assert_eq(structure_findings(pages).length(), 0)
+}
+
+///|
+/// `packet_at` 只扫描到目标包，且同样把 0 段页视为透明。
+test "packet_at finds the second packet across pages" {
+  let pages : Array[Page] = [
+    {
+      header_type: flag_bos(),
+      granule_position: 0L,
+      serial: 1U,
+      sequence: 0U,
+      crc: 0U,
+      segments: [4],
+      payload: b"HEAD",
+    },
+    {
+      header_type: 0,
+      granule_position: 0L,
+      serial: 1U,
+      sequence: 1U,
+      crc: 0U,
+      segments: [],
+      payload: b"",
+    },
+    {
+      header_type: 0,
+      granule_position: 0L,
+      serial: 1U,
+      sequence: 2U,
+      crc: 0U,
+      segments: [3, 4],
+      payload: b"TAGMORE",
+    },
+  ]
+  match packet_at(pages, 1U, 1) {
+    Some(pkt) => assert_true(same_bytes(pkt, b"TAG"))
+    None => assert_true(false)
+  }
+  match packet_at(pages, 1U, 2) {
+    Some(pkt) => assert_true(same_bytes(pkt, b"MORE"))
+    None => assert_true(false)
+  }
+  match packet_at(pages, 1U, 9) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+}
+
+///|
 /// 段表切分：长度 255 的包必须产出 [255, 0]，
 /// 末尾的 0 段用于向解码器标明包已结束。
 test "segments_for handles exact multiples of 255" {
@@ -548,4 +631,68 @@ test "first_packet reassembles across a page boundary" {
     Some(_) => assert_true(false)
     None => assert_true(true)
   }
+  // 续页丢了 continued 标志：中间有缺口，不能把两段无关字节粘成首包
+  let p1_bad : Page = {
+    header_type: 0,
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 1U,
+    crc: 0U,
+    segments: [5],
+    payload: Bytes::make(5, b'\x02'),
+  }
+  match first_packet([p0, p1_bad], 1U) {
+    Some(_) => assert_true(false)
+    None => assert_true(true)
+  }
+}
+
+///|
+/// continued 标志与上一页的未完成包不一致时，不能把碎片拼成完整包。
+test "reassemble does not glue packets across a broken continuation" {
+  let first : Page = {
+    header_type: flag_bos(),
+    granule_position: -1L,
+    serial: 1U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [255],
+    payload: repeat_byte((0x41 : Byte), 255),
+  }
+  let no_continued : Page = {
+    header_type: flag_eos(),
+    granule_position: 100L,
+    serial: 1U,
+    sequence: 1U,
+    crc: 0U,
+    segments: [1],
+    payload: b"B",
+  }
+  let packets = reassemble([first, no_continued])
+  // 无开头的 255 字节残包丢弃，只保留第二页的新包
+  assert_eq(packets.length(), 1)
+  assert_true(same_bytes(packets[0].data, b"B"))
+
+  let complete : Page = {
+    header_type: flag_bos(),
+    granule_position: 50L,
+    serial: 2U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [1],
+    payload: b"A",
+  }
+  let orphan : Page = {
+    header_type: flag_continued() | flag_eos(),
+    granule_position: 100L,
+    serial: 2U,
+    sequence: 1U,
+    crc: 0U,
+    segments: [1],
+    payload: b"C",
+  }
+  let packets2 = reassemble([complete, orphan])
+  // 没有待续包却带 continued：这个碎片必须丢弃
+  assert_eq(packets2.length(), 1)
+  assert_true(same_bytes(packets2[0].data, b"A"))
 }

@@ -88,14 +88,15 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
   if riff_size + 8L > bytes.length().to_int64() {
     return None
   }
+  let riff_end = (riff_size + 8L).to_int()
   let mut pos = 12
   let mut format : WavFormat? = None
   let mut pcm : Bytes? = None
-  while pos + 8 <= bytes.length() {
+  while pos <= riff_end - 8 {
     let size = rd_u32(bytes, pos + 4)
     let body = pos + 8
-    if body.to_int64() + size > bytes.length().to_int64() {
-      // 块声明的长度超出实际数据，视为损坏
+    if body.to_int64() + size > riff_end.to_int64() {
+      // 块声明的长度超出 RIFF 逻辑边界，视为损坏；物理尾部不能当块读取。
       return None
     }
     if tag_is(bytes, pos, 0x66, 0x6D, 0x74, 0x20) {
@@ -172,14 +173,27 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
       }
       pcm = Some(acc.to_bytes())
     }
-    // 块对齐到偶数字节
+    // 奇数块必须在 RIFF 边界内带一个填充字节。
     pos = body + size.to_int()
     if size % 2L == 1L {
+      if pos >= riff_end {
+        return None
+      }
       pos = pos + 1
     }
   }
+  if pos != riff_end {
+    return None
+  }
   match (format, pcm) {
-    (Some(f), Some(d)) => Some({ format: f, data: d, })
+    (Some(f), Some(d)) => {
+      let align = f.channels * (f.bits_per_sample / 8)
+      if align <= 0 || d.length() % align != 0 {
+        None
+      } else {
+        Some({ format: f, data: d, })
+      }
+    }
     _ => None
   }
 }
@@ -189,17 +203,22 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
 ///
 /// 只写标准的 44 字节头：`RIFF` + `fmt `（16 字节 PCM）+ `data`。
 /// 不做 `fact`、`LIST` 之类的扩展块 —— 转码产物越简单越不容易被拒。
+///
+/// **前置条件**：`format` 必须是 8/16/24/32 位整数 PCM，`data` 长度必须是
+/// 完整帧（声道数 × 位深/8 的整数倍）。本函数签名为 `Bytes` 而非 `Result`，
+/// 不做拒绝；不满足前置条件的输入会生成无法被 `WavFile::parse` 接受的字节。
 pub fn encode_wav(format : WavFormat, data : Bytes) -> Bytes {
   // 预分配恰好大小：默认的倍增扩容会在峰值时同时持有旧块与新块，
   // 对几十 MB 的 PCM 意味着多出一份完整副本。
-  let buf = Buffer(size_hint=44 + data.length())
+  let pad = data.length() % 2
+  let buf = Buffer(size_hint=44 + data.length() + pad)
   // "RIFF"
   buf.write_byte((0x52 : Byte))
   buf.write_byte((0x49 : Byte))
   buf.write_byte((0x46 : Byte))
   buf.write_byte((0x46 : Byte))
   // 文件总长减 8
-  buf.write_uint_le((36 + data.length()).reinterpret_as_uint())
+  buf.write_uint_le((36 + data.length() + pad).reinterpret_as_uint())
   // "WAVE"
   buf.write_byte((0x57 : Byte))
   buf.write_byte((0x41 : Byte))
@@ -226,5 +245,8 @@ pub fn encode_wav(format : WavFormat, data : Bytes) -> Bytes {
   buf.write_byte((0x61 : Byte))
   buf.write_uint_le(data.length().reinterpret_as_uint())
   buf.write_bytes(data.exact_view())
+  if pad == 1 {
+    buf.write_byte((0x00 : Byte))
+  }
   buf.to_bytes()
 }

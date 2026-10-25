@@ -78,7 +78,7 @@ fn read_u64_le(data : Bytes, offset : Int32) -> UInt64 {
 /// 这类上界检查拦不住它，索引到负数会在运行时直接崩掉。
 pub fn is_page_start(data : Bytes, offset : Int32) -> Bool {
   offset >= 0 &&
-  offset + 4 <= data.length() &&
+  offset <= data.length() - 4 &&
   data[offset].to_int() == 0x4F &&
   data[offset + 1].to_int() == 0x67 &&
   data[offset + 2].to_int() == 0x67 &&
@@ -91,8 +91,8 @@ pub fn is_page_start(data : Bytes, offset : Int32) -> Bool {
 /// 返回 `None` 表示此处不是合法页起点（捕获模式不匹配或数据不足），
 /// 调用方可以据此在字节流中重新同步。
 pub fn Page::parse(data : Bytes, offset : Int32) -> (Page, Int32)? {
-  // 固定头 27 字节
-  if offset + 27 > data.length() {
+  // 用减法边界避免极大正 offset 在 offset + 27 时回绕。
+  if offset < 0 || offset > data.length() - 27 {
     return None
   }
   if !is_page_start(data, offset) {
@@ -111,7 +111,7 @@ pub fn Page::parse(data : Bytes, offset : Int32) -> (Page, Int32)? {
   let n_segments = data[offset + 26].to_int()
   // 段表
   let table_start = offset + 27
-  if table_start + n_segments > data.length() {
+  if n_segments > data.length() - table_start {
     return None
   }
   let segments : Array[Int32] = []
@@ -125,10 +125,10 @@ pub fn Page::parse(data : Bytes, offset : Int32) -> (Page, Int32)? {
   }
   // 负载
   let payload_start = table_start + n_segments
-  let payload_end = payload_start + payload_len
-  if payload_end > data.length() {
+  if payload_len > data.length() - payload_start {
     return None
   }
+  let payload_end = payload_start + payload_len
   let payload_buf = Buffer()
   let mut p = payload_start
   while p < payload_end {

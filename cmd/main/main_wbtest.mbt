@@ -33,6 +33,26 @@ test "budget text falls back to the default on anything unusual" {
   assert_eq(budget_from_text(""), 256L * mib)
   assert_eq(budget_from_text("12x"), 256L * mib)
   assert_eq(budget_from_text("-1"), 256L * mib)
+  // 超过 Int64 的数字不能回绕成 1 而被当成 1 MiB
+  assert_eq(budget_from_text("18446744073709551617"), 256L * mib)
+  assert_eq(budget_from_text("999999999999999999999999"), 256L * mib)
+}
+
+///|
+/// Windows 保留名不能只认 ASCII 1..9；CONIN$/CONOUT$ 与上标数字也要挡住。
+#cfg(platform="windows")
+test "windows reserved device names are rejected" {
+  assert_true(is_reserved_device("NUL"))
+  assert_true(is_reserved_device("subdir/con.txt"))
+  assert_true(is_reserved_device("CONIN$"))
+  assert_true(is_reserved_device("CONOUT$"))
+  assert_true(is_reserved_device("COM1"))
+  assert_true(is_reserved_device("LPT9.log"))
+  assert_true(is_reserved_device("COM¹"))
+  assert_true(is_reserved_device("lpt³"))
+  assert_true(!is_reserved_device("console.txt"))
+  assert_true(!is_reserved_device("COM0"))
+  assert_true(!is_reserved_device("com10"))
 }
 
 ///|
@@ -78,6 +98,42 @@ test "find_comment locates the OpusTags packet" {
 }
 
 ///|
+/// 第一条音频流只有头包时，应继续寻找后面带注释的音频流。
+test "find_comment skips an audio stream without a comment packet" {
+  let head : Bytes = b"OpusHead\x01\x01\x38\x01\x80\xBB\x00\x00\x00\x00\x00"
+  let tags = @codec.encode_comment(
+    @codec.CommentKind::Opus,
+    { vendor: "moonmux", tags: [], },
+    0,
+  )
+  let built = @ogg.mux_streams([
+    {
+      serial: 1U,
+      packets: [{ data: head, granule_position: 0L, serial: 1U, }],
+    },
+    {
+      serial: 2U,
+      packets: [
+        { data: head, granule_position: 0L, serial: 2U, },
+        { data: tags, granule_position: 0L, serial: 2U, },
+        { data: b"audio", granule_position: 480L, serial: 2U, },
+      ],
+    },
+  ])
+  let pages = match built {
+    Ok(p) => p
+    Err(msg) => abort(msg)
+  }
+  match find_comment(pages) {
+    Ok(found) => {
+      assert_eq(found.0, 2U)
+      assert_eq(found.2.vendor, "moonmux")
+    }
+    Err(msg) => abort(msg)
+  }
+}
+
+///|
 /// 音频流信息：声道与 pre-skip 来自 OpusHead，首尾粒度来自页头。
 ///
 /// 不断言 `sample_rate`：Opus 的解码采样率恒为 48 kHz，`parse_audio_header`
@@ -112,7 +168,8 @@ test "audio_stream_info reports header and granule span" {
 fn reset_test_dir(dir : String) -> Unit {
   let mut i = 0
   while i < 3 {
-    remove_dir_tree(dir)
+    let ignored : Array[String] = []
+    remove_dir_tree_collect(dir, ignored)
     if !@fs.path_exists(dir) {
       return
     }
@@ -136,7 +193,8 @@ test "remove_dir_tree removes nested directories" {
   @fs.write_bytes_to_file(dir + "/a/b.bin", b"x") catch {
     IOError(msg) => abort("write b: " + msg)
   }
-  remove_dir_tree(dir)
+  let failures : Array[String] = []
+  remove_dir_tree_collect(dir, failures)
   assert_true(!@fs.path_exists(dir))
 }
 
@@ -176,7 +234,7 @@ test "plan_mux reads a multi-stream directory" {
     }
     Err(msg) => abort(msg)
   }
-  remove_dir_tree(dir)
+  reset_test_dir(dir)
 }
 
 ///|
@@ -208,7 +266,7 @@ test "plan_mux reads a single-stream directory" {
     }
     Err(msg) => abort(msg)
   }
-  remove_dir_tree(dir)
+  reset_test_dir(dir)
 }
 
 ///|
@@ -224,7 +282,7 @@ test "plan_mux rejects empty and mixed layouts" {
     Ok(_) => assert_true(false)
     Err(msg) => assert_true(msg.contains("没有包文件"))
   }
-  remove_dir_tree(empty)
+  reset_test_dir(empty)
 
   let mixed = "_build/wbtest_plan_mixed"
   reset_test_dir(mixed)
@@ -242,7 +300,7 @@ test "plan_mux rejects empty and mixed layouts" {
     Err(msg) =>
       assert_true(msg.contains("既有子目录又有散落的包文件"))
   }
-  remove_dir_tree(mixed)
+  reset_test_dir(mixed)
 }
 
 ///|

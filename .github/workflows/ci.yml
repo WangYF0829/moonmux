@@ -81,10 +81,17 @@ jobs:
       - name: moon info
         run: moon info
 
-      # Windows 上显式走 wasm-gc：native 测试需要 MSVC，成本和失败面都更大，
-      # 而 native 后端已由 ubuntu 的 native job 覆盖。
+      # 全量 native 由 ubuntu job 覆盖；Windows 主测试走 wasm-gc 控制耗时，
+      # 另加一个只编译 cmd/main 的 Windows native 步骤覆盖路径/设备名分支。
       - name: moon test --deny-warn
         run: moon test --deny-warn --target ${{ runner.os == 'Windows' && 'wasm-gc' || 'native' }}
+
+      # Windows 专属的路径/设备名分支只在 native 的 cmd/main 里编译；
+      # 上面的 wasm-gc 不会执行它们，因此额外跑这一包的 Windows native 测试。
+      - name: Windows native CLI tests
+        if: runner.os == 'Windows'
+        shell: bash
+        run: moon test --deny-warn --target native -j 1 cmd/main
 
       # 生成物不能进版本库：_build、*.mi/*.core/*.mbti、pkg.generated.mbti。
       - name: Verify no generated artifacts are tracked

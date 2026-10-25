@@ -127,15 +127,17 @@ fn first_audio_stream(
   if serials.length() == 0 {
     return Err("文件里没有任何逻辑流")
   }
+  let firsts = @ogg.first_packets(pages)
   let mut i = 0
   while i < serials.length() {
     let serial = serials[i]
-    let packets = @ogg.reassemble(@ogg.stream_pages(pages, serial))
-    if packets.length() > 0 {
-      match codec_of_packet(packets[0].data) {
-        Some(codec) => return Ok((serial, codec))
-        None => ()
-      }
+    match firsts.get(serial) {
+      Some(head) =>
+        match codec_of_packet(head) {
+          Some(codec) => return Ok((serial, codec))
+          None => ()
+        }
+      None => ()
     }
     i = i + 1
   }
@@ -174,36 +176,16 @@ pub fn detect(data : Bytes) -> Result[Codec, String] {
 /// 而不是按第一段的格式硬写 —— 那会让第二段变成音调错误的噪声。
 
 ///|
-/// 转码输出的内存上限（16 位 PCM 字节数）。
+/// 转码保留的 PCM 字节上限。
 ///
 /// 整条链路没有流式写接口（`@fs` 只有整文件写），所以 PCM 必须在内存里
-/// 攒齐再一次性写盘；实测峰值约为输出的 3–4 倍（解码器的 Double PCM
-/// 与最终 WAV 各占一份）。超过这个上限就明确拒绝，而不是让进程 OOM。
-const MAX_PCM_BYTES : Int64 = 256L * 1024L * 1024L
-
-///|
-/// 取某条流的**第一个包**（头部包）。只扫该流的页，碰到第一个包结束就停。
+/// 攒齐再一次性写盘；实测峰值约为输出的 3–4 倍。估算和每段解码后的实际
+/// 字节都会检查，超限就拒绝继续累积。
 ///
-/// 估算阶段只需要头部参数，不需要把整条流重组一遍 ——
-/// `reassemble` 会复制全部负载，对百万包的文件等于把内存翻倍。
-fn first_packet_bytes(pages : Array[@ogg.Page], serial : UInt32) -> Bytes? {
-  let buf = Buffer(size_hint=256)
-  for page in pages {
-    if page.serial == serial {
-      let mut completes = false
-      for seg in page.segments {
-        if seg < 255 {
-          completes = true
-        }
-      }
-      buf.write_bytes(page.payload.exact_view())
-      if completes {
-        return Some(buf.to_bytes())
-      }
-    }
-  }
-  None
-}
+/// **能力边界**：外部解码器一次调用返回整段 PCM，无法在解码过程中施加
+/// 输出上限。因此恶意伪造的 granule 仍可能在调用返回前造成超出本预算的
+/// 瞬时分配；要硬性封顶需要解码器提供流式/带长度上限的接口。
+const MAX_PCM_BYTES : Int64 = 256L * 1024L * 1024L
 
 ///|
 /// 估算整份输出需要多少 16 位 PCM 字节：逐段按「末粒度 − 首粒度 − pre-skip」
@@ -215,8 +197,10 @@ fn estimate_pcm_bytes(chains : Array[Array[@ogg.Page]], bits : Int32) -> Int64 {
     let mut chosen : UInt32? = None
     let mut channels = 0
     let mut pre_skip : Int64 = 0L
+    // 一次扫描取所有首包，避免逐流重扫整段造成 O(流数 × 页数)。
+    let firsts = @ogg.first_packets(part)
     for serial in @ogg.serials_of(part) {
-      match first_packet_bytes(part, serial) {
+      match firsts.get(serial) {
         Some(pkt) =>
           match @codec.parse_audio_header(pkt) {
             Some(info) => {
@@ -310,6 +294,12 @@ pub fn ogg_to_wav_pages_bits(
   if pages.length() == 0 {
     return Err("不是合法的 Ogg 文件（没有解析出任何页）")
   }
+  if bits != 16 && bits != 24 {
+    return Err("WAV 位深只支持 16 或 24，实际是 " + bits.to_string())
+  }
+  if limit < 0L {
+    return Err("PCM 内存预算不能为负")
+  }
   let chains = @ogg.split_chains(pages)
   let estimated = estimate_pcm_bytes(chains, bits)
   if estimated > limit {
@@ -368,6 +358,17 @@ pub fn ogg_to_wav_pages_bits(
         " 声道 / " +
         decoded.sample_rate.to_string() +
         " Hz —— 一份 WAV 只能有一个格式块，请先用 split 拆开分别转码",
+      )
+    }
+    let used = buf.length().to_int64()
+    let actual = decoded.data.length().to_int64()
+    if used > limit || actual > limit - used {
+      return Err(
+        "解码后的 PCM 实际为 " +
+        (used + actual).to_string() +
+        " 字节，超过 " +
+        limit.to_string() +
+        " 字节的内存预算 — 容器估算与解码结果不一致，已停止",
       )
     }
     buf.write_bytes(decoded.data.exact_view())

@@ -111,12 +111,28 @@ pub fn parse_vorbis_id(data : Bytes) -> AudioInfo? {
   if !tag_at(data, 1, "vorbis") {
     return None
   }
+  if rd_u32(data, 7) != 0 {
+    return None
+  }
   let channels = data[11].to_int()
   let sample_rate = rd_u32(data, 12)
   // u32 读进 32 位有符号 Int：高位为 1 的值（如 0xFFFFFFFF）会变成负数。
   // 采样率 <= 0 的头没有意义，一律拒掉 —— 否则 info 会打出「采样率 -1 Hz」，
   // 时长还会被算成负数。
   if channels == 0 || sample_rate <= 0 {
+    return None
+  }
+  let block_sizes = data[28].to_int()
+  let block_0 = block_sizes & 0x0F
+  let block_1 = (block_sizes >> 4) & 0x0F
+  if block_0 < 6 ||
+    block_0 > 13 ||
+    block_1 < 6 ||
+    block_1 > 13 ||
+    block_0 > block_1 {
+    return None
+  }
+  if (data[29].to_int() & 1) == 0 {
     return None
   }
   Some({ codec: "Vorbis", channels, sample_rate, pre_skip: 0, })

@@ -34,6 +34,9 @@ pub fn reassemble(pages : Array[Page]) -> Array[Packet] {
   let packets : Array[Packet] = []
   let serials : Array[UInt32] = []
   let accs : Array[Buffer] = []
+  // 每条流是否有跨页包未完成，以及当前是否只是在丢弃没有开头的续包碎片。
+  let open : Array[Bool] = []
+  let orphan : Array[Bool] = []
   // 流号 → 累加器下标：逐页线性查流号在「每页一个新流号」的损坏文件上是 O(n²)
   let acc_index : Map[UInt32, Int32] = Map([])
   for page in pages {
@@ -42,40 +45,69 @@ pub fn reassemble(pages : Array[Page]) -> Array[Packet] {
       None => {
         serials.push(page.serial)
         accs.push(Buffer())
+        open.push(false)
+        orphan.push(false)
         let idx = serials.length() - 1
         acc_index.set(page.serial, idx)
         idx
       }
     }
     let acc = accs[ai]
-    // 段表各项之和必须恰好等于负载长度 —— Page::parse 产出的页天然满足，
-    // 但本函数是公开 API，手工构造或上层拼装的页可能不满足。
-    let mut declared = 0
-    for seg in page.segments {
-      declared = declared + seg
+    let continued = (page.header_type.to_int() & flag_continued().to_int()) != 0
+    // RFC 3533 允许 0 段页。它既不含包开头也不含包结束，对续包状态透明，
+    // 不能当成分隔符把上一页的未完成包重置掉。
+    if page.segments.length() == 0 && page.payload.length() == 0 {
+      continue
     }
-    if declared != page.payload.length() {
+    // 段表各项必须都是 0..255，且和恰好等于负载长度。Page::parse 产出的页
+    // 天然满足，但本函数是公开 API，手工构造的页不能越界读。
+    let mut declared = 0
+    let mut segments_ok = true
+    for seg in page.segments {
+      if seg < 0 || seg > 255 {
+        segments_ok = false
+      } else {
+        declared = declared + seg
+      }
+    }
+    if !segments_ok || declared != page.payload.length() {
       acc.reset()
+      open[ai] = false
+      orphan[ai] = false
     } else {
+      // 没有待续包却带 continued：丢掉这个没有开头的碎片，直到它在本页结束。
+      let mut discarding = continued && (!open[ai] || orphan[ai])
+      // 有待续包却未带 continued：上一页残包作废，本页从新包开始。
+      if !continued {
+        acc.reset()
+      }
       let mut offset = 0
       // 本页最后一个「完整结束」的包在 packets 中的下标；-1 表示本页没有包结束
       let mut last_ended : Int32 = -1
       for seg in page.segments {
-        let mut i = 0
-        while i < seg {
-          acc.write_byte(page.payload[offset + i])
-          i = i + 1
-        }
-        offset = offset + seg
-        // 小于 255 的段标志着包在此结束
-        if seg < 255 {
-          packets.push({
-            data: acc.to_bytes(),
-            granule_position: -1L,
-            serial: page.serial,
-          })
-          last_ended = packets.length() - 1
-          acc.reset()
+        if discarding {
+          offset = offset + seg
+          if seg < 255 {
+            discarding = false
+            acc.reset()
+          }
+        } else {
+          let mut i = 0
+          while i < seg {
+            acc.write_byte(page.payload[offset + i])
+            i = i + 1
+          }
+          offset = offset + seg
+          // 小于 255 的段标志着包在此结束
+          if seg < 255 {
+            packets.push({
+              data: acc.to_bytes(),
+              granule_position: -1L,
+              serial: page.serial,
+            })
+            last_ended = packets.length() - 1
+            acc.reset()
+          }
         }
       }
       // RFC 3533：页头的粒度位置只属于本页**最后一个完整结束的包**，
@@ -90,6 +122,9 @@ pub fn reassemble(pages : Array[Page]) -> Array[Packet] {
           serial: ended.serial,
         }
       }
+      open[ai] = page.segments.length() > 0 &&
+        page.segments[page.segments.length() - 1] == 255
+      orphan[ai] = discarding
     }
   }
   packets
@@ -425,37 +460,80 @@ pub fn count_packets(pages : Array[Page]) -> Int32 {
 }
 
 ///|
-/// 取某条逻辑流的第一个包（标识头），跨页时继续拼接。
+/// 一页的段表是否全为 0..255 且总和等于负载长度。
+fn segments_match_payload(page : Page) -> Bool {
+  let mut total = 0
+  for seg in page.segments {
+    if seg < 0 || seg > 255 {
+      return false
+    }
+    total = total + seg
+  }
+  total == page.payload.length()
+}
+
+///|
+/// 取某条逻辑流的第 `index` 个包（0 基），扫描到目标包即停止。
 ///
-/// 只读该流的前几页，不重组整条流；首页带 continued 标志说明包的开头不在文件里，
-/// 直接返回 None（调用方不该拿半个头去解析）。
-pub fn first_packet(pages : Array[Page], serial : UInt32) -> Bytes? {
+/// 不复制整条流的全部包；只接受连续的包边界。0 段页对续包状态透明，
+/// 首页或续页的 continued 标志不匹配时返回 None，绝不把缺页两侧的字节粘起来。
+pub fn packet_at(pages : Array[Page], serial : UInt32, index : Int32) -> Bytes? {
+  if index < 0 {
+    return None
+  }
   let buf = Buffer()
-  let mut found = false
+  let mut started = false
+  let mut open = false
+  let mut completed = 0
   for p in pages {
     if p.serial != serial {
       continue
     }
-    if !found {
-      if (p.header_type.to_int() & flag_continued().to_int()) != 0 {
+    if p.segments.length() == 0 {
+      if p.payload.length() != 0 {
         return None
       }
-      found = true
+      continue
+    }
+    if !segments_match_payload(p) {
+      return None
+    }
+    let continued = (p.header_type.to_int() & flag_continued().to_int()) != 0
+    if !started {
+      if continued {
+        return None
+      }
+      started = true
+    } else if continued != open {
+      return None
     }
     let mut off = 0
-    for s in p.segments {
-      let len = s
-      if off + len > p.payload.length() {
+    for seg in p.segments {
+      if seg > p.payload.length() - off {
         return None
       }
-      buf.write_bytes(p.payload[off:off + len])
-      off = off + len
-      if s < 255 {
-        return Some(buf.to_bytes())
+      buf.write_bytes(p.payload[off:off + seg])
+      off = off + seg
+      if seg < 255 {
+        if completed == index {
+          return Some(buf.to_bytes())
+        }
+        completed = completed + 1
+        buf.reset()
       }
     }
+    open = p.segments[p.segments.length() - 1] == 255
   }
   None
+}
+
+///|
+/// 取某条逻辑流的第一个包（标识头），跨页时继续拼接。
+///
+/// 首页带 continued 标志说明包的开头不在文件里，直接返回 None
+/// （调用方不该拿半个头去解析）。
+pub fn first_packet(pages : Array[Page], serial : UInt32) -> Bytes? {
+  packet_at(pages, serial, 0)
 }
 
 ///|
@@ -476,13 +554,25 @@ pub fn first_packets(pages : Array[Page]) -> Map[UInt32, Bytes] {
     if st == 2 || st == 3 {
       continue
     }
+    // 空页不含包边界，不推进也不打断首包累积。
+    if p.segments.length() == 0 {
+      if p.payload.length() != 0 {
+        state.set(p.serial, 3)
+      }
+      continue
+    }
+    let continued = (p.header_type.to_int() & flag_continued().to_int()) != 0
     if st == 0 {
-      if (p.header_type.to_int() & flag_continued().to_int()) != 0 {
+      if continued {
         state.set(p.serial, 3)
         continue
       }
       accs.set(p.serial, Buffer())
       state.set(p.serial, 1)
+    } else if !continued {
+      // 累积中的包没有续页标志：中间缺页，整个首包不可信。
+      state.set(p.serial, 3)
+      continue
     }
     let acc = match accs.get(p.serial) {
       Some(a) => a
@@ -491,11 +581,14 @@ pub fn first_packets(pages : Array[Page]) -> Map[UInt32, Bytes] {
         continue
       }
     }
+    if !segments_match_payload(p) {
+      state.set(p.serial, 3)
+      continue
+    }
     let mut off = 0
-    let mut bad = false
     for seg in p.segments {
-      if off + seg > p.payload.length() {
-        bad = true
+      if seg > p.payload.length() - off {
+        state.set(p.serial, 3)
         break
       }
       acc.write_bytes(p.payload[off:off + seg])
@@ -505,9 +598,6 @@ pub fn first_packets(pages : Array[Page]) -> Map[UInt32, Bytes] {
         state.set(p.serial, 2)
         break
       }
-    }
-    if bad {
-      state.set(p.serial, 3)
     }
   }
   out

@@ -22,15 +22,12 @@ fi
 # 临时目录放进 _build（已在 .gitignore 里）：即使脚本被中断，
 # 残留也只落在构建目录内，不会污染仓库根目录。
 mkdir -p _build
-# 被强制中断（SIGKILL / 终端关闭）或 Windows 句柄延迟时 trap 可能失败；
-# 清掉 5 分钟前的遗留（一次冒烟约 100 秒（含 Vorbis 转码），不会误删并发实例）。
-find _build -maxdepth 1 -type d -name 'smoke.*' -mmin +1 -exec rm -rf {} + 2>/dev/null || true
+# 每个实例只清理自己的目录；不按时间删除其他 smoke.*，避免慢实例被并发清理。
 TMP="$(mktemp -d -p _build smoke.XXXXXX)"
 # Windows 上文件句柄释放有延迟，rm -rf 可能第一次删不干净；
-# 重试几次，失败也不影响检查结果（下次运行前的陈旧目录清理会兜底）。
+# 重试几次，仍失败就明确提示残留路径。
 cleanup() {
-  # Windows 上文件句柄释放有延迟：多试几次，仍失败就留一句提示
-  # （目录在 _build/ 内，下一次运行前的陈旧清理会兜底）。
+  # 不清理其他实例的目录；本实例失败时只报告自己的 TMP。
   # 2544 个文件的目录在 Windows 上删除本身要几秒，重试要给足时间
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     rm -rf "$TMP" 2>/dev/null
@@ -50,6 +47,31 @@ check() { if [ "$1" -eq 0 ]; then pass "$2"; else fail "$2"; fi; }
 if [ ! -x "$BIN" ]; then
   echo "找不到可执行文件：$BIN（先运行 moon build --target native）"
   exit 1
+fi
+
+echo "== 0. 版本与输出类型防护 =="
+"$BIN" version | grep -q "moonmux 0.2.0"
+check $? "version 与模块版本一致（0.2.0）"
+"$BIN" extract testdata/opus_sample.opus 1 "$TMP" >/dev/null 2>&1
+[ $? -eq 2 ]; check $? "目录作为输出路径被拒绝（2）"
+
+# Win32 的 @fs 看不见 MSYS FIFO，is_file 也区分不了它；FIFO 断言只在真 POSIX 上跑。
+RUN_POSIX_FIFO=0
+case "$(uname -s)" in
+  Linux|Darwin|FreeBSD) RUN_POSIX_FIFO=1 ;;
+esac
+if [ "$RUN_POSIX_FIFO" -eq 1 ] && command -v mkfifo >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+  : > "$TMP/fifo-out.ogg"
+  mkfifo "$TMP/input.fifo"
+  timeout 5 "$BIN" extract "$TMP/input.fifo" 1 "$TMP/fifo-out.ogg" >/dev/null 2>&1
+  [ $? -eq 2 ]; check $? "FIFO 输入在预读阶段被拒绝且不阻塞"
+  rm -f "$TMP/input.fifo"
+  mkfifo "$TMP/output.fifo"
+  timeout 5 "$BIN" extract testdata/opus_sample.opus 1 "$TMP/output.fifo" >/dev/null 2>&1
+  [ $? -eq 2 ]; check $? "FIFO 输出被拒绝且不阻塞"
+  rm -f "$TMP/output.fifo"
+else
+  echo "  SKIP  FIFO 防护（仅 POSIX 或本机缺少 mkfifo/timeout）"
 fi
 
 echo "== 1. 单流往返（逐字节） =="
@@ -112,6 +134,8 @@ echo "== 4c. 裁剪 =="
 "$BIN" chop testdata/opus_sample.opus "$TMP/chop.ogg" 1000 3000 >/dev/null 2>&1
 [ $? -eq 0 ] && [ -s "$TMP/chop.ogg" ]
 check $? "chop 输出非空"
+"$BIN" info "$TMP/chop.ogg" | grep -q "时长=1.99 秒"
+check $? "chop 1000→3000 ms 输出约 2.00 秒（扣 pre-skip 后 1.99）"
 "$BIN" verify "$TMP/chop.ogg" 2>/dev/null | grep -q "结构完好"
 check $? "chop 结果通过 verify"
 "$BIN" chop testdata/opus_sample.opus "$TMP/chop2.ogg" 7000 8000 >/dev/null 2>&1
@@ -169,12 +193,29 @@ rm -f "$TMP/single/s1/packet_000100.bin"
 "$BIN" mux "$TMP/single" "$TMP/single.ogg" >/dev/null 2>&1
 [ $? -eq 1 ]; check $? "单流目录缺包被拒绝"
 
+# 目录外任意文件名硬链接到包成员时，mux 不能借输出覆盖输入。
+cp "$TMP/rt1/s1/packet_000000.bin" "$TMP/packet.before"
+if ln "$TMP/rt1/s1/packet_000000.bin" "$TMP/packet-alias.ogg" 2>/dev/null; then
+  "$BIN" mux "$TMP/rt1" "$TMP/packet-alias.ogg" >/dev/null 2>&1
+  [ $? -eq 2 ] && cmp -s "$TMP/rt1/s1/packet_000000.bin" "$TMP/packet.before"
+  check $? "mux 拒绝包成员的硬链接别名且不修改输入"
+else
+  echo "  SKIP  mux 硬链接别名（本机 ln 不支持硬链接）"
+fi
+
 "$BIN" demux testdata/opus_sample.opus "$TMP/bom" >/dev/null 2>&1
 printf '\xef\xbb\xbf' | cat - "$TMP/bom/s1/manifest.txt" > "$TMP/bom/s1/m2"
 mv "$TMP/bom/s1/m2" "$TMP/bom/s1/manifest.txt"
 "$BIN" mux "$TMP/bom" "$TMP/bom.ogg" >/dev/null 2>&1
 cmp -s "$TMP/bom.ogg" testdata/opus_sample.opus
 check $? "带 BOM 的清单被正确剥离（仍逐字节还原）"
+
+# manifest 是目录/管道等非普通文件时属于 I/O 错误（2），不是数据错误（1）
+cp -r "$TMP/rt1" "$TMP/mdir"
+rm -f "$TMP/mdir/s1/manifest.txt"
+mkdir "$TMP/mdir/s1/manifest.txt"
+"$BIN" mux "$TMP/mdir" "$TMP/mdir.ogg" >/dev/null 2>&1
+[ $? -eq 2 ]; check $? "清单不是普通文件时按 I/O 错误退出（2）"
 
 # 跨段复用 serial 必须被拒绝（RFC 3533 §4）
 mkdir -p "$TMP/dup"

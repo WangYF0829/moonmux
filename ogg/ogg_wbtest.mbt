@@ -205,3 +205,14 @@ test "negative offset is rejected safely" {
     Some(_) => assert_true(false)
   }
 }
+
+///|
+/// Int32 上限附近的偏移不能因加法回绕而越界访问。
+test "huge positive offset is rejected safely" {
+  let tiny : Bytes = b"OggS"
+  assert_true(!is_page_start(tiny, 2147483647))
+  match Page::parse(tiny, 2147483647) {
+    None => assert_true(true)
+    Some(_) => assert_true(false)
+  }
+}

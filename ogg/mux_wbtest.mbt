@@ -111,6 +111,42 @@ test "pages are interleaved by granule position" {
 }
 
 ///|
+/// 四路相同粒度的流按流下标稳定排序，覆盖最小堆的边界与 tie-break。
+test "heap merge keeps granule order and stream tie-break" {
+  let streams : Array[LogicalStream] = []
+  let serials = [4U, 3U, 2U, 1U]
+  for s in serials {
+    streams.push({
+      serial: s,
+      packets: [
+        { data: b"h", granule_position: 0L, serial: s, },
+        { data: b"a", granule_position: 10L, serial: s, },
+        { data: b"b", granule_position: 20L, serial: s, },
+      ],
+    })
+  }
+  let pages = match mux_streams(streams) {
+    Ok(p) => p
+    Err(msg) => abort(msg)
+  }
+  let order : Array[UInt32] = []
+  for p in pages {
+    if (p.header_type.to_int() & flag_bos().to_int()) == 0 {
+      order.push(p.serial)
+    }
+  }
+  // 粒度 10 的四页按流下标 0..3（serial 4,3,2,1），20 同理
+  assert_eq(order.length(), 8)
+  let expected = [4U, 3U, 2U, 1U, 4U, 3U, 2U, 1U]
+  let mut i = 0
+  while i < expected.length() {
+    assert_eq(order[i], expected[i])
+    i = i + 1
+  }
+  assert_eq(structure_findings(pages).length(), 0)
+}
+
+///|
 /// 每条流的页序号各自从 0 编号 —— 序号是「在本流内的第几页」，
 /// 不是「在整个文件里的第几页」。
 test "each stream numbers its own pages from zero" {

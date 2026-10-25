@@ -13,19 +13,6 @@
 // `split_chains(chain(a, b))` 应当得到 `[a, b]`。
 
 ///|
-/// `serials` 里是否已有流号 `s`。
-fn has_serial(serials : Array[UInt32], s : UInt32) -> Bool {
-  let mut i = 0
-  while i < serials.length() {
-    if serials[i] == s {
-      return true
-    }
-    i = i + 1
-  }
-  false
-}
-
-///|
 /// 列出一条物理流里出现过的所有流号，按首次出现顺序。
 ///
 /// 这个顺序也是各流 BOS 页的先后顺序。
@@ -72,12 +59,17 @@ pub fn chain(
   // 必须**逐段**处理：一次性 reassemble 会把它的段边界抹掉，
   // 链接结果就从「A + (B 的第 1 段) + (B 的第 2 段)」变成「A + B 全部交织」。
   let used = serials_of(first)
+  let used_set : Map[UInt32, Bool] = Map([])
+  for s in used {
+    used_set.set(s, true)
+  }
   for seg in split_chains(second) {
     let seg_serials = serials_of(seg)
     let mut clash = false
     for s in seg_serials {
-      if has_serial(used, s) {
-        clash = true
+      match used_set.get(s) {
+        Some(_) => clash = true
+        None => ()
       }
     }
     if !clash {
@@ -87,6 +79,7 @@ pub fn chain(
       }
       for s in seg_serials {
         used.push(s)
+        used_set.set(s, true)
       }
     } else {
       // 这一段有流号相撞：只给相撞的流换号，然后按原页边界重新分页
@@ -108,19 +101,23 @@ pub fn chain(
       let mut next = max_serial + 1U
       let remapped : Array[LogicalStream] = []
       for st in streams {
-        let serial = if has_serial(used, st.serial) {
-          // 0 表示「32 位号段已用尽」：上一轮用掉了 0xFFFFFFFF，
-          // 再 +1 就会回绕到 0，与已有流撞号并产出 verify 会判错的文件。
-          if next == 0U {
-            return Err("流号已用尽（无法为相撞的流分配新号）")
+        let serial = match used_set.get(st.serial) {
+          Some(_) => {
+            // 0 表示「32 位号段已用尽」：上一轮用掉了 0xFFFFFFFF，
+            // 再 +1 就会回绕到 0，与已有流撞号并产出 verify 会判错的文件。
+            if next == 0U {
+              return Err(
+                "流号已用尽（无法为相撞的流分配新号）",
+              )
+            }
+            let fresh = next
+            next = if next == 4294967295U { 0U } else { next + 1U }
+            fresh
           }
-          let fresh = next
-          next = if next == 4294967295U { 0U } else { next + 1U }
-          fresh
-        } else {
-          st.serial
+          None => st.serial
         }
         used.push(serial)
+        used_set.set(serial, true)
         remapped.push({ serial, packets: st.packets, })
       }
       // 用按大小攒页而不是一包一页：重组的包只有「原页最后一个包」带真粒度，

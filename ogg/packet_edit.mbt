@@ -32,6 +32,21 @@ pub fn replace_packet(
     return Err("文件里没有 serial=" + serial.to_string() + " 的逻辑流")
   }
   let packets = reassemble(stream)
+  // 页↔包下标映射要求包边界连续。孤儿续包、缺 continued、页序断裂都会让
+  // reassemble 丢包，而这里的 before/on_page 仍按段表计数，继续下去会越界
+  // 或替换到错误的包。公开 API 必须先拒绝这类畸形流。
+  for finding in structure_findings(stream) {
+    match finding.severity {
+      Severity::Error =>
+        return Err(
+          "流结构有错误，拒绝按包下标替换：" + finding.message,
+        )
+      _ => ()
+    }
+  }
+  if count_packets(stream) != packets.length() {
+    return Err("流的段表与包边界不一致，拒绝按包下标替换")
+  }
   if index < 0 || index >= packets.length() {
     return Err(
       "第 " +
@@ -71,16 +86,37 @@ pub fn replace_packet(
       "第 " + index.to_string() + " 个包在页序列里找不到结束位置",
     )
   }
-  // 向前扩展到该页的起点：页首若是续包，说明目标包可能从上一页开始
+  // 向前扩展到该页的起点：页首若是续包，说明目标包可能从上一页开始。
+  // 0 段页对包边界透明，回溯时跳过，不能把它当作包开头。
   let mut start_page = end_page
   while start_page > 0 &&
+        !has_completion(stream[start_page]) &&
         (stream[start_page].header_type.to_int() & flag_continued().to_int()) !=
         0 {
-    start_page = start_page - 1
+    let prev = previous_with_segments(stream, start_page)
+    if prev < 0 {
+      break
+    }
+    start_page = prev
   }
-  // 向后扩展到完整包的边界：末段为 255 说明还有包延伸到下一页
-  while end_page < stream.length() - 1 && last_segment(stream[end_page]) == 255 {
-    end_page = end_page + 1
+  // 向后扩展到完整包的边界：末段为 255 说明还有包延伸到下一页。
+  // 中间若夹着 0 段页，也一并越过。
+  let mut extending = true
+  while extending && end_page < stream.length() - 1 {
+    let terminal = last_with_segments(stream, end_page)
+    if terminal < 0 || last_segment(stream[terminal]) != 255 {
+      extending = false
+    } else {
+      let mut next = end_page + 1
+      while next < stream.length() && stream[next].segments.length() == 0 {
+        next = next + 1
+      }
+      if next >= stream.length() {
+        extending = false
+      } else {
+        end_page = next
+      }
+    }
   }
   // 这一页段里包含的全部包
   let first_pkt = before[start_page]
@@ -167,19 +203,33 @@ pub fn replace_packet(
   if rebuilt.length() == 0 {
     return Err("重建后的页为空")
   }
-  // BOS / EOS 只在真正的流首尾保留：中间段重建出来的页不能带这两个标志
+  // BOS / EOS 只在真正的流首尾保留，并沿用源页是否真的有这两个标志。
+  // 不能仅凭“位置是首/末页”就补标志，否则会把截断流伪装成完整流。
   let is_first = start_page == 0
   let is_last = end_page == stream.length() - 1
+  let source_bos = (stream[0].header_type.to_int() & flag_bos().to_int()) != 0
+  let source_eos = (
+      stream[stream.length() - 1].header_type.to_int() & flag_eos().to_int()
+    ) !=
+    0
   let fixed : Array[Page] = []
   let mut r = 0
   while r < rebuilt.length() {
     let pg = rebuilt[r]
     let mut header = pg.header_type
-    if !is_first && r == 0 {
-      header = (header.to_int() & (255 - flag_bos().to_int())).to_byte()
+    if r == 0 {
+      if is_first && source_bos {
+        header = header | flag_bos()
+      } else {
+        header = (header.to_int() & (255 - flag_bos().to_int())).to_byte()
+      }
     }
-    if !is_last && r == rebuilt.length() - 1 {
-      header = (header.to_int() & (255 - flag_eos().to_int())).to_byte()
+    if r == rebuilt.length() - 1 {
+      if is_last && source_eos {
+        header = header | flag_eos()
+      } else {
+        header = (header.to_int() & (255 - flag_eos().to_int())).to_byte()
+      }
     }
     fixed.push({
       header_type: header,

@@ -264,14 +264,17 @@ pub fn parse(text : String) -> Result[Manifest, String] {
                         }
                         serial = Some(v.reinterpret_as_uint64().to_uint())
                       } else if key == "packets" {
-                        if v < 0L {
-                          return Err("清单的 packets 不能为负：" + line)
+                        if v < 0L || v > 2147483647L {
+                          return Err(
+                            "清单的 packets 超出 32 位非负整数范围：" +
+                            line,
+                          )
                         }
                         packets = Some(v.to_int())
                       } else if key == "chain" {
-                        if v < 1L {
+                        if v < 1L || v > 2147483647L {
                           return Err(
-                            "清单的 chain 必须是 ≥ 1 的整数：" +
+                            "清单的 chain 必须是 1..2147483647 的整数：" +
                             line,
                           )
                         }

@@ -120,7 +120,7 @@ pub fn usage_for(topic : String) -> String {
   } else if topic == "chop" {
     "用法: moonmux chop <in.ogg> <out.ogg> <起ms> <止ms>\n" +
     "  页精度：保留与区间有交集的整页，两端可能各多出不到一页的音频\n" +
-    "  头页（OpusHead/OpusTags、Vorbis 三头）整段保留；粒度值保持原样\n" +
+    "  头页（OpusHead/OpusTags、Vorbis 三头）整段保留；音频粒度按实际保留页重基\n" +
     "  只支持单段、单逻辑流；链接流请先 split，多流请先 extract"
   } else if topic == "version" {
     "用法: moonmux version"

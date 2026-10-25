@@ -101,6 +101,49 @@ test "trailing padding is ignored" {
 }
 
 ///|
+/// OpusTags 的合法二进制后缀（首字节最低位为 1）在编辑后必须原样保留。
+test "opus binary suffix survives re-encoding" {
+  let original = packet_of(
+    b"OpusTags",
+    "old",
+    ["TITLE=Before"],
+    false,
+    b"\x01\xAA\xBB\xCC",
+  )
+  let c : Comment = {
+    vendor: "new",
+    tags: [{ key: "TITLE", value: "After", }],
+  }
+  // 即使调用方请求 padding，二进制后缀也必须紧贴注释列表。
+  let encoded = match
+    encode_comment_preserving(CommentKind::Opus, c, 16, original) {
+    Ok(v) => v
+    Err(_) => b""
+  }
+  let plain = encode_comment(CommentKind::Opus, c, 0)
+  assert_eq(encoded.length(), plain.length() + 4)
+  let start = encoded.length() - 4
+  assert_eq(encoded[start].to_int(), 1)
+  assert_eq(encoded[start + 1].to_int(), 0xAA)
+  assert_eq(encoded[start + 2].to_int(), 0xBB)
+  assert_eq(encoded[start + 3].to_int(), 0xCC)
+  // 普通零填充不属于二进制后缀，编辑时可以被丢弃/重算
+  let padded = packet_of(
+    b"OpusTags",
+    "old",
+    ["TITLE=Before"],
+    false,
+    b"\x00\x00\x00",
+  )
+  let no_suffix = match
+    encode_comment_preserving(CommentKind::Opus, c, 0, padded) {
+    Ok(v) => v
+    Err(_) => b""
+  }
+  assert_eq(no_suffix[no_suffix.length() - 1].to_int(), 'r'.to_int())
+}
+
+///|
 /// 声称有几十亿条注释的包必须在分配内存前被拒 —— 长度字段的 DoS 防护。
 test "absurd entry count is rejected" {
   let buf = Buffer()

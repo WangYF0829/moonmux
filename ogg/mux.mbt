@@ -83,20 +83,15 @@ pub fn mux_streams_sized(
   streams : Array[LogicalStream],
   target : Int32,
 ) -> Result[Array[Page], String] {
-  let mut i = 0
-  while i < streams.length() {
-    let mut j = i + 1
-    while j < streams.length() {
-      if streams[i].serial == streams[j].serial {
+  let seen : Map[UInt32, Bool] = Map([])
+  for st in streams {
+    match seen.get(st.serial) {
+      Some(_) =>
         return Err(
-          "流号 " +
-          streams[i].serial.to_string() +
-          " 被多条逻辑流重复使用",
+          "流号 " + st.serial.to_string() + " 被多条逻辑流重复使用",
         )
-      }
-      j = j + 1
+      None => seen.set(st.serial, true)
     }
-    i = i + 1
   }
   let per : Array[Array[Page]] = []
   for st in streams {
@@ -125,39 +120,112 @@ pub fn mux_streams_sized(
     }
     s = s + 1
   }
-  // 第二阶段：按有效粒度升序做 k 路归并，粒度相同时序号小的流先出
-  let mut go = true
-  while go {
-    let mut pick = -1
-    let mut pick_key : Int64 = 0L
-    let mut t = 0
-    while t < per.length() {
-      if cursors[t] < per[t].length() {
-        let page = per[t][cursors[t]]
-        let key = if page.granule_position >= 0L {
-          page.granule_position
-        } else {
-          carries[t]
-        }
-        if pick < 0 || key < pick_key {
-          pick = t
-          pick_key = key
-        }
-      }
-      t = t + 1
+  // 第二阶段：按有效粒度升序做 k 路归并。用最小堆而不是每页扫描全部流，
+  // 把 O(页数 × 流数) 降为 O(页数 × log 流数)；键相同时流下标小的先出。
+  let heap : Array[MergeItem] = []
+  let mut t = 0
+  while t < per.length() {
+    if cursors[t] < per[t].length() {
+      heap_push(heap, {
+        stream: t,
+        key: page_merge_key(per[t][cursors[t]], carries[t]),
+      })
     }
-    if pick < 0 {
-      go = false
-    } else {
-      let page = per[pick][cursors[pick]]
-      out.push(page)
-      if page.granule_position >= 0L {
-        carries[pick] = page.granule_position
-      }
-      cursors[pick] = cursors[pick] + 1
+    t = t + 1
+  }
+  while heap_pop(heap) is Some(item) {
+    let page = per[item.stream][cursors[item.stream]]
+    out.push(page)
+    if page.granule_position >= 0L {
+      carries[item.stream] = page.granule_position
+    }
+    cursors[item.stream] = cursors[item.stream] + 1
+    if cursors[item.stream] < per[item.stream].length() {
+      heap_push(heap, {
+        stream: item.stream,
+        key: page_merge_key(
+          per[item.stream][cursors[item.stream]],
+          carries[item.stream],
+        ),
+      })
     }
   }
   Ok(out)
+}
+
+///|
+/// 归并堆的元素：流下标 + 该流当前页的有效粒度。
+priv struct MergeItem {
+  stream : Int32
+  key : Int64
+}
+
+///|
+/// 页在归并时的有效粒度：无包结束的页沿用该流上一条已知粒度。
+fn page_merge_key(page : Page, carry : Int64) -> Int64 {
+  if page.granule_position >= 0L {
+    page.granule_position
+  } else {
+    carry
+  }
+}
+
+///|
+/// 归并顺序：粒度升序，粒度相同时流下标升序。
+fn merge_item_before(a : MergeItem, b : MergeItem) -> Bool {
+  a.key < b.key || (a.key == b.key && a.stream < b.stream)
+}
+
+///|
+fn heap_push(heap : Array[MergeItem], item : MergeItem) -> Unit {
+  heap.push(item)
+  let mut i = heap.length() - 1
+  while i > 0 {
+    let parent = (i - 1) / 2
+    if !merge_item_before(heap[i], heap[parent]) {
+      break
+    }
+    let tmp = heap[i]
+    heap[i] = heap[parent]
+    heap[parent] = tmp
+    i = parent
+  }
+}
+
+///|
+fn heap_pop(heap : Array[MergeItem]) -> MergeItem? {
+  if heap.length() == 0 {
+    return None
+  }
+  let root = heap[0]
+  let n = heap.length()
+  let last = heap[n - 1]
+  let _ = heap.pop()
+  if n > 1 {
+    heap[0] = last
+    let mut i = 0
+    let mut go = true
+    while go {
+      let left = i * 2 + 1
+      if left >= n - 1 {
+        go = false
+      } else {
+        let mut child = left
+        if left + 1 < n - 1 && merge_item_before(heap[left + 1], heap[left]) {
+          child = left + 1
+        }
+        if !merge_item_before(heap[child], heap[i]) {
+          go = false
+        } else {
+          let tmp = heap[i]
+          heap[i] = heap[child]
+          heap[child] = tmp
+          i = child
+        }
+      }
+    }
+  }
+  Some(root)
 }
 
 ///|
@@ -176,17 +244,18 @@ pub fn mux_chains_sized(
   target : Int32,
 ) -> Result[Array[Page], String] {
   // 先做全局流号唯一性检查（跨段也算），再逐段封装
-  let all_serials : Array[UInt32] = []
+  let all_serials : Map[UInt32, Bool] = Map([])
   for chain in chains {
     for st in chain {
-      if has_serial(all_serials, st.serial) {
-        return Err(
-          "流号 " +
-          st.serial.to_string() +
-          " 在多段物理流中重复 —— RFC 3533 §4 要求同一物理流内全局唯一",
-        )
+      match all_serials.get(st.serial) {
+        Some(_) =>
+          return Err(
+            "流号 " +
+            st.serial.to_string() +
+            " 在多段物理流中重复 —— RFC 3533 §4 要求同一物理流内全局唯一",
+          )
+        None => all_serials.set(st.serial, true)
       }
-      all_serials.push(st.serial)
     }
   }
   let out : Array[Page] = []
