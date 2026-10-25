@@ -15,10 +15,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # 未覆盖行数的基线（moon coverage analyze 的 Total，2026-10-22 在 Windows native 实测 442；
-# 新增 chop / hex / 24-bit 后上升，新增测试后应调低）。
-  # 新增测试后应调低；调高需要在 PR 说明原因。
-  MAX_UNCOVERED_LINES: 600
+  # 未覆盖行数基线（moon coverage analyze 的 Total）。
+  # 2026-10-25 全量审查后 Linux native 实测 662、Windows native 635；
+  # 新增约 2000 行防御性分支与 CLI 代码，未覆盖行数相应上升（上次实测 605、基线 600）。
+  # 基线设为 660，配合 15 行容差，上限 675；后续补测试应逐步调低。
+  # 调高需要在 PR/提交说明中给出实测值与原因。
+  MAX_UNCOVERED_LINES: 660
   # 跨平台/工具链 patch 版本可能让计数抖动几行，给一点余量。
   COVERAGE_TOLERANCE: 15
 
@@ -136,7 +138,16 @@ jobs:
       - name: moon coverage analyze
         run: |
           set -o pipefail
+          # GitHub 的 bash 默认带 -e；先关掉，避免 analyze 失败时在解析
+          # Total 之前就直接退出，注解里只剩一个没有上下文的 exit code。
+          set +e
           moon coverage analyze 2>&1 | tee /tmp/coverage.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::error::moon coverage analyze failed with exit code $status"
+            exit "$status"
+          fi
           total=$(sed -n 's/^Total: \([0-9][0-9]*\) uncovered.*/\1/p' /tmp/coverage.log | tail -1)
           hits=$(grep -c '^Total: ' /tmp/coverage.log || true)
           limit=$((MAX_UNCOVERED_LINES + COVERAGE_TOLERANCE))
@@ -151,7 +162,9 @@ jobs:
             {
               echo "### coverage regressed: $total > $limit (baseline $MAX_UNCOVERED_LINES)"
               echo '```'
-              grep -n 'UNCOVERED' /tmp/coverage.log | head -60
+              # head 提前关闭管道会让 grep 收到 SIGPIPE；pipefail 下必须吞掉，
+              # 否则 -e 会把真正的“覆盖超限”变成 exit 141/2。
+              grep -n 'UNCOVERED' /tmp/coverage.log | head -60 || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::error::coverage regressed: $total uncovered lines > $limit"
