@@ -202,3 +202,47 @@ jobs:
       # 端到端：往返逐字节、退出码、截断、清单异常、转码输出。
       - name: Smoke tests
         run: bash scripts/smoke.sh
+
+  # v0.3.x：MP4 写侧的独立验证。ubuntu-latest 自带 ffmpeg/ffprobe，
+  # 用外部工具证明 remux 产物是标准 MP4（不依赖自家读侧）。
+  mp4:
+    name: mp4 · verify (ffprobe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Update package index
+        run: moon update
+
+      - name: Build native CLI
+        run: moon build --target native
+
+      - name: Verify MP4 with ffprobe
+        run: bash scripts/verify_mp4.sh
+
+  # 回应 10 月终审反馈：在干净工程里实测 mooncakes 版本可安装、可运行。
+  install:
+    name: install · moon add
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Update package index
+        run: moon update
+
+      - name: Verify clean-project install
+        env:
+          MOONMUX_INSTALL_VERSION: "0.3.2"
+        run: bash scripts/install_check.sh

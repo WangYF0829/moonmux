@@ -33,8 +33,8 @@ fail() { printf "  FAIL  %s\n" "$1"; FAIL=$((FAIL + 1)); }
 echo "== 可安装性验证：WangYF0829/moonmux@$VERSION =="
 
 cd "$TMP" || exit 1
-# 1) 干净工程
-moon new qa_install >/dev/null 2>&1
+# 1) 干净工程（显式指定 user/name，CI 环境未登录时也能创建）
+moon new --user qa --name qa_install qa_install >/dev/null 2>&1
 if [ -d qa_install ]; then
   pass "moon new 创建干净工程"
 else
