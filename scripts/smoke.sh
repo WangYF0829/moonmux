@@ -149,6 +149,31 @@ check $? "info --json 输出 Ogg 结构"
 "$BIN" verify testdata/opus_sample.opus --json | grep -q '"crc_ok":9'
 check $? "verify --json 输出 CRC 统计"
 
+echo "== 4d. remux（Ogg → MP4）=="
+"$BIN" remux testdata/opus_sample.opus "$TMP/out.m4a" >/dev/null 2>&1
+[ $? -eq 0 ] && [ -s "$TMP/out.m4a" ]
+check $? "Ogg Opus → MP4 输出非空"
+"$BIN" info "$TMP/out.m4a" | grep -q "格式:   MP4"
+check $? "info 识别 MP4"
+"$BIN" info "$TMP/out.m4a" | grep -q "Opus"
+check $? "MP4 信息含 Opus 音轨"
+# 前 8 字节应为 size + "ftyp"（不硬编码 size，只断言 fourcc）
+head -c 8 "$TMP/out.m4a" | od -An -tx1 | tr -d ' \n' | grep -q "66747970"
+check $? "MP4 文件以 ftyp 开头"
+"$BIN" remux testdata/vorbis_sample.ogg "$TMP/v.m4a" >/dev/null 2>&1
+[ $? -eq 1 ]
+check $? "Vorbis 输入被拒绝（仅支持 Ogg Opus，退出 1）"
+# 输出扩展名不做限制：容器识别只按内容
+"$BIN" remux testdata/opus_sample.opus "$TMP/out-noext" >/dev/null 2>&1
+check $? "remux 不依赖输出扩展名"
+# 外部对账：ffprobe 能识别出 opus 编码（CI ubuntu 自带；本机可选）
+if command -v ffprobe >/dev/null 2>&1; then
+  ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1 "$TMP/out.m4a" | grep -q "codec_name=opus"
+  check $? "ffprobe 识别 MP4 内 Opus 编码"
+else
+  echo "  SKIP  ffprobe 外部对账（未安装）"
+fi
+
 echo "== 5. 定位 =="
 "$BIN" seek testdata/opus_sample.opus 2500 >/dev/null 2>&1
 check $? "seek 正常工作"

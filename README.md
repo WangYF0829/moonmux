@@ -16,11 +16,11 @@
 
 | 项 | 状态 |
 |---|---|
-| **MP4 / ISOBMFF 写入**（Opus-in-MP4，新 `mp4/` 包：`ftyp`/`moov`/`mdat`、`stbl` 表、`dOps`） | 开发中 |
-| **`remux` 命令**：Ogg Opus → `.m4a` | 开发中 |
-| **`info` 识别 MP4** | 开发中 |
-| **CRC-32 查表优化**（输出与 RFC 3533 逐字节一致） | 开发中 |
-| 测试 / 示例 / 文档 / CHANGELOG / **v0.3.0 发布（mooncakes + GitHub Release）** | 开发中 |
+| **MP4 / ISOBMFF 写入**（Opus-in-MP4，新 `mp4/` 包：`ftyp`/`moov`/`mdat`、`stbl` 表、`dOps`） | **已完成** |
+| **`remux` 命令**：Ogg Opus → `.m4a` | **已完成** |
+| **`info` 识别 MP4** | **已完成** |
+| **CRC-32 查表优化**（输出与 RFC 3533 逐字节一致） | **已完成** |
+| 测试 / 示例 / 文档 / CHANGELOG / **v0.3.0 发布（mooncakes + GitHub Release）** | 进行中 |
 
 - **已可用（已发布）**：`moon add WangYF0829/moonmux` 安装 **v0.2.0**（[mooncakes](https://mooncakes.io/docs/WangYF0829/moonmux)，2026-11-06 发布，可安装使用）。
 - 本期变更明细见 [CHANGELOG.md](CHANGELOG.md)；完成后发布 v0.3.0。
@@ -53,8 +53,8 @@ moonmux 补的就是最后两行。
 | `manifest/` | `demux`/`mux` 的流目录清单（流号、包数、链序号、逐包粒度）的解析与生成 | 已完成 |
 | `wav/` | WAV（RIFF/PCM）读写 | 已完成 |
 | `pipeline/` | Ogg（Opus / Vorbis）→ WAV 转码管线 | 已完成 |
-| `mp4/` | MP4/ISOBMFF 写入（Opus-in-MP4）：`ftyp`/`moov`/`mdat`、`stbl` 五表、`dOps`；Ogg Opus → MP4 remux | 开发中（v0.3.0） |
-| `cmd/main/` | 命令行工具：`info`、`demux`、`mux`、`cat`、`split`、`extract`、`dump`、`tags`、`tag`、`seek`、`verify`、`to-wav`、`chop`、`remux`（v0.3.0） | 已完成 / 开发中 |
+| `mp4/` | MP4/ISOBMFF 写入（Opus-in-MP4）：`ftyp`/`moov`/`mdat`、`stbl` 五表、`dOps`；最小读侧（`inspect`）供 `info` 与 remux 自检 | **已完成（v0.3.0）** |
+| `cmd/main/` | 命令行工具：`info`、`demux`、`mux`、`cat`、`split`、`extract`、`dump`、`tags`、`tag`、`seek`、`verify`、`to-wav`、`chop`、`remux` | 已完成 |
 
 **容器层（`ogg/`、`wav/`）不依赖任何三方包**：容器格式的正确性应当能被独立验证，不该被解码器的缺陷掩盖。解码环节留给生态中已有的纯 MoonBit 解码器（`LL728/moonopus`、`LL728/moonvorbis`），通过 `pipeline/` 对接 —— 三方依赖被隔离在这一层，不在容器层。
 
@@ -120,6 +120,7 @@ fn main {
 | 项 | 上限 | 原因 |
 |---|---|---|
 | 单文件大小 | **2 GiB** | MoonBit `Int` 是 32 位，页偏移与长度都用它；`@fs` 也只有整文件 API |
+| MP4 写侧 | 仅 **Opus-in-MP4**、单音轨、单 chunk | 本期只补 Opus；Vorbis-in-MP4 非主流且需解析 Vorbis setup，明确不做；`remux` 只接受 Ogg Opus 输入 |
 | `demux` 包数 | **999999** | 包文件名固定 6 位，超过后字典序错乱、`mux` 读回顺序不对 |
 | `to-wav` PCM 预算 | **256 MiB**（`MOONMUX_MAX_PCM_MB` 可调大） | 整条链路没有流式写接口，PCM 必须攒齐再落盘；实测峰值约为预算的 3–4 倍。外部解码器一次返回整段 PCM，恶意伪造的 granule 仍可能造成超出预算的瞬时分配 |
 | `chop` Opus 时间戳 | 页精度，约 ±1 页 | 不重写 OpusHead 的 pre-skip；裁剪后首个数据页可能多带不到一页的前导样本 |
@@ -204,6 +205,11 @@ moonmux seek chained.ogg 500 2
 # 转码：Ogg（Opus / Vorbis）→ WAV；默认 16 位，可选 24 位
 moonmux to-wav input.ogg output.wav
 moonmux to-wav input.ogg output24.wav 24
+
+# 重新封装：Ogg（Opus）→ MP4 / ISOBMFF 音频容器（.m4a，v0.3.0 新增）
+#   不做转码：Opus 数据包原样搬运，只重建容器；info 可识别产物
+moonmux remux input.ogg output.m4a
+moonmux info output.m4a
 
 # 裁剪：按毫秒区间裁剪（页精度，头页保留，时间轴归零）
 moonmux chop input.ogg clip.ogg 1000 3000

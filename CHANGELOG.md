@@ -8,16 +8,23 @@
 2026 年 11 月按「已有项目维护」方向持续开发，本期目标：补齐 MP4 写入能力与工程化。
 
 ### 新增
-- 计划：`mp4/` 包 —— MP4 / ISOBMFF 写入（Opus-in-MP4：`ftyp` / `moov` / `mdat`、`stbl` 五表、`dOps`）。
-- 计划：`remux` 命令 —— Ogg（Opus）→ `.m4a`。
-- 计划：`info` 识别 MP4（编码、声道、采样率、时长）。
+- `mp4/` 包 —— MP4 / ISOBMFF 写入（Opus-in-MP4）：ISOBMFF box 层、
+  `ftyp` / `moov` / `mdat`、`stbl` 五表、`dOps`；最小读侧 `inspect` / `is_mp4`
+  供 `info` 与 remux 自检（写—读对称）。
+- `remux` 命令 —— Ogg（Opus）→ `.m4a`；不做转码，Opus 数据包原样搬运。
+- `info` 识别 MP4 —— 编码、声道、采样率、时长、样本数（文本与 `--json`）。
+- `codec`：Opus 包 TOC 帧时长计算（RFC 6716），用于生成 stts / mdhd。
 
 ### 变更 / 优化
-- 计划：CRC-32 改为查表实现（对外输出与 RFC 3533 逐字节一致，`verify` 更快）。
+- CRC-32 改为 8 位查表实现：对外输出与 RFC 3533 逐位结果逐字节一致
+  （crc_wbtest 交叉校验 0..511 字节 + 真实 Ogg 文件断言），`verify` 大文件更快。
+
+### 测试
+- 237 → 252：box 大小/四码、合成 Ogg→MP4 往返、MP4 布局、CLI 解析、CRC 交叉校验。
 
 ### 文档 / 工程
-- 新增本 CHANGELOG；README 增加「2026-11 更新」与库用法示例。
-- 计划：补充测试、示例与 CI 门禁；发布 v0.3.0 到 mooncakes.io 与 GitHub Release。
+- 新增 CHANGELOG；README 增加「2026-11 更新」与库用法示例；申报书更新为 11 月版。
+- 进行中：示例、架构文档、CI 门禁、发布 v0.3.0 到 mooncakes.io 与 GitHub Release。
 
 ## [0.2.0] — 2026-10-23
 
