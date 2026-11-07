@@ -1,7 +1,7 @@
 # moonmux 架构与设计说明
 
 > 本文回答「项目怎么组织、关键不变量是什么、为什么这样取舍」，供评审与后续维护者阅读。
-> 版本：v0.3.0（2026-11-07）。
+> 版本：v0.3.1（2026-11-07）。
 
 ## 1. 目标与非目标
 
@@ -37,7 +37,7 @@
 5. **MP4 盒子自洽**：`stts` 样本时长和 = `mdhd` duration；`stsz` 逐样本大小和 = `mdat` 负载长度；`stsc` 单 chunk 装全部样本，`stco` 指向 `mdat` 负载起点；`dOps` 是 **Box**（首字节为 Version），不是 FullBox —— 写成 FullBox 会让 ffmpeg 读到 zero channel count。
 6. **发布一致性**：发布包来自 git 跟踪文件，`.moonignore` 排除 `_build`、`*.mbti`、日志等生成物。
 
-## 4. MP4 写侧布局（v0.3.0）
+## 4. MP4 写侧布局（v0.3.x）
 
 ```
 ftyp (M4A / isom / iso2 / mp41)

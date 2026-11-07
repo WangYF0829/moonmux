@@ -5,14 +5,14 @@
 [![CI](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml/badge.svg)](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-252%20passing-brightgreen.svg)](#构建与测试)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
-[![mooncakes](https://img.shields.io/badge/mooncakes-0.3.0-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
+[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
+[![mooncakes](https://img.shields.io/badge/mooncakes-0.3.1-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
 
 纯 MoonBit 实现的音频容器工具包，补上 MoonBit 生态中「能解码、不能封装」的最后一环。
 
-## 2026-11 更新（v0.3.0 开发中）
+## 2026-11 更新（v0.3.1）
 
-本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，11 月按「已有项目维护」方向持续开发。本期（v0.3.0）计划与进展：
+本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，11 月按「已有项目维护」方向持续开发。本期（v0.3.x）交付：
 
 | 项 | 状态 |
 |---|---|
@@ -20,9 +20,9 @@
 | **`remux` 命令**：Ogg Opus → `.m4a` | **已完成** |
 | **`info` 识别 MP4** | **已完成** |
 | **CRC-32 查表优化**（输出与 RFC 3533 逐字节一致） | **已完成** |
-| 测试 / 示例 / 文档 / CHANGELOG / **v0.3.0 发布（mooncakes + GitHub Release）** | 进行中 |
+| 测试 / 示例 / 文档 / CHANGELOG / **v0.3.1 发布（mooncakes + GitHub Release）** | **已完成** |
 
-- **已可用（最新发布 v0.3.0）**：`moon add WangYF0829/moonmux` 安装 **v0.3.0**（2026-11-07 发布，含 MP4 写入与 `remux`）；v0.2.0 亦可安装（2026-11-06 首发，Ogg/WAV 能力）。
+- **已可用（最新发布 v0.3.1）**：`moon add WangYF0829/moonmux` 安装 **v0.3.1**（2026-11-07 发布，含 MP4 写入与 `remux`）；v0.2.0 亦可安装（2026-11-06 首发，Ogg/WAV 能力）。
 - 本期变更明细见 [CHANGELOG.md](CHANGELOG.md)。
 
 
@@ -53,14 +53,14 @@ moonmux 补的就是最后两行。
 | `manifest/` | `demux`/`mux` 的流目录清单（流号、包数、链序号、逐包粒度）的解析与生成 | 已完成 |
 | `wav/` | WAV（RIFF/PCM）读写 | 已完成 |
 | `pipeline/` | Ogg（Opus / Vorbis）→ WAV 转码管线 | 已完成 |
-| `mp4/` | MP4/ISOBMFF 写入（Opus-in-MP4）：`ftyp`/`moov`/`mdat`、`stbl` 五表、`dOps`；最小读侧（`inspect`）供 `info` 与 remux 自检 | **已完成（v0.3.0）** |
+| `mp4/` | MP4/ISOBMFF 写入（Opus-in-MP4）：`ftyp`/`moov`/`mdat`、`stbl` 五表、`dOps`；最小读侧（`inspect`）供 `info` 与 remux 自检 | **已完成（v0.3.x）** |
 | `cmd/main/` | 命令行工具：`info`、`demux`、`mux`、`cat`、`split`、`extract`、`dump`、`tags`、`tag`、`seek`、`verify`、`to-wav`、`chop`、`remux` | 已完成 |
 
 **容器层（`ogg/`、`wav/`）不依赖任何三方包**：容器格式的正确性应当能被独立验证，不该被解码器的缺陷掩盖。解码环节留给生态中已有的纯 MoonBit 解码器（`LL728/moonopus`、`LL728/moonvorbis`），通过 `pipeline/` 对接 —— 三方依赖被隔离在这一层，不在容器层。
 
 ## 作为库使用
 
-模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）并发布 **0.3.0**（2026-11-07；0.2.0 于 2026-11-06 首发）：
+模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）并发布 **0.3.1**（2026-11-07；0.2.0 于 2026-11-06 首发）：
 
 ```bash
 moon add WangYF0829/moonmux
@@ -206,7 +206,7 @@ moonmux seek chained.ogg 500 2
 moonmux to-wav input.ogg output.wav
 moonmux to-wav input.ogg output24.wav 24
 
-# 重新封装：Ogg（Opus）→ MP4 / ISOBMFF 音频容器（.m4a，v0.3.0 新增）
+# 重新封装：Ogg（Opus）→ MP4 / ISOBMFF 音频容器（.m4a，v0.3.x 新增）
 #   不做转码：Opus 数据包原样搬运，只重建容器；info 可识别产物
 moonmux remux input.ogg output.m4a
 moonmux info output.m4a
@@ -285,7 +285,7 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 
 ## 开发状态
 
-本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，10 月发布 **v0.2.0**（2026-10-23），11 月按「已有项目维护」方向发布 **v0.3.0**（2026-11-07，新增 MP4 写入、`remux`、CRC 查表，见上方「2026-11 更新」）。
+本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，10 月发布 **v0.2.0**（2026-10-23），11 月按「已有项目维护」方向发布 **v0.3.1**（2026-11-07，新增 MP4 写入、`remux`、CRC 查表，见上方「2026-11 更新」）。
 
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测）、**MP4/ISOBMFF 写入（Opus-in-MP4，`remux`）**，
@@ -297,7 +297,7 @@ Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测）、**MP4/ISOBMFF 写�
 252 个测试、POSIX 端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
 `scripts/verify_mp4.sh`（ffprobe 外部对账）、`scripts/install_check.sh`（干净工程 `moon add` 复验）、
 GitHub Actions CI（ubuntu + windows 矩阵，外加覆盖率非回归门禁与 native 冒烟）。
-变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.0）。
+变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.1）。
 
 本期新增：MP4 / ISOBMFF 封装（Opus-in-MP4）与 `remux`；CRC-32 查表优化。
 仍不做：WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器，边界与原因见上）。
