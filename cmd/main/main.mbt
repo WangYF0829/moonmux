@@ -817,11 +817,16 @@ fn run_info(path : String, json : Bool) -> Unit {
     Some(data) =>
       if @ogg.is_page_start(data, 0) {
         show_ogg_info(path, data, json)
+      } else if @mp4.is_mp4(data) {
+        match @mp4.inspect(data) {
+          Some(info) => show_mp4_info(path, data, info, json)
+          None => fail_data("错误: 无法解析的 MP4 —— " + path)
+        }
       } else {
         match @wav.WavFile::parse(data) {
           Some(f) => show_wav_info(path, data, f, json)
           None =>
-            fail_data("错误: 既不是 Ogg 也不是 WAV —— " + path)
+            fail_data("错误: 既不是 Ogg、WAV 也不是 MP4 —— " + path)
         }
       }
   }
@@ -1034,6 +1039,174 @@ fn show_wav_info(
       pad2(frac) +
       " 秒）",
     )
+  }
+}
+
+///|
+/// 把秒数格式化为「整数.百分秒」的字符串。
+///
+/// 与 Ogg/WAV 信息一致，用整数百分秒舍入，不走浮点打印，
+/// 避免把 6 秒显示成 5.9999999。
+fn format_seconds(secs : Double) -> String {
+  if secs < 0.0 {
+    return "0.00"
+  }
+  let hundredths = (secs * 100.0 + 0.5).to_int64()
+  (hundredths / 100L).to_string() + "." + pad2((hundredths % 100L).to_int())
+}
+
+///|
+/// 打印 MP4 的容器信息（写侧的对称读回；供 `info` 与 remux 自检共用）。
+fn show_mp4_info(
+  path : String,
+  data : Bytes,
+  info : @mp4.Mp4Info,
+  json : Bool,
+) -> Unit {
+  if json {
+    print_mp4_json(path, data, info)
+    return
+  }
+  println("文件:   " + path)
+  println("格式:   MP4（ISOBMFF）")
+  println("字节数: " + data.length().to_string())
+  println("主品牌: " + info.major_brand)
+  println("时长:   " + format_seconds(info.duration_seconds) + " 秒")
+  println("轨道数: " + info.tracks.length().to_string())
+  let mut i = 0
+  while i < info.tracks.length() {
+    let t = info.tracks[i]
+    let kind = if t.handler == "soun" {
+      "音频"
+    } else if t.handler == "vide" {
+      "视频"
+    } else {
+      "轨道"
+    }
+    println(
+      "  " +
+      (i + 1).to_string() +
+      ") " +
+      kind +
+      "  " +
+      t.codec +
+      "  声道=" +
+      t.channels.to_string() +
+      "  采样率=" +
+      t.sample_rate.to_string() +
+      " Hz  时长=" +
+      format_seconds(t.duration_seconds) +
+      " 秒  样本=" +
+      t.sample_count.to_string(),
+    )
+    i = i + 1
+  }
+}
+
+///|
+/// MP4 信息的 JSON 版本（单行）。
+fn print_mp4_json(path : String, data : Bytes, info : @mp4.Mp4Info) -> Unit {
+  let sb = StringBuilder()
+  sb.write_stringview("{\"file\":")
+  sb.write_stringview(json_string(path))
+  sb.write_stringview(",\"format\":\"mp4\",\"bytes\":")
+  sb.write_stringview(data.length().to_string())
+  sb.write_stringview(",\"major_brand\":")
+  sb.write_stringview(json_string(info.major_brand))
+  sb.write_stringview(",\"duration_ms\":")
+  sb.write_stringview((info.duration_seconds * 1000.0 + 0.5).to_int64().to_string())
+  sb.write_stringview(",\"tracks\":[")
+  let mut i = 0
+  while i < info.tracks.length() {
+    if i > 0 {
+      sb.write_stringview(",")
+    }
+    let t = info.tracks[i]
+    sb.write_stringview("{\"handler\":")
+    sb.write_stringview(json_string(t.handler))
+    sb.write_stringview(",\"codec\":")
+    sb.write_stringview(json_string(t.codec))
+    sb.write_stringview(",\"channels\":")
+    sb.write_stringview(t.channels.to_string())
+    sb.write_stringview(",\"sample_rate\":")
+    sb.write_stringview(t.sample_rate.to_string())
+    sb.write_stringview(",\"samples\":")
+    sb.write_stringview(t.sample_count.to_string())
+    sb.write_stringview(",\"duration_ms\":")
+    sb.write_stringview((t.duration_seconds * 1000.0 + 0.5).to_int64().to_string())
+    sb.write_stringview("}")
+    i = i + 1
+  }
+  sb.write_stringview("]}")
+  println(sb.to_string())
+}
+
+///|
+/// `remux`：把 Ogg（Opus）重新封装成 MP4（Opus-in-MP4）。
+///
+/// 与 `to-wav` 同一套 I/O 纪律：先完整读入、由 mp4/ 完成封装、
+/// 写前备份已有输出、写后回读自检；容器语义全在 mp4/ 里，
+/// 这一层只负责文件与报错。
+fn run_remux(src : String, out : String) -> Unit {
+  reject_same_path(src, out)
+  match read_all(src) {
+    None => ()
+    Some(data) =>
+      match @mp4.remux_ogg_opus(data) {
+        Err(msg) => fail_data("错误: remux 失败 —— " + msg)
+        Ok(bytes) => {
+          let bak = backup_output(out)
+          match bak {
+            Unavailable => {
+              fail("错误: 无法备份已有输出 " + out + "，拒绝覆盖")
+              return
+            }
+            _ => ()
+          }
+          @fs.write_bytes_to_file(out, bytes) catch {
+            IOError(msg) => {
+              restore_output(out, bak)
+              fail("错误: 无法写入 " + out + " —— " + msg)
+              return
+            }
+          }
+          match @mp4.inspect(bytes) {
+            None => {
+              restore_output(out, bak)
+              fail_data(
+                "错误: 已写出 " +
+                out +
+                "，但回读校验未通过，已恢复原文件（若有）",
+              )
+            }
+            Some(info) => {
+              let track = if info.tracks.length() > 0 {
+                let t = info.tracks[0]
+                t.codec +
+                " " +
+                t.channels.to_string() +
+                " 声道 / " +
+                t.sample_rate.to_string() +
+                " Hz"
+              } else {
+                "无音轨"
+              }
+              println(
+                "已写出 " +
+                out +
+                "  MP4/" +
+                track +
+                " / " +
+                format_seconds(info.duration_seconds) +
+                " 秒 / " +
+                bytes.length().to_string() +
+                " 字节",
+              )
+              commit_output(bak)
+            }
+          }
+        }
+      }
   }
 }
 
@@ -2966,6 +3139,7 @@ fn main {
     @cli.Command::ToWav(src, out, bits) => run_towav(src, out, bits)
     @cli.Command::Chop(src, out, start_ms, end_ms) =>
       run_chop(src, out, start_ms, end_ms)
+    @cli.Command::Remux(src, out) => run_remux(src, out)
     @cli.Command::Version => println(@moonmux.describe())
     @cli.Command::Help => println(@cli.usage())
     @cli.Command::Bad(msg, usage) => {

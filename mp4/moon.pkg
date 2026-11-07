@@ -1,0 +1,16 @@
+// mp4 —— MP4 / ISOBMFF 写入（Opus-in-MP4）
+//
+// 这一层只做盒子层：ISOBMFF 的 box 序列化与 moov 结构，
+// 把 Ogg 里已有的 Opus 包重新封装成 .m4a。纯 MoonBit、零三方依赖。
+//
+// 依赖本模块内的：
+//   ogg/   读页与包（页/段/CRC 由 ogg 负责）
+//   codec/ OpusHead 解析与 TOC 帧时长
+//
+// 正确性验证：box 级单测断言 size/四码/嵌套偏移；外部用 ffprobe 与
+// trkbt10/isobmff 读回对账（生成文件不使用任何三方库）。
+
+import {
+  "WangYF0829/moonmux/ogg",
+  "WangYF0829/moonmux/codec",
+}

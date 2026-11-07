@@ -11,6 +11,7 @@ import {
   "WangYF0829/moonmux/wav",
   "WangYF0829/moonmux/codec",
   "WangYF0829/moonmux/manifest",
+  "WangYF0829/moonmux/mp4",
   "WangYF0829/moonmux/pipeline",
   "moonbitlang/x/fs",
   "moonbitlang/core/env",

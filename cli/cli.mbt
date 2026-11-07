@@ -36,6 +36,8 @@ pub(all) enum Command {
   ToWav(String, String, Int32)
   /// 按毫秒区间裁剪（页精度）：输入、输出、起、止
   Chop(String, String, Int32, Int32)
+  /// 把 Ogg（Opus）重新封装成 MP4（Opus-in-MP4，.m4a）
+  Remux(String, String)
   /// 打印版本
   Version
   /// 打印总用法
@@ -69,6 +71,8 @@ pub fn usage() -> String {
   "                                  转码为 WAV，默认 16 位\n" +
   "  moonmux chop <in.ogg> <out.ogg> <起ms> <止ms>\n" +
   "                                  按时间裁剪（页精度，头页保留）\n" +
+  "  moonmux remux <in.ogg> <out.m4a>\n" +
+  "                                  把 Ogg（Opus）重新封装为 MP4（Opus-in-MP4）\n" +
   "  moonmux version                  打印版本\n" +
   "  moonmux help                     显示本帮助"
 }
@@ -77,7 +81,7 @@ pub fn usage() -> String {
 /// 针对单个子命令的用法文本。
 pub fn usage_for(topic : String) -> String {
   if topic == "info" {
-    "用法: moonmux info <file.ogg|file.wav>"
+    "用法: moonmux info <file.ogg|file.wav|file.m4a>"
   } else if topic == "demux" {
     "用法: moonmux demux <file.ogg> <dir>\n" +
     "  <dir> 下每条逻辑流一个子目录：s1/、s2/……"
@@ -122,6 +126,11 @@ pub fn usage_for(topic : String) -> String {
     "  页精度：保留与区间有交集的整页，两端可能各多出不到一页的音频\n" +
     "  头页（OpusHead/OpusTags、Vorbis 三头）整段保留；音频粒度按实际保留页重基\n" +
     "  只支持单段、单逻辑流；链接流请先 split，多流请先 extract"
+  } else if topic == "remux" {
+    "用法: moonmux remux <in.ogg> <out.m4a>\n" +
+    "  把 Ogg（Opus）重新封装为 MP4 / ISOBMFF 音频容器（.m4a）\n" +
+    "  不做转码：Opus 数据包原样搬运，只重建容器（MP4 写侧）\n" +
+    "  只支持单段、单逻辑流的 Ogg Opus；Vorbis/链接流请先处理"
   } else if topic == "version" {
     "用法: moonmux version"
   } else if topic == "help" {
@@ -452,6 +461,14 @@ pub fn parse(args : Array[String]) -> Command {
       Command::Bad(arity_msg("version", n, 0), usage_for("version"))
     } else {
       Command::Version
+    }
+  } else if sub == "remux" {
+    if n < 2 {
+      Command::Bad("remux 需要输入文件与输出文件", usage_for("remux"))
+    } else if n > 2 {
+      Command::Bad(arity_msg("remux", n, 2), usage_for("remux"))
+    } else {
+      Command::Remux(args[1], args[2])
     }
   } else if sub == "help" {
     if n > 0 {
