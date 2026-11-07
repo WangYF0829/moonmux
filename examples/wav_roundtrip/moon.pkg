@@ -1,0 +1,6 @@
+// 最小示例：WAV 编码 → 解析往返（纯库调用，不读写文件，可跑 wasm-gc/native）
+import {
+  "WangYF0829/moonmux/wav",
+}
+
+pkgtype(kind: "executable")

@@ -1,7 +1,7 @@
 // opus_toc_wbtest.mbt —— Opus TOC 时长计算测试
 
 ///|
-fn toc_samples(bytes : Bytes) -> Int? {
+fn toc_samples(bytes : Bytes) -> Int32? {
   match opus_packet_samples(bytes) {
     Ok(n) => Some(n)
     Err(_) => None

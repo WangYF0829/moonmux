@@ -3,9 +3,9 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
-## [Unreleased] — v0.3.0（2026-11，开发中）
+## [0.3.0] — 2026-11-07
 
-2026 年 11 月按「已有项目维护」方向持续开发，本期目标：补齐 MP4 写入能力与工程化。
+2026 年 11 月按「已有项目维护」方向持续开发：补齐 MP4 写入能力与工程化。
 
 ### 新增
 - `mp4/` 包 —— MP4 / ISOBMFF 写入（Opus-in-MP4）：ISOBMFF box 层、
@@ -24,7 +24,11 @@
 
 ### 文档 / 工程
 - 新增 CHANGELOG；README 增加「2026-11 更新」与库用法示例；申报书更新为 11 月版。
-- 进行中：示例、架构文档、CI 门禁、发布 v0.3.0 到 mooncakes.io 与 GitHub Release。
+- 新增 `examples/`（WAV 往返 / Ogg 信息 / Ogg→MP4 三个可运行示例）与
+  `docs/architecture.md`（模块边界、关键不变量、测试策略）。
+- 新增 `scripts/verify_mp4.sh`（ffprobe / ffmpeg 外部对账）与
+  `scripts/install_check.sh`（干净工程 `moon add` 复验，回应 10 月终审反馈）。
+- 发布 v0.3.0 到 mooncakes.io 与 GitHub Release。
 
 ## [0.2.0] — 2026-10-23
 

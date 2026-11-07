@@ -1,0 +1,9 @@
+// 示例：Ogg Opus → MP4（Opus-in-MP4）内存内重新封装，使用 mp4/ 的公开 API
+import {
+  "WangYF0829/moonmux/mp4",
+  "moonbitlang/x/fs",
+}
+
+supported_targets = "native"
+
+pkgtype(kind: "executable")

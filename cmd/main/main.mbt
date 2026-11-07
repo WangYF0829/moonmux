@@ -826,7 +826,9 @@ fn run_info(path : String, json : Bool) -> Unit {
         match @wav.WavFile::parse(data) {
           Some(f) => show_wav_info(path, data, f, json)
           None =>
-            fail_data("错误: 既不是 Ogg、WAV 也不是 MP4 —— " + path)
+            fail_data(
+              "错误: 既不是 Ogg、WAV 也不是 MP4 —— " + path,
+            )
         }
       }
   }
@@ -1114,7 +1116,9 @@ fn print_mp4_json(path : String, data : Bytes, info : @mp4.Mp4Info) -> Unit {
   sb.write_stringview(",\"major_brand\":")
   sb.write_stringview(json_string(info.major_brand))
   sb.write_stringview(",\"duration_ms\":")
-  sb.write_stringview((info.duration_seconds * 1000.0 + 0.5).to_int64().to_string())
+  sb.write_stringview(
+    (info.duration_seconds * 1000.0 + 0.5).to_int64().to_string(),
+  )
   sb.write_stringview(",\"tracks\":[")
   let mut i = 0
   while i < info.tracks.length() {
@@ -1133,7 +1137,9 @@ fn print_mp4_json(path : String, data : Bytes, info : @mp4.Mp4Info) -> Unit {
     sb.write_stringview(",\"samples\":")
     sb.write_stringview(t.sample_count.to_string())
     sb.write_stringview(",\"duration_ms\":")
-    sb.write_stringview((t.duration_seconds * 1000.0 + 0.5).to_int64().to_string())
+    sb.write_stringview(
+      (t.duration_seconds * 1000.0 + 0.5).to_int64().to_string(),
+    )
     sb.write_stringview("}")
     i = i + 1
   }
@@ -1158,7 +1164,9 @@ fn run_remux(src : String, out : String) -> Unit {
           let bak = backup_output(out)
           match bak {
             Unavailable => {
-              fail("错误: 无法备份已有输出 " + out + "，拒绝覆盖")
+              fail(
+                "错误: 无法备份已有输出 " + out + "，拒绝覆盖",
+              )
               return
             }
             _ => ()

@@ -1,0 +1,10 @@
+// 示例：读取 Ogg 文件并报告容器信息（使用 ogg/ + codec/ 的公开 API）
+import {
+  "WangYF0829/moonmux/ogg",
+  "WangYF0829/moonmux/codec",
+  "moonbitlang/x/fs",
+}
+
+supported_targets = "native"
+
+pkgtype(kind: "executable")

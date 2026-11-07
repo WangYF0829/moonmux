@@ -17,7 +17,7 @@
 ///   config 16–31  CELT NB/WB/SWB/FB：2.5/5/10/20 ms → 120/240/480/960
 ///
 /// 帧数：code 0 → 1；code 1、2 → 2；code 3 → 读 TOC 后一字节低 6 位（1..63）。
-pub fn opus_packet_samples(data : Bytes) -> Result[Int, String] {
+pub fn opus_packet_samples(data : Bytes) -> Result[Int32, String] {
   if data.length() == 0 {
     return Err("Opus 数据包为空")
   }

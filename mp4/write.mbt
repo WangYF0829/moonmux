@@ -13,12 +13,12 @@
 // ---------- 小端读取（解析 OpusHead 用；Ogg 侧字段是小端） ----------
 
 ///|
-fn le16_at(data : Bytes, offset : Int) -> Int {
+fn le16_at(data : Bytes, offset : Int32) -> Int32 {
   data[offset].to_int() | (data[offset + 1].to_int() << 8)
 }
 
 ///|
-fn le32_at(data : Bytes, offset : Int) -> Int {
+fn le32_at(data : Bytes, offset : Int32) -> Int32 {
   data[offset].to_int() |
   (data[offset + 1].to_int() << 8) |
   (data[offset + 2].to_int() << 16) |
@@ -29,8 +29,8 @@ fn le32_at(data : Bytes, offset : Int) -> Int {
 
 ///|
 /// ftyp：主品牌、次版本、兼容品牌列表。
-fn ftyp_box(major : String, minor : Int, brands : Array[String]) -> Bytes {
-  let body = Buffer(size_hint = 8 + brands.length() * 4)
+fn ftyp_box(major : String, minor : Int32, brands : Array[String]) -> Bytes {
+  let body = Buffer(size_hint=8 + brands.length() * 4)
   push_fourcc(body, major)
   push_u32_be(body, minor)
   for b in brands {
@@ -42,7 +42,7 @@ fn ftyp_box(major : String, minor : Int, brands : Array[String]) -> Bytes {
 ///|
 /// 单位矩阵（mvhd / tkhd 共用，16.16 定点）。
 fn identity_matrix(buf : Buffer) -> Unit {
-  let values : Array[Int] = [
+  let values : Array[Int32] = [
     0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
   ]
   for v in values {
@@ -54,8 +54,8 @@ fn identity_matrix(buf : Buffer) -> Unit {
 
 ///|
 /// mvhd：媒体时间轴（movie timescale）与总时长。
-fn mvhd_box(timescale : Int, duration : Int) -> Bytes {
-  let body = Buffer(size_hint = 100)
+fn mvhd_box(timescale : Int32, duration : Int32) -> Bytes {
+  let body = Buffer(size_hint=100)
   push_u32_be(body, 0) // creation_time
   push_u32_be(body, 0) // modification_time
   push_u32_be(body, timescale)
@@ -77,8 +77,8 @@ fn mvhd_box(timescale : Int, duration : Int) -> Bytes {
 
 ///|
 /// tkhd：轨道头（时长用 movie timescale；音频轨 volume 1.0）。
-fn tkhd_box(track_id : Int, duration : Int) -> Bytes {
-  let body = Buffer(size_hint = 90)
+fn tkhd_box(track_id : Int32, duration : Int32) -> Bytes {
+  let body = Buffer(size_hint=90)
   push_u32_be(body, 0) // creation_time
   push_u32_be(body, 0) // modification_time
   push_u32_be(body, track_id)
@@ -98,8 +98,8 @@ fn tkhd_box(track_id : Int, duration : Int) -> Bytes {
 
 ///|
 /// mdhd：媒体头（媒体时间轴与媒体时长）。
-fn mdhd_box(timescale : Int, duration : Int) -> Bytes {
-  let body = Buffer(size_hint = 24)
+fn mdhd_box(timescale : Int32, duration : Int32) -> Bytes {
+  let body = Buffer(size_hint=24)
   push_u32_be(body, 0) // creation_time
   push_u32_be(body, 0) // modification_time
   push_u32_be(body, timescale)
@@ -112,7 +112,7 @@ fn mdhd_box(timescale : Int, duration : Int) -> Bytes {
 ///|
 /// hdlr：处理器类型（音频为 "soun"）。
 fn hdlr_box(handler : String, name : String) -> Bytes {
-  let body = Buffer(size_hint = 24 + name.length())
+  let body = Buffer(size_hint=24 + name.length())
   push_u32_be(body, 0) // pre_defined
   push_fourcc(body, handler)
   push_u32_be(body, 0) // reserved
@@ -133,7 +133,7 @@ fn hdlr_box(handler : String, name : String) -> Bytes {
 ///|
 /// smhd：声音媒体头（balance 0）。
 fn smhd_box() -> Bytes {
-  let body = Buffer(size_hint = 4)
+  let body = Buffer(size_hint=4)
   push_u16_be(body, 0) // balance
   push_u16_be(body, 0) // reserved
   full_box("smhd", 0, 0, body.to_bytes())
@@ -160,7 +160,7 @@ fn dops_box(opus_head : Bytes) -> Bytes {
   let pre_skip = le16_at(opus_head, 10)
   let input_rate = le32_at(opus_head, 12)
   let family = opus_head[18].to_int()
-  let body = Buffer(size_hint = 16 + channels)
+  let body = Buffer(size_hint=16 + channels)
   push_u8(body, 0) // version
   push_u8(body, channels)
   push_u16_be(body, pre_skip)
@@ -178,11 +178,12 @@ fn dops_box(opus_head : Bytes) -> Bytes {
   }
   box("dOps", body.to_bytes())
 }
+
 ///|
 /// Opus 音频样本条目（AudioSampleEntry + dOps）。
 fn opus_sample_entry(opus_head : Bytes) -> Bytes {
   let channels = opus_head[9].to_int()
-  let body = Buffer(size_hint = 64)
+  let body = Buffer(size_hint=64)
   // reserved(6) + data_reference_index(2)
   push_u16_be(body, 0)
   push_u16_be(body, 0)
@@ -212,8 +213,8 @@ fn stsd_box(opus_head : Bytes) -> Bytes {
 
 ///|
 /// stts：解码时间表（run-length 压缩后的 (样本数, 每样本时长)）。
-fn stts_box(runs : Array[(Int, Int)]) -> Bytes {
-  let body = Buffer(size_hint = 8 + runs.length() * 8)
+fn stts_box(runs : Array[(Int32, Int32)]) -> Bytes {
+  let body = Buffer(size_hint=8 + runs.length() * 8)
   push_u32_be(body, runs.length())
   for r in runs {
     let (count, delta) = r
@@ -225,8 +226,8 @@ fn stts_box(runs : Array[(Int, Int)]) -> Bytes {
 
 ///|
 /// stsc：样本到 chunk 的映射（单 chunk 装全部样本）。
-fn stsc_box(sample_count : Int) -> Bytes {
-  let body = Buffer(size_hint = 20)
+fn stsc_box(sample_count : Int32) -> Bytes {
+  let body = Buffer(size_hint=20)
   push_u32_be(body, 1) // entry_count
   push_u32_be(body, 1) // first_chunk
   push_u32_be(body, sample_count) // samples_per_chunk
@@ -236,8 +237,8 @@ fn stsc_box(sample_count : Int) -> Bytes {
 
 ///|
 /// stsz：逐样本大小（sample_size 为 0 时逐个列出）。
-fn stsz_box(sizes : Array[Int]) -> Bytes {
-  let body = Buffer(size_hint = 12 + sizes.length() * 4)
+fn stsz_box(sizes : Array[Int32]) -> Bytes {
+  let body = Buffer(size_hint=12 + sizes.length() * 4)
   push_u32_be(body, 0) // sample_size（0 = 逐样本给出）
   push_u32_be(body, sizes.length())
   for s in sizes {
@@ -248,8 +249,8 @@ fn stsz_box(sizes : Array[Int]) -> Bytes {
 
 ///|
 /// stco：chunk 偏移（单 chunk）。
-fn stco_box(offset : Int) -> Bytes {
-  let body = Buffer(size_hint = 8)
+fn stco_box(offset : Int32) -> Bytes {
+  let body = Buffer(size_hint=8)
   push_u32_be(body, 1) // entry_count
   push_u32_be(body, offset)
   full_box("stco", 0, 0, body.to_bytes())
@@ -259,11 +260,11 @@ fn stco_box(offset : Int) -> Bytes {
 /// 组装完整 moov。
 fn moov_box(
   opus_head : Bytes,
-  total_samples : Int,
-  movie_duration : Int,
-  runs : Array[(Int, Int)],
-  sizes : Array[Int],
-  chunk_offset : Int,
+  total_samples : Int32,
+  movie_duration : Int32,
+  runs : Array[(Int32, Int32)],
+  sizes : Array[Int32],
+  chunk_offset : Int32,
 ) -> Bytes {
   let mvhd = mvhd_box(1000, movie_duration)
   let tkhd = tkhd_box(1, movie_duration)
@@ -311,15 +312,18 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
   }
   let stream = match chosen {
     Some(s) => s
-    None => return Err("没有找到 Opus 音频流（首包不是 OpusHead，或包数不足）")
+    None =>
+      return Err(
+        "没有找到 Opus 音频流（首包不是 OpusHead，或包数不足）",
+      )
   }
   let opus_head = stream.packets[0].data
   match @codec.parse_opus_head(opus_head) {
     None => return Err("OpusHead 解析失败")
     Some(_) => ()
   }
-  let sizes : Array[Int] = []
-  let deltas : Array[Int] = []
+  let sizes : Array[Int32] = []
+  let deltas : Array[Int32] = []
   let mut total_samples = 0
   let mdat = Buffer()
   let mut i = 2
@@ -332,7 +336,10 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
         total_samples = total_samples + samples
         mdat.write_bytes(pkt.data.exact_view())
       }
-      Err(msg) => return Err("第 " + (i - 1).to_string() + " 个音频包非法：" + msg)
+      Err(msg) =>
+        return Err(
+          "第 " + (i - 1).to_string() + " 个音频包非法：" + msg,
+        )
     }
     i = i + 1
   }
@@ -340,7 +347,7 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
     return Err("Opus 流没有可封装的音频包")
   }
   // 把连续相同的样本时长合并成 stts 的 run
-  let runs : Array[(Int, Int)] = []
+  let runs : Array[(Int32, Int32)] = []
   let mut j = 0
   while j < deltas.length() {
     let mut k = j + 1
@@ -355,12 +362,7 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
   let chunk_offset = ftyp.length() + 8
   let movie_duration = ((total_samples.to_int64() * 1000L + 47999L) / 48000L).to_int()
   let moov = moov_box(
-    opus_head,
-    total_samples,
-    movie_duration,
-    runs,
-    sizes,
-    chunk_offset,
+    opus_head, total_samples, movie_duration, runs, sizes, chunk_offset,
   )
   let file = concat([ftyp, mdat_bytes, moov])
   // 自检：自己写得对不对，先用自己的读侧过一遍

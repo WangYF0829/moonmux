@@ -464,7 +464,10 @@ pub fn parse(args : Array[String]) -> Command {
     }
   } else if sub == "remux" {
     if n < 2 {
-      Command::Bad("remux 需要输入文件与输出文件", usage_for("remux"))
+      Command::Bad(
+        "remux 需要输入文件与输出文件",
+        usage_for("remux"),
+      )
     } else if n > 2 {
       Command::Bad(arity_msg("remux", n, 2), usage_for("remux"))
     } else {

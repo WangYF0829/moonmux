@@ -15,10 +15,10 @@ fn synthetic_ogg_opus() -> Bytes {
   let p1 : Bytes = b"\xfc\x01\x02\x03"
   let p2 : Bytes = b"\xfc\x04\x05"
   let packets : Array[@ogg.Packet] = [
-    { data: head, granule_position: 0L, serial: 1U },
-    { data: tags, granule_position: 0L, serial: 1U },
-    { data: p1, granule_position: 960L, serial: 1U },
-    { data: p2, granule_position: 1920L, serial: 1U },
+    { data: head, granule_position: 0L, serial: 1U, },
+    { data: tags, granule_position: 0L, serial: 1U, },
+    { data: p1, granule_position: 960L, serial: 1U, },
+    { data: p2, granule_position: 1920L, serial: 1U, },
   ]
   @ogg.serialize_pages(@ogg.paginate(packets, 1U))
 }
@@ -53,7 +53,7 @@ test "mp4 remux: synthetic ogg opus roundtrip" {
       println("remux error: " + msg)
       assert_true(false)
     }
-    Ok(mp4) => {
+    Ok(mp4) =>
       match inspect(mp4) {
         None => assert_true(false)
         Some(info) => {
@@ -70,7 +70,6 @@ test "mp4 remux: synthetic ogg opus roundtrip" {
           assert_true(t.duration_seconds < 0.041)
         }
       }
-    }
   }
 }
 

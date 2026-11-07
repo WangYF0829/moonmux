@@ -12,17 +12,17 @@
 pub(all) struct Mp4Track {
   handler : String
   codec : String
-  channels : Int
-  sample_rate : Int
+  channels : Int32
+  sample_rate : Int32
   duration_seconds : Double
-  sample_count : Int
+  sample_count : Int32
 }
 
 ///|
 /// 一个 MP4 文件的摘要信息。
 pub(all) struct Mp4Info {
   major_brand : String
-  timescale : Int
+  timescale : Int32
   duration_seconds : Double
   tracks : Array[Mp4Track]
 }
@@ -31,24 +31,24 @@ pub(all) struct Mp4Info {
 /// 扫描得到的一个 box 引用：fourcc、payload 起止偏移。
 priv struct BoxRef {
   fourcc : String
-  body : Int
-  next : Int
+  body : Int32
+  next : Int32
 }
 
 // ---------- 大端读取 ----------
 
 ///|
-fn rd_u8(data : Bytes, offset : Int) -> Int {
+fn rd_u8(data : Bytes, offset : Int32) -> Int32 {
   data[offset].to_int()
 }
 
 ///|
-fn rd_u16_be(data : Bytes, offset : Int) -> Int {
+fn rd_u16_be(data : Bytes, offset : Int32) -> Int32 {
   (data[offset].to_int() << 8) | data[offset + 1].to_int()
 }
 
 ///|
-fn rd_u32_be(data : Bytes, offset : Int) -> Int {
+fn rd_u32_be(data : Bytes, offset : Int32) -> Int32 {
   (data[offset].to_int() << 24) |
   (data[offset + 1].to_int() << 16) |
   (data[offset + 2].to_int() << 8) |
@@ -56,14 +56,14 @@ fn rd_u32_be(data : Bytes, offset : Int) -> Int {
 }
 
 ///|
-fn rd_u64_be(data : Bytes, offset : Int) -> Int64 {
+fn rd_u64_be(data : Bytes, offset : Int32) -> Int64 {
   let hi = rd_u32_be(data, offset)
   let lo = rd_u32_be(data, offset + 4)
   ((hi.to_int64() & 0xFFFFFFFFL) << 32) | (lo.to_int64() & 0xFFFFFFFFL)
 }
 
 ///|
-fn rd_fourcc(data : Bytes, offset : Int) -> String {
+fn rd_fourcc(data : Bytes, offset : Int32) -> String {
   let mut s = ""
   let mut i = 0
   while i < 4 {
@@ -77,7 +77,7 @@ fn rd_fourcc(data : Bytes, offset : Int) -> String {
 
 ///|
 /// 扫描 [start, end) 内的同级 box，返回有效 box 列表；遇到坏长度即停止。
-fn boxes_in(data : Bytes, start : Int, end : Int) -> Array[BoxRef] {
+fn boxes_in(data : Bytes, start : Int32, end : Int32) -> Array[BoxRef] {
   let out : Array[BoxRef] = []
   let mut p = start
   let mut ok = true
@@ -102,7 +102,7 @@ fn boxes_in(data : Bytes, start : Int, end : Int) -> Array[BoxRef] {
       ok = false
     }
     if ok {
-      out.push({ fourcc: name, body, next })
+      out.push({ fourcc: name, body, next, })
       p = next
     }
   }
@@ -130,7 +130,7 @@ fn child(data : Bytes, parent : BoxRef, name : String) -> BoxRef? {
 
 ///|
 /// mvhd / mdhd 的时间字段（version 0 用 32 位，version 1 用 64 位）。
-fn read_time_header(data : Bytes, b : BoxRef) -> (Int, Int) {
+fn read_time_header(data : Bytes, b : BoxRef) -> (Int32, Int32) {
   let version = rd_u8(data, b.body)
   if version == 1 {
     (rd_u32_be(data, b.body + 20), rd_u64_be(data, b.body + 24).to_int())
@@ -141,7 +141,7 @@ fn read_time_header(data : Bytes, b : BoxRef) -> (Int, Int) {
 
 ///|
 /// 秒数换算；timescale 非法时返回 0。
-fn to_seconds(duration : Int, timescale : Int) -> Double {
+fn to_seconds(duration : Int32, timescale : Int32) -> Double {
   if timescale <= 0 || duration < 0 {
     0.0
   } else {
@@ -151,7 +151,7 @@ fn to_seconds(duration : Int, timescale : Int) -> Double {
 
 ///|
 /// stsd 第一条样本描述：(fourcc, 声道数, 采样率)。
-fn read_stsd(data : Bytes, b : BoxRef) -> (String, Int, Int) {
+fn read_stsd(data : Bytes, b : BoxRef) -> (String, Int32, Int32) {
   if b.body + 8 > b.next {
     return ("", 0, 0)
   }
@@ -178,7 +178,7 @@ fn read_stsd(data : Bytes, b : BoxRef) -> (String, Int, Int) {
 
 ///|
 /// stsz 的样本数（sample_size 非 0 时表中只给一个值，count 仍在 +8）。
-fn read_stsz_count(data : Bytes, b : BoxRef) -> Int {
+fn read_stsz_count(data : Bytes, b : BoxRef) -> Int32 {
   if b.body + 12 > b.next {
     0
   } else {
@@ -189,8 +189,7 @@ fn read_stsz_count(data : Bytes, b : BoxRef) -> Int {
 ///|
 /// 判断文件头是否像 MP4（偏移 4 处为 "ftyp"）。
 pub fn is_mp4(data : Bytes) -> Bool {
-  data.length() >= 12 &&
-  rd_fourcc(data, 4) == "ftyp"
+  data.length() >= 12 && rd_fourcc(data, 4) == "ftyp"
 }
 
 ///|
@@ -249,7 +248,7 @@ pub fn inspect(data : Bytes) -> Mp4Info? {
           let mut rate = 0
           let mut samples = 0
           match child(data, mdia, "minf") {
-            Some(minf) => {
+            Some(minf) =>
               match child(data, minf, "stbl") {
                 Some(stbl) => {
                   match child(data, stbl, "stsd") {
@@ -268,7 +267,6 @@ pub fn inspect(data : Bytes) -> Mp4Info? {
                 }
                 None => ()
               }
-            }
             None => ()
           }
           tracks.push({
