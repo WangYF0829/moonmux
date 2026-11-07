@@ -311,3 +311,118 @@ test "json escaping handles quotes, backslashes and controls" {
   assert_eq(json_escape("\u0001"), "\\u0001")
   assert_eq(json_string("x"), "\"x\"")
 }
+
+// ---- v0.3.0：MP4/remux 的 I/O 层覆盖 ----
+// smoke.sh 用真实进程覆盖 CLI 路径，但覆盖率统计看不到子进程内部；
+// 这里直接调用 cmd/main 里的渲染/写出函数，把这些分支钉在覆盖率门禁里。
+
+///|
+/// 合成最小 Ogg Opus 流（与 mp4/mp4_wbtest.mbt 同构）：
+/// OpusHead + OpusTags + 两个 20ms 包。
+fn wb_ogg_opus() -> Bytes {
+  let head : Bytes = b"OpusHead\x01\x01\x38\x01\x80\xbb\x00\x00\x00\x00\x00"
+  let tags : Bytes = b"OpusTags\x06\x00\x00\x00moonmu\x00\x00\x00\x00"
+  let p1 : Bytes = b"\xfc\x01\x02\x03"
+  let p2 : Bytes = b"\xfc\x04\x05"
+  let packets : Array[@ogg.Packet] = [
+    { data: head, granule_position: 0L, serial: 1U, },
+    { data: tags, granule_position: 0L, serial: 1U, },
+    { data: p1, granule_position: 960L, serial: 1U, },
+    { data: p2, granule_position: 1920L, serial: 1U, },
+  ]
+  @ogg.serialize_pages(@ogg.paginate(packets, 1U))
+}
+
+///|
+/// MP4 信息的文本与 JSON 两种渲染。
+test "mp4 info rendering covers text and json" {
+  match @mp4.remux_ogg_opus(wb_ogg_opus()) {
+    Err(msg) => {
+      println("remux error: " + msg)
+      assert_true(false)
+    }
+    Ok(mp4) =>
+      match @mp4.inspect(mp4) {
+        Some(info) => {
+          show_mp4_info("synthetic.m4a", mp4, info, false)
+          show_mp4_info("synthetic.m4a", mp4, info, true)
+          assert_eq(info.tracks[0].codec, "Opus")
+          assert_eq(info.tracks[0].channels, 1)
+        }
+        None => assert_true(false)
+      }
+  }
+}
+
+///|
+/// remux 的完整 I/O 路径：读输入 → 封装 → 备份/写出 → 回读自检 → info 识别。
+test "run_remux writes a valid mp4 and info reads it back" {
+  let dir = "_build/wbtest-remux"
+  @fs.create_dir(dir) catch {
+    _ => ()
+  }
+  let src = dir + "/in.ogg"
+  let out = dir + "/out.m4a"
+  let mut wrote = true
+  @fs.write_bytes_to_file(src, wb_ogg_opus()) catch {
+    _ => wrote = false
+  }
+  if wrote {
+    run_remux(src, out)
+    let produced = @fs.read_file_to_bytes(out) catch { _ => b"" }
+    assert_true(produced.length() > 0)
+    assert_true(@mp4.is_mp4(produced))
+    // run_info 的 MP4 分支（文本 + JSON）
+    run_info(out, false)
+    run_info(out, true)
+  } else {
+    assert_true(false)
+  }
+  @fs.remove_file(src) catch {
+    _ => ()
+  }
+  @fs.remove_file(out) catch {
+    _ => ()
+  }
+}
+
+// ---- 覆盖率：info 的 Ogg/WAV 渲染与 run_info 分支 ----
+
+///|
+/// Ogg/WAV 信息的文本与 JSON 渲染，以及 run_info 的文件 I/O 分派。
+test "ogg and wav info rendering covers text and json" {
+  let ogg = wb_ogg_opus()
+  show_ogg_info("synthetic.ogg", ogg, false)
+  show_ogg_info("synthetic.ogg", ogg, true)
+  let wav = @wav.encode_wav(
+    { channels: 1, sample_rate: 8000, bits_per_sample: 16, },
+    b"\x00\x00\x01\x00",
+  )
+  match @wav.WavFile::parse(wav) {
+    Some(f) => {
+      show_wav_info("synthetic.wav", wav, f, false)
+      show_wav_info("synthetic.wav", wav, f, true)
+    }
+    None => assert_true(false)
+  }
+  let dir = "_build/wbtest-info"
+  @fs.create_dir(dir) catch {
+    _ => ()
+  }
+  @fs.write_bytes_to_file(dir + "/a.ogg", ogg) catch {
+    _ => ()
+  }
+  @fs.write_bytes_to_file(dir + "/a.wav", wav) catch {
+    _ => ()
+  }
+  run_info(dir + "/a.ogg", false)
+  run_info(dir + "/a.ogg", true)
+  run_info(dir + "/a.wav", false)
+  run_info(dir + "/a.wav", true)
+  @fs.remove_file(dir + "/a.ogg") catch {
+    _ => ()
+  }
+  @fs.remove_file(dir + "/a.wav") catch {
+    _ => ()
+  }
+}

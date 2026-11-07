@@ -102,3 +102,64 @@ test "mp4 rejects non-mp4 and non-opus" {
     Ok(_) => assert_true(false)
   }
 }
+
+///|
+/// MP4 读侧的错误分支：空数据、只有 ftyp 没有 moov、moov 截断。
+test "mp4 inspect rejects empty, moov-less and truncated files" {
+  match inspect(b"") {
+    None => assert_true(true)
+    Some(_) => assert_true(false)
+  }
+  // 只有 ftyp
+  let only_ftyp = Buffer()
+  only_ftyp.write_bytes(b"\x00\x00\x00\x10ftypM4A \x00\x00\x00\x00")
+  match inspect(only_ftyp.to_bytes()) {
+    None => assert_true(true)
+    Some(_) => assert_true(false)
+  }
+  // 合法 MP4 截断到 moov 前
+  match remux_ogg_opus(synthetic_ogg_opus()) {
+    Err(_) => assert_true(false)
+    Ok(mp4) => {
+      let cut = mp4.length() - 10
+      let buf = Buffer()
+      let mut i = 0
+      while i < cut {
+        buf.write_byte(mp4[i])
+        i = i + 1
+      }
+      match inspect(buf.to_bytes()) {
+        None => assert_true(true)
+        Some(_) => assert_true(false)
+      }
+    }
+  }
+}
+
+///|
+/// MP4 写入的错误分支：没有 Opus 流、只有头包没有音频包。
+test "mp4 remux rejects non-opus and header-only streams" {
+  // 首包不是 OpusHead
+  let p1 : Bytes = b"\xfc\x01\x02"
+  let p2 : Bytes = b"\xfc\x03\x04"
+  let packets : Array[@ogg.Packet] = [
+    { data: p1, granule_position: 0L, serial: 1U, },
+    { data: p2, granule_position: 960L, serial: 1U, },
+    { data: p1, granule_position: 1920L, serial: 1U, },
+  ]
+  match remux_ogg_opus(@ogg.serialize_pages(@ogg.paginate(packets, 1U))) {
+    Err(_) => assert_true(true)
+    Ok(_) => assert_true(false)
+  }
+  // 只有 OpusHead + OpusTags，没有音频包
+  let head : Bytes = b"OpusHead\x01\x01\x38\x01\x80\xbb\x00\x00\x00\x00\x00"
+  let tags : Bytes = b"OpusTags\x06\x00\x00\x00moonmu\x00\x00\x00\x00"
+  let only_headers : Array[@ogg.Packet] = [
+    { data: head, granule_position: 0L, serial: 1U, },
+    { data: tags, granule_position: 0L, serial: 1U, },
+  ]
+  match remux_ogg_opus(@ogg.serialize_pages(@ogg.paginate(only_headers, 1U))) {
+    Err(_) => assert_true(true)
+    Ok(_) => assert_true(false)
+  }
+}

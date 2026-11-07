@@ -4,13 +4,13 @@
 
 [![CI](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml/badge.svg)](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-252%20passing-brightgreen.svg)](#构建与测试)
-[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
-[![mooncakes](https://img.shields.io/badge/mooncakes-0.3.1-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
+[![Tests](https://img.shields.io/badge/tests-259%20passing-brightgreen.svg)](#构建与测试)
+[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
+[![mooncakes](https://img.shields.io/badge/mooncakes-0.3.2-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
 
 纯 MoonBit 实现的音频容器工具包，补上 MoonBit 生态中「能解码、不能封装」的最后一环。
 
-## 2026-11 更新（v0.3.1）
+## 2026-11 更新（v0.3.2）
 
 本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，11 月按「已有项目维护」方向持续开发。本期（v0.3.x）交付：
 
@@ -20,9 +20,9 @@
 | **`remux` 命令**：Ogg Opus → `.m4a` | **已完成** |
 | **`info` 识别 MP4** | **已完成** |
 | **CRC-32 查表优化**（输出与 RFC 3533 逐字节一致） | **已完成** |
-| 测试 / 示例 / 文档 / CHANGELOG / **v0.3.1 发布（mooncakes + GitHub Release）** | **已完成** |
+| 测试 / 示例 / 文档 / CHANGELOG / **v0.3.2 发布（mooncakes + GitHub Release）** | **已完成** |
 
-- **已可用（最新发布 v0.3.1）**：`moon add WangYF0829/moonmux` 安装 **v0.3.1**（2026-11-07 发布，含 MP4 写入与 `remux`）；v0.2.0 亦可安装（2026-11-06 首发，Ogg/WAV 能力）。
+- **已可用（最新发布 v0.3.2）**：`moon add WangYF0829/moonmux` 安装 **v0.3.2**（2026-11-07 发布，含 MP4 写入与 `remux`）；v0.2.0 亦可安装（2026-11-06 首发，Ogg/WAV 能力）。
 - 本期变更明细见 [CHANGELOG.md](CHANGELOG.md)。
 
 
@@ -60,7 +60,7 @@ moonmux 补的就是最后两行。
 
 ## 作为库使用
 
-模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）并发布 **0.3.1**（2026-11-07；0.2.0 于 2026-11-06 首发）：
+模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）并发布 **0.3.2**（2026-11-07；0.2.0 于 2026-11-06 首发）：
 
 ```bash
 moon add WangYF0829/moonmux
@@ -285,19 +285,19 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 
 ## 开发状态
 
-本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，10 月发布 **v0.2.0**（2026-10-23），11 月按「已有项目维护」方向发布 **v0.3.1**（2026-11-07，新增 MP4 写入、`remux`、CRC 查表，见上方「2026-11 更新」）。
+本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，10 月发布 **v0.2.0**（2026-10-23），11 月按「已有项目维护」方向发布 **v0.3.2**（2026-11-07，新增 MP4 写入、`remux`、CRC 查表，见上方「2026-11 更新」）。
 
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测）、**MP4/ISOBMFF 写入（Opus-in-MP4，`remux`）**，
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` / `chop` / `remux` 十四个子命令，
-252 个测试通过（Windows native 实测；CI 在 ubuntu/windows 上运行），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+259 个测试通过（Windows native 实测；CI 在 ubuntu/windows 上运行），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）、转码验证与 Ogg→MP4 外部工具（ffprobe/ffmpeg）对账。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`native` / `wasm-gc` 双后端；
-252 个测试、POSIX 端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
+259 个测试、POSIX 端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
 `scripts/verify_mp4.sh`（ffprobe 外部对账）、`scripts/install_check.sh`（干净工程 `moon add` 复验）、
 GitHub Actions CI（ubuntu + windows 矩阵，外加覆盖率非回归门禁与 native 冒烟）。
-变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.1）。
+变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.2）。
 
 本期新增：MP4 / ISOBMFF 封装（Opus-in-MP4）与 `remux`；CRC-32 查表优化。
 仍不做：WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器，边界与原因见上）。

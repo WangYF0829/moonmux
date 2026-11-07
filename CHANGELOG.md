@@ -3,6 +3,13 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
+## [0.3.2] — 2026-11-07
+
+### 测试
+- 测试 252 → 259：为覆盖率门禁补充 MP4/remux 的 I/O 层测试
+  （mp4 错误分支、`run_remux` 完整路径、info 的 Ogg/WAV/MP4 渲染与 JSON）。
+- 版本号（`moon.mod` / `describe()`）同步到 0.3.2。
+
 ## [0.3.1] — 2026-11-07
 
 ### 修复

@@ -33,3 +33,16 @@ test "cli usage mentions remux and m4a" {
   assert_true(usage().contains("m4a"))
   assert_true(usage_for("remux").contains("MP4"))
 }
+
+///|
+/// 每个子命令的用法文本都覆盖到（usage_for 的分支全部执行）。
+test "usage_for covers every subcommand" {
+  let topics : Array[String] = [
+    "info", "demux", "mux", "cat", "split", "extract", "dump", "tags", "tag", "seek",
+    "verify", "to-wav", "chop", "remux", "version", "help", "unknown",
+  ]
+  for topic in topics {
+    assert_true(usage_for(topic).length() > 0)
+  }
+  assert_true(usage().length() > 0)
+}
