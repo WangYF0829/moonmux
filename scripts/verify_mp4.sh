@@ -9,6 +9,8 @@
 # 退出码: 0 通过；1 有失败项；2 前提不满足（未构建 / 样例缺失）
 
 set -u
+# ffprobe 未安装时 M4_MS 保持空串；set -u 下引用必须给出默认值。
+M4_MS=""
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
@@ -123,7 +125,7 @@ else
   fail "音频包逐字节还原（首个音频包）"
 fi
 BACK_MS="$("$BIN" info "$TMP/back.ogg" --json 2>/dev/null | sed -n 's/.*"duration_ms":\([0-9]*\).*/\1/p' | head -1)"
-if [ -n "$M4_MS" ] && [ -n "$BACK_MS" ]; then
+if [ -n "${M4_MS:-}" ] && [ -n "$BACK_MS" ]; then
   awk -v a="$M4_MS" -v b="$BACK_MS" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(d <= 200) }'
   if [ $? -eq 0 ]; then
     pass "反向时长一致（MP4 ${M4_MS}ms vs Ogg ${BACK_MS}ms）"
