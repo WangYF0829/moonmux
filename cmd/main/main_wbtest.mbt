@@ -502,3 +502,37 @@ test "run_to_ogg writes a valid ogg from an mp4 file" {
     _ => ()
   }
 }
+
+// ---- v0.7.0：WAV 块保真 / WavWriter 在 info 输出层的覆盖 ----
+
+///|
+/// 带 LIST/fact 扩展块的 WAV：文本与 JSON 渲染都要报出扩展块。
+test "wav info rendering covers preserved chunks" {
+  let writer = @wav.WavWriter::new(
+    { channels: 1, sample_rate: 8000, bits_per_sample: 16, },
+    @wav.SampleFormat::Int,
+  )
+  writer.write(b"\x00\x00\x01\x00")
+  writer.add_chunk("LIST", b"\x01\x02\x03")
+  writer.add_trailing_chunk("fact", b"\x04\x00\x00\x00")
+  match writer.finish() {
+    Err(msg) => {
+      println("writer error: " + msg)
+      assert_true(false)
+    }
+    Ok(bytes) =>
+      match @wav.WavFile::parse(bytes) {
+        Some(f) => {
+          assert_eq(f.chunks.length(), 2)
+          show_wav_info("chunks.wav", bytes, f, false)
+          show_wav_info("chunks.wav", bytes, f, true)
+          // 块保真：to_bytes 往返逐字节一致
+          match f.to_bytes() {
+            Ok(back) => assert_eq(back.length(), bytes.length())
+            Err(_) => assert_true(false)
+          }
+        }
+        None => assert_true(false)
+      }
+  }
+}

@@ -3,6 +3,24 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
+## [0.7.0] — 2026-11-09
+
+### 新增
+- **WAV 块保真**：`WavFile` 新增 `chunks : Array[WavChunk]`（fourcc / data / after_data）
+  与 `channel_mask`；解析时保留 `fmt `/`data` 之外的全部块（LIST / fact / junk …，
+  含奇数长度块的填充），`WavFile::to_bytes()` 按原顺序、原容器宽度（24-in-4）与
+  原 channelMask **逐字节还原**。
+- **流式写接口 `WavWriter`**：`write` 增量追加 PCM，`add_chunk` / `add_trailing_chunk`
+  插入扩展块，`finish` 生成 WAV；简单布局（Int/≤2 声道/≤16 位）与 Extensible 布局的
+  输出都与 `encode_wav_ex` 逐字节一致。
+- `info` 输出扩展块列表（文本 + `--json` 的 `chunks` 数组：fourcc / bytes / after_data）。
+
+### 测试与质量
+- 测试 288 → **299**：块保真逐字节往返、24-in-4 + channelMask 往返、WavWriter 与
+  encode_wav_ex 等价、扩展块前后位置、以及 fmt 太短 / cbSize / validBits / 参数校验等
+  错误分支；覆盖率未覆盖行 682（CI 门禁 715）。
+- README 增加块保真与流式写说明；架构文档补充 WAV 不变量；申报书同步。
+
 ## [0.6.0] — 2026-11-09
 
 ### 新增

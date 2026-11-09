@@ -1045,6 +1045,17 @@ fn show_wav_info(
     println("位深:   " + f.format.bits_per_sample.to_string() + " 位")
   }
   println("PCM:    " + f.data.length().to_string() + " 字节")
+  // v0.7.0：块保真——列出 fmt/data 之外的扩展块（原样保留，可直接 to_bytes 还原）
+  for c in f.chunks {
+    println(
+      "扩展块: " +
+      c.fourcc +
+      " " +
+      c.data.length().to_string() +
+      " 字节" +
+      (if c.after_data { "（data 后）" } else { "" }),
+    )
+  }
   let frame_size = f.format.channels * f.bytes_per_sample
   if frame_size > 0 && f.format.sample_rate > 0 {
     let frames = f.data.length() / frame_size
@@ -3217,6 +3228,23 @@ fn print_wav_json(path : String, data : Bytes, f : @wav.WavFile) -> Unit {
       @wav.SampleFormat::Int => "\"pcm\""
     },
   )
+  sb.write_stringview(",\"chunks\":[")
+  let mut ci = 0
+  while ci < f.chunks.length() {
+    let c = f.chunks[ci]
+    if ci > 0 {
+      sb.write_stringview(",")
+    }
+    sb.write_stringview("{\"fourcc\":")
+    sb.write_stringview(json_string(c.fourcc))
+    sb.write_stringview(",\"bytes\":")
+    sb.write_stringview(c.data.length().to_string())
+    sb.write_stringview(",\"after_data\":")
+    sb.write_stringview(if c.after_data { "true" } else { "false" })
+    sb.write_stringview("}")
+    ci = ci + 1
+  }
+  sb.write_stringview("]")
   sb.write_stringview(",\"pcm_bytes\":")
   sb.write_stringview(f.data.length().to_string())
   if frame_size > 0 && f.format.sample_rate > 0 {

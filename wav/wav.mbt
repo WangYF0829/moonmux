@@ -40,6 +40,17 @@ pub(all) enum SampleFormat {
 }
 
 ///|
+/// WAV 里的一个非 `fmt `/`data` 块（LIST、fact、junk 等）。
+///
+/// 保存原始 fourcc 与负载，`after_data` 表示它出现在 `data` 块之后。
+/// 重新编码时按原顺序写回，用于块保真（parse → to_bytes 逐字节还原）。
+pub(all) struct WavChunk {
+  fourcc : String
+  data : Bytes
+  after_data : Bool
+}
+
+///|
 /// 一个解析后的 WAV 文件。
 pub(all) struct WavFile {
   format : WavFormat
@@ -49,6 +60,10 @@ pub(all) struct WavFile {
   /// 每个采样占用的容器字节数（= block_align / channels）。
   /// 可能与 `bits_per_sample / 8` 不同，例如 24 位采样放在 4 字节容器里。
   bytes_per_sample : Int32
+  /// `fmt `/`data` 之外的扩展块（按文件里的顺序）。
+  chunks : Array[WavChunk]
+  /// WAVE_FORMAT_EXTENSIBLE 的声道掩码（普通格式为 0）；块保真往返时原样写回。
+  channel_mask : Int32
 }
 
 ///|
@@ -122,7 +137,7 @@ fn parse_fmt_chunk(
   data : Bytes,
   body : Int32,
   size : Int64,
-) -> (WavFormat, SampleFormat, Int32)? {
+) -> (WavFormat, SampleFormat, Int32, Int32)? {
   if size < 16L {
     return None
   }
@@ -136,6 +151,7 @@ fn parse_fmt_chunk(
   let block_align = rd_u16(data, body + 12)
   let container_bits = rd_u16(data, body + 14)
   let mut sample_format : SampleFormat = Int
+  let mut channel_mask = 0
   // 默认有效位深等于容器位深；Extensible 的 validBits 可能更小（24-in-4）。
   let mut bits_per_sample = container_bits
   match format_tag {
@@ -154,9 +170,8 @@ fn parse_fmt_chunk(
       if valid_bits > container_bits {
         return None
       }
-      // channelMask 位于 body+20（4 字节）。解析结果不保留该字段，
-      // 但它参与布局定位，必须按标准顺序跳过才能读到 SubFormat。
-      let _channel_mask = rd_u32(data, body + 20)
+      // channelMask 位于 body+20（4 字节）；保留它，块保真往返时写回原值。
+      channel_mask = rd_u32(data, body + 20).to_int()
       // SubFormat GUID 全量比较，只认 PCM(0x01) 与 FLOAT(0x03)。
       if subformat_guid_is(data, body + 24, 1) {
         sample_format = Int
@@ -211,8 +226,33 @@ fn parse_fmt_chunk(
       { channels, sample_rate, bits_per_sample, },
       sample_format,
       bytes_per_sample,
+      channel_mask,
     ),
   )
+}
+
+///|
+/// 读取偏移处的 4 字节 fourcc 文本（RIFF 块名均为 ASCII）。
+fn fourcc_text(data : Bytes, offset : Int32) -> String {
+  let buf = StringBuilder()
+  let mut i = 0
+  while i < 4 {
+    buf.write_char(data[offset + i].to_char())
+    i = i + 1
+  }
+  buf.to_string()
+}
+
+///|
+/// 拷贝字节切片 `[start, end)`。
+fn wav_slice(data : Bytes, start : Int32, end : Int32) -> Bytes {
+  let out = Buffer(size_hint=end - start)
+  let mut i = start
+  while i < end {
+    out.write_byte(data[i])
+    i = i + 1
+  }
+  out.to_bytes()
 }
 
 ///|
@@ -244,8 +284,9 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
   }
   let riff_end = (riff_size + 8L).to_int()
   let mut pos = 12
-  let mut format : (WavFormat, SampleFormat, Int32)? = None
+  let mut format : (WavFormat, SampleFormat, Int32, Int32)? = None
   let mut pcm : Bytes? = None
+  let chunks : Array[WavChunk] = []
   while pos <= riff_end - 8 {
     let size = rd_u32(bytes, pos + 4)
     let body = pos + 8
@@ -270,6 +311,17 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
         i = i + 1
       }
       pcm = Some(acc.to_bytes())
+    } else {
+      // 其它块（LIST / fact / junk …）原样保留：块保真要求的正是"不认识的别丢"。
+      let n = size.to_int()
+      chunks.push({
+        fourcc: fourcc_text(bytes, pos),
+        data: wav_slice(bytes, body, body + n),
+        after_data: match pcm {
+          Some(_) => true
+          None => false
+        },
+      })
     }
     // 奇数块必须在 RIFF 边界内带一个填充字节。
     pos = body + size.to_int()
@@ -284,12 +336,19 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
     return None
   }
   match (format, pcm) {
-    (Some((f, sf, bps)), Some(d)) => {
+    (Some((f, sf, bps, mask)), Some(d)) => {
       let align = f.channels * bps
       if align <= 0 || d.length() % align != 0 {
         None
       } else {
-        Some({ format: f, data: d, sample_format: sf, bytes_per_sample: bps, })
+        Some({
+          format: f,
+          data: d,
+          sample_format: sf,
+          bytes_per_sample: bps,
+          chunks,
+          channel_mask: mask,
+        })
       }
     }
     _ => None
@@ -486,4 +545,285 @@ pub fn encode_wav_ex(
     buf.write_byte((0x00 : Byte))
   }
   Ok(buf.to_bytes())
+}
+
+// ---------- 块保真编码与流式写接口（v0.7.0） ----------
+
+///|
+/// 写一个 RIFF 块（fourcc + 长度 + 负载 + 奇数填充）。
+fn write_riff_chunk(buf : Buffer, fourcc : String, payload : Bytes) -> Unit {
+  let mut i = 0
+  while i < 4 {
+    match fourcc.get_char(i) {
+      Some(c) => buf.write_byte((c.to_int() & 0xFF).to_byte())
+      None => buf.write_byte((0 : Byte))
+    }
+    i = i + 1
+  }
+  buf.write_uint_le(payload.length().reinterpret_as_uint())
+  buf.write_bytes(payload.exact_view())
+  if payload.length() % 2 == 1 {
+    buf.write_byte((0 : Byte))
+  }
+}
+
+///|
+/// 校验编码参数（`encode_wav_ex` / `WavFile::to_bytes` / `WavWriter` 共用）。
+fn validate_format(
+  format : WavFormat,
+  sample_format : SampleFormat,
+  bytes_per_sample : Int32,
+) -> Result[Unit, String] {
+  let channels = format.channels
+  let sample_rate = format.sample_rate
+  let bits = format.bits_per_sample
+  if channels <= 0 || sample_rate <= 0 || bits <= 0 {
+    return Err(
+      "编码参数不合法：声道数、采样率、位深必须为正",
+    )
+  }
+  if bits % 8 != 0 {
+    return Err("编码参数不合法：位深必须是 8 的整数倍")
+  }
+  match sample_format {
+    Int =>
+      if bits != 8 && bits != 16 && bits != 24 && bits != 32 {
+        return Err(
+          "编码参数不合法：整数 PCM 只支持 8/16/24/32 位",
+        )
+      }
+    Float =>
+      if bits != 32 && bits != 64 {
+        return Err("编码参数不合法：浮点 WAV 只支持 32/64 位")
+      }
+  }
+  if bytes_per_sample <= 0 {
+    return Err("编码参数不合法：每采样字节数必须为正")
+  }
+  if bits > bytes_per_sample * 8 {
+    return Err("编码参数不合法：有效位深超过容器容量")
+  }
+  if channels > 65535 {
+    return Err("编码参数不合法：声道数超出 16 位字段上限")
+  }
+  let block_align = channels * bytes_per_sample
+  if block_align > 65535 {
+    return Err("编码参数不合法：块对齐超出 16 位字段上限")
+  }
+  if sample_rate > 2147483647 / block_align {
+    return Err("编码参数不合法：字节率超出 32 位字段上限")
+  }
+  Ok(())
+}
+
+///|
+/// 按「指定容器宽度 + 扩展块」编码 WAV。
+///
+/// 25 位这类参数不合法组合会返回 Err；`chunks` 按 `after_data` 分两段插入，
+/// 顺序与文件里一致。`WavFile::to_bytes` 与 `WavWriter::finish` 都走这里。
+fn encode_wav_layout(
+  format : WavFormat,
+  data : Bytes,
+  sample_format : SampleFormat,
+  bytes_per_sample : Int32,
+  channel_mask : Int32,
+  chunks : Array[WavChunk],
+) -> Result[Bytes, String] {
+  match validate_format(format, sample_format, bytes_per_sample) {
+    Err(msg) => return Err(msg)
+    Ok(_) => ()
+  }
+  let channels = format.channels
+  let sample_rate = format.sample_rate
+  let bits = format.bits_per_sample
+  let block_align = channels * bytes_per_sample
+  if data.length() % block_align != 0 {
+    return Err(
+      "data 长度不是完整帧（必须为声道数 × 每采样字节数的整数倍）",
+    )
+  }
+  let mut chunks_size = 0
+  for c in chunks {
+    if c.fourcc.length() != 4 {
+      return Err("扩展块 fourcc 必须是 4 个字符: " + c.fourcc)
+    }
+    chunks_size = chunks_size + 8 + c.data.length() + c.data.length() % 2
+  }
+  // 简单布局只在「整数 + <=2 声道 + <=16 位 + 容器=有效位深」时使用，
+  // 保证与 `encode_wav` 逐字节一致；扩展块不影响 fmt 布局。
+  let simple = match sample_format {
+    Int => channels <= 2 && bits <= 16 && bytes_per_sample * 8 == bits
+    Float => false
+  }
+  let fmt_size = if simple { 16 } else { 40 }
+  let pad = data.length() % 2
+  // 文件总长 = RIFF 头(8) + "WAVE"(4) + fmt 块 + 扩展块 + data 块 + padding
+  let total = 12 + (8 + fmt_size) + chunks_size + 8 + data.length() + pad
+  let buf = Buffer(size_hint=total)
+  // "RIFF" + 文件长度-8（"WAVE" 起算）
+  buf.write_byte((0x52 : Byte))
+  buf.write_byte((0x49 : Byte))
+  buf.write_byte((0x46 : Byte))
+  buf.write_byte((0x46 : Byte))
+  buf.write_uint_le((total - 8).reinterpret_as_uint())
+  buf.write_byte((0x57 : Byte))
+  buf.write_byte((0x41 : Byte))
+  buf.write_byte((0x56 : Byte))
+  buf.write_byte((0x45 : Byte))
+  // fmt 块
+  buf.write_byte((0x66 : Byte))
+  buf.write_byte((0x6D : Byte))
+  buf.write_byte((0x74 : Byte))
+  buf.write_byte((0x20 : Byte))
+  buf.write_uint_le(fmt_size.reinterpret_as_uint())
+  if simple {
+    buf.write_uint16_le((1 : UInt16))
+    buf.write_uint16_le(channels.to_uint16())
+    buf.write_uint_le(sample_rate.reinterpret_as_uint())
+    buf.write_uint_le((sample_rate * block_align).reinterpret_as_uint())
+    buf.write_uint16_le(block_align.to_uint16())
+    buf.write_uint16_le(bits.to_uint16())
+  } else {
+    buf.write_uint16_le((0xFFFE : UInt16))
+    buf.write_uint16_le(channels.to_uint16())
+    buf.write_uint_le(sample_rate.reinterpret_as_uint())
+    buf.write_uint_le((sample_rate * block_align).reinterpret_as_uint())
+    buf.write_uint16_le(block_align.to_uint16())
+    buf.write_uint16_le((bytes_per_sample * 8).to_uint16())
+    buf.write_uint16_le((22 : UInt16))
+    buf.write_uint16_le(bits.to_uint16())
+    buf.write_uint_le(channel_mask.reinterpret_as_uint())
+    let sub = match sample_format {
+      Int => 1
+      Float => 3
+    }
+    buf.write_byte(sub.to_byte())
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0x10 : Byte))
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0x80 : Byte))
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0xAA : Byte))
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0x38 : Byte))
+    buf.write_byte((0x9B : Byte))
+    buf.write_byte((0x71 : Byte))
+  }
+  // data 之前的扩展块
+  for c in chunks {
+    if !c.after_data {
+      write_riff_chunk(buf, c.fourcc, c.data)
+    }
+  }
+  // data
+  write_riff_chunk(buf, "data", data)
+  // data 之后的扩展块
+  for c in chunks {
+    if c.after_data {
+      write_riff_chunk(buf, c.fourcc, c.data)
+    }
+  }
+  Ok(buf.to_bytes())
+}
+
+///|
+/// 把解析后的 WAV 重新编码为字节流：保留采样格式、容器宽度与扩展块。
+///
+/// 用于无损往返（parse → to_bytes 逐字节还原），例如给带 LIST/fact 块
+/// 或 24-in-4 容器的专业 WAV 做原地处理。参数不合法时返回 Err。
+pub fn WavFile::to_bytes(self : WavFile) -> Result[Bytes, String] {
+  encode_wav_layout(
+    self.format,
+    self.data,
+    self.sample_format,
+    self.bytes_per_sample,
+    self.channel_mask,
+    self.chunks,
+  )
+}
+
+///|
+/// 流式 WAV 写入器：调用方可以按解码块增量追加 PCM，最后一次性 finish。
+///
+/// 与一次性 `encode_wav_ex` 的区别只是接口形态：内部仍持有完整 PCM 缓冲
+/// （MoonBit 的 `@fs` 没有 seek，真要流式落盘需要调用方自己分块写文件）。
+pub(all) struct WavWriter {
+  format : WavFormat
+  sample_format : SampleFormat
+  mut data : Buffer
+  mut chunks_before : Array[WavChunk]
+  mut chunks_after : Array[WavChunk]
+}
+
+///|
+/// 新建写入器（参数在 finish 时统一校验）。
+pub fn WavWriter::new(
+  format : WavFormat,
+  sample_format : SampleFormat,
+) -> WavWriter {
+  let writer : WavWriter = {
+    format,
+    sample_format,
+    data: Buffer(),
+    chunks_before: [],
+    chunks_after: [],
+  }
+  writer
+}
+
+///|
+/// 追加一段 PCM / 浮点采样字节（按字节追加，不对齐做逐次检查）。
+pub fn WavWriter::write(self : WavWriter, pcm : Bytes) -> Unit {
+  self.data.write_bytes(pcm.exact_view())
+}
+
+///|
+/// 在 `data` 块之前追加一个扩展块（LIST / fact / junk …）。
+pub fn WavWriter::add_chunk(
+  self : WavWriter,
+  fourcc : String,
+  payload : Bytes,
+) -> Unit {
+  self.chunks_before.push({ fourcc, data: payload, after_data: false, })
+}
+
+///|
+/// 在 `data` 块之后追加一个扩展块。
+pub fn WavWriter::add_trailing_chunk(
+  self : WavWriter,
+  fourcc : String,
+  payload : Bytes,
+) -> Unit {
+  self.chunks_after.push({ fourcc, data: payload, after_data: true, })
+}
+
+///|
+/// 已写入的 PCM 字节数。
+pub fn WavWriter::data_len(self : WavWriter) -> Int32 {
+  self.data.length()
+}
+
+///|
+/// 结束写入并生成 WAV 字节流；参数或帧对齐不合法时返回 Err。
+pub fn WavWriter::finish(self : WavWriter) -> Result[Bytes, String] {
+  let chunks : Array[WavChunk] = []
+  for c in self.chunks_before {
+    chunks.push(c)
+  }
+  for c in self.chunks_after {
+    chunks.push(c)
+  }
+  encode_wav_layout(
+    self.format,
+    self.data.to_bytes(),
+    self.sample_format,
+    self.format.bits_per_sample / 8,
+    0,
+    chunks,
+  )
 }

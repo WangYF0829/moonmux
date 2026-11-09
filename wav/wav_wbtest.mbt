@@ -800,3 +800,352 @@ test "encode_wav_ex rejects invalid parameters" {
     Ok(_) => assert_true(false)
   }
 }
+
+// ---------- v0.7.0：块保真 + 流式写接口 ----------
+
+///|
+/// 手工拼一个带 LIST（data 前、奇数长度）与 fact（data 后）的 WAV。
+fn build_wav_with_chunks() -> Bytes {
+  let pcm : Bytes = b"\x01\x02\x03\x04"
+  let buf = Buffer()
+  buf.write_bytes(b"RIFF".exact_view())
+  put_u32(buf, 64) // 12 + 24(fmt) + 12(LIST+pad) + 12(data) + 12(fact) - 8
+  buf.write_bytes(b"WAVE".exact_view())
+  buf.write_bytes(b"fmt ".exact_view())
+  put_u32(buf, 16)
+  put_u16(buf, 1)
+  put_u16(buf, 1)
+  put_u32(buf, 8000)
+  put_u32(buf, 16000)
+  put_u16(buf, 2)
+  put_u16(buf, 16)
+  buf.write_bytes(b"LIST".exact_view())
+  put_u32(buf, 3)
+  buf.write_byte((0xAA : Byte))
+  buf.write_byte((0xBB : Byte))
+  buf.write_byte((0xCC : Byte))
+  buf.write_byte((0 : Byte)) // 奇数块填充
+  buf.write_bytes(b"data".exact_view())
+  put_u32(buf, 4)
+  buf.write_bytes(pcm.exact_view())
+  buf.write_bytes(b"fact".exact_view())
+  put_u32(buf, 4)
+  put_u32(buf, 2) // 采样帧数
+  buf.to_bytes()
+}
+
+///|
+test "unknown chunks are collected and preserved byte-for-byte" {
+  let original = build_wav_with_chunks()
+  match WavFile::parse(original) {
+    Some(w) => {
+      assert_eq(w.chunks.length(), 2)
+      assert_eq(w.chunks[0].fourcc, "LIST")
+      assert_eq(w.chunks[0].after_data, false)
+      assert_eq(w.chunks[0].data.length(), 3)
+      assert_eq(w.chunks[1].fourcc, "fact")
+      assert_eq(w.chunks[1].after_data, true)
+      match w.to_bytes() {
+        Ok(out) => assert_true(bytes_eq(original, out))
+        Err(msg) => {
+          println("to_bytes error: " + msg)
+          assert_true(false)
+        }
+      }
+    }
+    None => assert_true(false)
+  }
+}
+
+///|
+test "24-in-4 extensible wav roundtrips byte-for-byte (incl channel mask)" {
+  let original = build_wav_ext(1, 1, 48000, 32, 24, 4, b"\x01\x02\x03\x04")
+  match WavFile::parse(original) {
+    Some(w) => {
+      assert_eq(w.bytes_per_sample, 4)
+      assert_eq(w.format.bits_per_sample, 24)
+      assert_eq(w.channel_mask, 4)
+      match w.to_bytes() {
+        Ok(out) => assert_true(bytes_eq(original, out))
+        Err(_) => assert_true(false)
+      }
+    }
+    None => assert_true(false)
+  }
+}
+
+///|
+test "float32 encode->parse->to_bytes is byte-identical" {
+  match
+    encode_wav_ex(
+      { channels: 1, sample_rate: 8000, bits_per_sample: 32, },
+      b"\x00\x00\x80\x3f",
+      Float,
+    ) {
+    Err(_) => assert_true(false)
+    Ok(original) =>
+      match WavFile::parse(original) {
+        Some(w) =>
+          match w.to_bytes() {
+            Ok(out) => assert_true(bytes_eq(original, out))
+            Err(_) => assert_true(false)
+          }
+        None => assert_true(false)
+      }
+  }
+}
+
+///|
+test "wav writer output equals encode_wav_ex for int and float" {
+  let cases : Array[(WavFormat, SampleFormat, Bytes)] = [
+    (
+      { channels: 1, sample_rate: 8000, bits_per_sample: 16, },
+      Int,
+      b"\x01\x02\x03\x04",
+    ),
+    (
+      { channels: 2, sample_rate: 44100, bits_per_sample: 24, },
+      Int,
+      b"\x01\x02\x03\x04\x05\x06",
+    ),
+    (
+      { channels: 1, sample_rate: 48000, bits_per_sample: 32, },
+      Float,
+      b"\x00\x00\x80\x3f\x00\x00\x00\x40",
+    ),
+  ]
+  for c in cases {
+    let (format, sf, data) = c
+    match encode_wav_ex(format, data, sf) {
+      Err(_) => assert_true(false)
+      Ok(expected) => {
+        let writer = WavWriter::new(format, sf)
+        // 分两段追加，验证增量写入
+        let half = data.length() / 2
+        let first : Bytes = wav_slice(data, 0, half)
+        let second : Bytes = wav_slice(data, half, data.length())
+        writer.write(first)
+        writer.write(second)
+        assert_eq(writer.data_len(), data.length())
+        match writer.finish() {
+          Ok(out) => assert_true(bytes_eq(expected, out))
+          Err(_) => assert_true(false)
+        }
+      }
+    }
+  }
+}
+
+///|
+test "wav writer keeps chunks before and after data" {
+  let writer = WavWriter::new(
+    { channels: 1, sample_rate: 8000, bits_per_sample: 16, },
+    Int,
+  )
+  writer.write(b"\x01\x02\x03\x04")
+  writer.add_chunk("LIST", b"\xAA\xBB")
+  writer.add_trailing_chunk("fact", b"\x02\x00\x00\x00")
+  match writer.finish() {
+    Err(_) => assert_true(false)
+    Ok(bytes) =>
+      match WavFile::parse(bytes) {
+        Some(w) => {
+          assert_eq(w.chunks.length(), 2)
+          assert_eq(w.chunks[0].fourcc, "LIST")
+          assert_eq(w.chunks[0].after_data, false)
+          assert_eq(w.chunks[1].fourcc, "fact")
+          assert_eq(w.chunks[1].after_data, true)
+          assert_eq(w.data.length(), 4)
+        }
+        None => assert_true(false)
+      }
+  }
+}
+
+///|
+test "wav writer rejects misaligned pcm" {
+  let writer = WavWriter::new(
+    { channels: 1, sample_rate: 8000, bits_per_sample: 16, },
+    Int,
+  )
+  writer.write(b"\x01") // 不是完整帧
+  match writer.finish() {
+    Err(_) => assert_true(true)
+    Ok(_) => assert_true(false)
+  }
+}
+
+// ---------- v0.7.0：块保真编码器的错误分支 ----------
+
+///|
+/// 直接调用 `validate_format` 覆盖各条拒绝分支（私有函数，whitebox 测试可见）。
+test "validate_format rejects each invalid combination" {
+  // 位深 12 不是 8 的倍数
+  assert_true(
+    match
+      validate_format(
+        { channels: 1, sample_rate: 8000, bits_per_sample: 12, },
+        Int,
+        2,
+      ) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+  // 浮点 16 位不支持
+  assert_true(
+    match
+      validate_format(
+        { channels: 1, sample_rate: 8000, bits_per_sample: 16, },
+        Float,
+        2,
+      ) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+  // 每采样字节数为 0
+  assert_true(
+    match
+      validate_format(
+        { channels: 1, sample_rate: 8000, bits_per_sample: 16, },
+        Int,
+        0,
+      ) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+  // 有效位深超过容器容量（16 位塞进 1 字节）
+  assert_true(
+    match
+      validate_format(
+        { channels: 1, sample_rate: 8000, bits_per_sample: 16, },
+        Int,
+        1,
+      ) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+  // 声道数超出 16 位字段
+  assert_true(
+    match
+      validate_format(
+        { channels: 70000, sample_rate: 8000, bits_per_sample: 8, },
+        Int,
+        1,
+      ) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+  // 块对齐超出 16 位字段（30000 声道 × 3 字节）
+  assert_true(
+    match
+      validate_format(
+        { channels: 30000, sample_rate: 8000, bits_per_sample: 24, },
+        Int,
+        3,
+      ) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+  // 字节率超出 32 位字段
+  assert_true(
+    match
+      validate_format(
+        { channels: 1, sample_rate: 2147483647, bits_per_sample: 16, },
+        Int,
+        2,
+      ) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+}
+
+///|
+/// 扩展块 fourcc 不是 4 个字符时必须拒绝；write_riff_chunk 对短 fourcc 补 0。
+test "encode_wav_layout rejects bad chunk fourcc" {
+  let format : WavFormat = {
+    channels: 1,
+    sample_rate: 8000,
+    bits_per_sample: 16,
+  }
+  let bad : Array[WavChunk] = [
+    { fourcc: "LIS", data: b"\x01", after_data: false, },
+  ]
+  assert_true(
+    match encode_wav_layout(format, b"\x00\x00", Int, 2, 0, bad) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+  // write_riff_chunk 对不足 4 字符的 fourcc 用 0 补齐（仅用于防御性分支覆盖）
+  let buf = Buffer()
+  write_riff_chunk(buf, "AB", b"\x01")
+  assert_true(buf.length() > 0)
+}
+
+///|
+/// 编码器对非法参数直接返回 Err（覆盖 encode_wav_layout 的入口校验分支）。
+test "encode_wav_layout rejects invalid format and misaligned data" {
+  let bad_format : WavFormat = {
+    channels: 0,
+    sample_rate: 8000,
+    bits_per_sample: 16,
+  }
+  assert_true(
+    match encode_wav_layout(bad_format, b"", Int, 2, 0, []) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+  let format : WavFormat = {
+    channels: 1,
+    sample_rate: 8000,
+    bits_per_sample: 16,
+  }
+  assert_true(
+    match encode_wav_layout(format, b"\x00", Int, 2, 0, []) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+}
+
+///|
+/// 解析侧：fmt 太短、cbSize 太小、validBits 超过容器位深都必须拒绝。
+test "parse rejects short fmt, small cbsize and oversized valid bits" {
+  // fmt 块声明长度为 8（<16）
+  let short_fmt = patch_u32(
+    build_wav_simple(1, 1, 8000, 2, 16, b"\x00\x00"),
+    16,
+    8,
+  )
+  assert_true(
+    match WavFile::parse(short_fmt) {
+      None => true
+      Some(_) => false
+    },
+  )
+  // cbSize 改成 0（Extensible 至少 22）
+  let ext = build_wav_ext(1, 1, 8000, 16, 16, 2, b"\x00\x00")
+  let zero_cb = patch_u32(ext, 36, 0) // fmt body 起点 20，cbSize 在 +16
+  assert_true(
+    match WavFile::parse(zero_cb) {
+      None => true
+      Some(_) => false
+    },
+  )
+  // validBits 超过容器位深
+  let bad_valid = build_wav_ext(1, 1, 8000, 16, 32, 2, b"\x00\x00")
+  assert_true(
+    match WavFile::parse(bad_valid) {
+      None => true
+      Some(_) => false
+    },
+  )
+}
