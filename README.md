@@ -4,15 +4,15 @@
 
 [![CI](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml/badge.svg)](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-259%20passing-brightgreen.svg)](#构建与测试)
-[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
-[![mooncakes](https://img.shields.io/badge/mooncakes-0.3.2-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
+[![Tests](https://img.shields.io/badge/tests-279%20passing-brightgreen.svg)](#构建与测试)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
+[![mooncakes](https://img.shields.io/badge/mooncakes-0.4.0-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
 
 纯 MoonBit 实现的音频容器工具包，补上 MoonBit 生态中「能解码、不能封装」的最后一环。
 
-## 2026-11 更新（v0.3.2）
+## 2026-11 更新（v0.4.0）
 
-本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，11 月按「已有项目维护」方向持续开发。本期（v0.3.x）交付：
+本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，11 月按「已有项目维护」方向持续开发。本期（v0.4.x）交付：
 
 | 项 | 状态 |
 |---|---|
@@ -20,9 +20,11 @@
 | **`remux` 命令**：Ogg Opus → `.m4a` | **已完成** |
 | **`info` 识别 MP4** | **已完成** |
 | **CRC-32 查表优化**（输出与 RFC 3533 逐字节一致） | **已完成** |
-| 测试 / 示例 / 文档 / CHANGELOG / **v0.3.2 发布（mooncakes + GitHub Release）** | **已完成** |
+| **WAV 全格式兼容**：IEEE float 32/64、`WAVE_FORMAT_EXTENSIBLE`、24-in-4 容器；新增 `encode_wav_ex` | **已完成（v0.4.0）** |
+| **流式页读取**：增量 `PageReader`（分块喂入、按需取页、失步重同步） | **已完成（v0.4.0）** |
+| 测试 / 示例 / 文档 / CHANGELOG / **v0.4.0 发布（mooncakes + GitHub Release）** | **已完成** |
 
-- **已可用（最新发布 v0.3.2）**：`moon add WangYF0829/moonmux` 安装 **v0.3.2**（2026-11-07 发布，含 MP4 写入与 `remux`）；v0.2.0 亦可安装（2026-11-06 首发，Ogg/WAV 能力）。
+- **已可用（最新发布 v0.4.0）**：`moon add WangYF0829/moonmux` 安装 **v0.4.0**（2026-11-09 发布，含 WAV 全格式兼容与流式页读取）；v0.3.x 的 MP4 写入、`remux` 与 CRC 查表能力保留；v0.2.0 亦可安装（2026-11-06 首发，Ogg/WAV 能力）。
 - 本期变更明细见 [CHANGELOG.md](CHANGELOG.md)。
 
 
@@ -48,10 +50,10 @@ moonmux 补的就是最后两行。
 
 | 模块 | 内容 | 状态 |
 |---|---|---|
-| `ogg/` | 页 / 段 / 包解析与序列化；Ogg 专用 CRC-32；多逻辑流交织；物理流链接与拆分；按大小攒页；granule 二分定位；结构体检（分级 + 坏页重同步）；页级补丁 | 已完成 |
+| `ogg/` | 页 / 段 / 包解析与序列化；Ogg 专用 CRC-32；多逻辑流交织；物理流链接与拆分；按大小攒页；granule 二分定位；结构体检（分级 + 坏页重同步）；页级补丁；**增量页读取 `PageReader`**（v0.4.0，流式/失步重同步） | 已完成 |
 | `codec/` | 编解码头解析（OpusHead / Vorbis ID）、时长换算、VorbisComment / OpusTags 读写 | 已完成 |
 | `manifest/` | `demux`/`mux` 的流目录清单（流号、包数、链序号、逐包粒度）的解析与生成 | 已完成 |
-| `wav/` | WAV（RIFF/PCM）读写 | 已完成 |
+| `wav/` | WAV（RIFF）读写：PCM 8/16/24/32、IEEE float 32/64、`WAVE_FORMAT_EXTENSIBLE`、24-in-4 容器读取；整数 PCM 编码与 `encode_wav_ex`（float/Extensible） | 已完成（v0.4.0 全格式） |
 | `pipeline/` | Ogg（Opus / Vorbis）→ WAV 转码管线 | 已完成 |
 | `mp4/` | MP4/ISOBMFF 写入（Opus-in-MP4）：`ftyp`/`moov`/`mdat`、`stbl` 五表、`dOps`；最小读侧（`inspect`）供 `info` 与 remux 自检 | **已完成（v0.3.x）** |
 | `cmd/main/` | 命令行工具：`info`、`demux`、`mux`、`cat`、`split`、`extract`、`dump`、`tags`、`tag`、`seek`、`verify`、`to-wav`、`chop`、`remux` | 已完成 |
@@ -60,7 +62,7 @@ moonmux 补的就是最后两行。
 
 ## 作为库使用
 
-模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）并发布 **0.3.2**（2026-11-07；0.2.0 于 2026-11-06 首发）：
+模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）并发布 **0.4.0**（2026-11-09；0.2.0 于 2026-11-06 首发）：
 
 ```bash
 moon add WangYF0829/moonmux
@@ -92,6 +94,8 @@ fn main {
   println("ogg page: " + @ogg.is_page_start(b"OggS", 0).to_string())
 }
 ```
+
+v0.4.0 新增库 API：`@ogg.PageReader` / `@ogg.for_each_page_chunked`（增量流式读取）、`@wav.SampleFormat` / `@wav.encode_wav_ex`（IEEE float 与 Extensible 编码）。
 
 容器层（`ogg/`、`wav/`、`codec/`、`manifest/`、`mp4/`）全部是纯函数、零依赖，可以单独复用；
 只有 `pipeline/` 会引入解码器。安装可用性已在干净工程实测：`moon add` → `moon check` → `moon run`。
@@ -270,7 +274,7 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 
 ## 参考实现与取舍
 
-实现全部为 MoonBit 原创，没有移植或复制其他项目的代码。以下项目只在**行为与取舍**上作为对照：
+实现全部为 MoonBit 原创，没有复制其他项目的代码；v0.4.0 的 WAV 全格式与流式页读取只移植了**语义与字段布局**，代码独立实现。以下项目作为**行为与取舍**对照：
 
 | 项目 | 参考了什么 | 没有照搬什么 |
 |---|---|---|
@@ -279,27 +283,29 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 | `mutagen`（Python） | 注释改写时用 padding 保持旧包等长、复用旧页布局 | 不做 high/low 区间公式 |
 | `ffmpeg` | 作为行为对照（转码产物用独立工具回读验证） | 不用时间驱动的分页策略 |
 | `libopusfile` | seek 在 granule 上插值二分、80 ms pre-roll | 只定位到页，不解码 |
+| Rust `hound`（Apache-2.0） | WAV fmt 标签 1/3/0xFFFE、Extensible 字段布局与 SubFormat GUID、24-in-4 容器语义、float 32/64、未知块跳过 | 不复制代码；不保留 channel_mask（与 hound 一样不暴露） |
+| RustAudio `ogg` crate | 增量页读取状态机语义：先同步捕获模式、按段表等数据、CRC 失步后重同步 | 不复制代码；不实现其异步/seek 组合器 |
 
 测试样本说明：`testdata/` 下的 Opus / Vorbis 文件由 ffmpeg（libopus / libvorbis）生成，仅用于测试，
 不包含任何第三方受版权保护的音频内容。
 
 ## 开发状态
 
-本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，10 月发布 **v0.2.0**（2026-10-23），11 月按「已有项目维护」方向发布 **v0.3.2**（2026-11-07，新增 MP4 写入、`remux`、CRC 查表，见上方「2026-11 更新」）。
+本项目为 **2026 年 10 月 MoonBit 黑客松参赛作品**，10 月发布 **v0.2.0**（2026-10-23），11 月按「已有项目维护」方向发布 **v0.4.0**（2026-11-09：新增 WAV 全格式兼容与流式页读取；11-07 的 v0.3.x 已含 MP4 写入、`remux`、CRC 查表，见上方「2026-11 更新」）。
 
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测）、**MP4/ISOBMFF 写入（Opus-in-MP4，`remux`）**，
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` / `chop` / `remux` 十四个子命令，
-259 个测试通过（Windows native 实测；CI 在 ubuntu/windows 上运行），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+279 个测试通过（Windows native 实测；CI 在 ubuntu/windows 上运行），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）、转码验证与 Ogg→MP4 外部工具（ffprobe/ffmpeg）对账。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`native` / `wasm-gc` 双后端；
-259 个测试、POSIX 端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
+279 个测试、POSIX 端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
 `scripts/verify_mp4.sh`（ffprobe 外部对账）、`scripts/install_check.sh`（干净工程 `moon add` 复验）、
 GitHub Actions CI（ubuntu + windows 矩阵，外加覆盖率非回归门禁与 native 冒烟）。
-变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.2）。
+变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.0 / v0.3.1 / v0.3.2 / v0.4.0）。
 
-本期新增：MP4 / ISOBMFF 封装（Opus-in-MP4）与 `remux`；CRC-32 查表优化。
+本期新增：MP4 / ISOBMFF 封装（Opus-in-MP4）与 `remux`；CRC-32 查表优化；WAV 全格式兼容（IEEE float / Extensible / 24-in-4）与增量流式页读取。
 仍不做：WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器，边界与原因见上）。
 
 ## 许可证

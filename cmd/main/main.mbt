@@ -1008,8 +1008,11 @@ fn show_ogg_info(path : String, data : Bytes, json : Bool) -> Unit {
 ///|
 /// 打印 WAV 的容器信息。
 ///
-/// 时长按帧数换算：帧数 = PCM 字节数 ÷（声道 × 位深/8），
+/// 时长按帧数换算：帧数 = PCM 字节数 ÷（声道 × 容器字节数/采样），
 /// 秒 = 帧数 ÷ 采样率。全部用整数算，避免浮点把「6 秒」显示成 5.999。
+///
+/// 位深可能与容器宽度不同（24 位有效位放在 4 字节容器是专业 WAV 的常见写法），
+/// 帧大小必须以 `bytes_per_sample` 为准，不能用「有效位深 / 8」。
 fn show_wav_info(
   path : String,
   data : Bytes,
@@ -1020,14 +1023,29 @@ fn show_wav_info(
     print_wav_json(path, data, f)
     return
   }
+  let codec = match f.sample_format {
+    @wav.SampleFormat::Float => "IEEE float"
+    @wav.SampleFormat::Int => "PCM"
+  }
   println("文件:   " + path)
-  println("格式:   WAV（RIFF/PCM）")
+  println("格式:   WAV（RIFF/" + codec + "）")
   println("字节数: " + data.length().to_string())
   println("声道:   " + f.format.channels.to_string())
   println("采样率: " + f.format.sample_rate.to_string() + " Hz")
-  println("位深:   " + f.format.bits_per_sample.to_string() + " 位")
+  let container_bits = f.bytes_per_sample * 8
+  if container_bits != f.format.bits_per_sample {
+    println(
+      "位深:   " +
+      f.format.bits_per_sample.to_string() +
+      " 位（容器 " +
+      container_bits.to_string() +
+      " 位）",
+    )
+  } else {
+    println("位深:   " + f.format.bits_per_sample.to_string() + " 位")
+  }
   println("PCM:    " + f.data.length().to_string() + " 字节")
-  let frame_size = f.format.channels * (f.format.bits_per_sample / 8)
+  let frame_size = f.format.channels * f.bytes_per_sample
   if frame_size > 0 && f.format.sample_rate > 0 {
     let frames = f.data.length() / frame_size
     let whole = frames / f.format.sample_rate
@@ -3101,7 +3119,7 @@ fn print_ogg_json(
 ///|
 /// WAV 信息的 JSON 版本（单行）。
 fn print_wav_json(path : String, data : Bytes, f : @wav.WavFile) -> Unit {
-  let frame_size = f.format.channels * (f.format.bits_per_sample / 8)
+  let frame_size = f.format.channels * f.bytes_per_sample
   let sb = StringBuilder()
   sb.write_stringview("{\"file\":")
   sb.write_stringview(json_string(path))
@@ -3113,6 +3131,15 @@ fn print_wav_json(path : String, data : Bytes, f : @wav.WavFile) -> Unit {
   sb.write_stringview(f.format.sample_rate.to_string())
   sb.write_stringview(",\"bits\":")
   sb.write_stringview(f.format.bits_per_sample.to_string())
+  sb.write_stringview(",\"container_bits\":")
+  sb.write_stringview((f.bytes_per_sample * 8).to_string())
+  sb.write_stringview(",\"sample_format\":")
+  sb.write_stringview(
+    match f.sample_format {
+      @wav.SampleFormat::Float => "\"float\""
+      @wav.SampleFormat::Int => "\"pcm\""
+    },
+  )
   sb.write_stringview(",\"pcm_bytes\":")
   sb.write_stringview(f.data.length().to_string())
   if frame_size > 0 && f.format.sample_rate > 0 {

@@ -1,7 +1,7 @@
 # moonmux 架构与设计说明
 
 > 本文回答「项目怎么组织、关键不变量是什么、为什么这样取舍」，供评审与后续维护者阅读。
-> 版本：v0.3.2（2026-11-07）。
+> 版本：v0.4.0（2026-11-09）。
 
 ## 1. 目标与非目标
 
@@ -10,15 +10,15 @@
 **非目标**：
 - 不做音频编解码（Opus / Vorbis 解码器由 `LL728/moonopus`、`LL728/moonvorbis` 提供，仅 `pipeline/` 对接）；
 - 不做 PCM → Ogg 的编码器（需要编码器本体）；
-- 不做流式文件 I/O 的承诺（`moonbitlang/x/fs` 只有整文件 API；2 GiB 为硬边界）；
+- 库提供**增量解析 API**（`ogg.PageReader`，分块喂入），但 CLI 仍以整文件 I/O 为主（`moonbitlang/x/fs` 只有整文件 API；2 GiB 为硬边界）；
 - MP4 只做 **Opus-in-MP4 写侧**（读侧只做 `info` 所需的最小解析）。
 
 ## 2. 模块结构
 
 | 包 | 职责 | 依赖 |
 |---|---|---|
-| `ogg/` | RFC 3533：页 / 段 / 包、Ogg CRC-32、多逻辑流交织、物理流链接与拆分、结构体检、页级补丁、定位 | 无 |
-| `wav/` | RIFF/WAVE：`fmt `/`data` 解析、44 字节头编码、块边界与填充检查 | 无 |
+| `ogg/` | RFC 3533：页 / 段 / 包、Ogg CRC-32、多逻辑流交织、物理流链接与拆分、结构体检、页级补丁、定位；**增量页读取 `PageReader`（v0.4.0）** | 无 |
+| `wav/` | RIFF/WAVE：`fmt `/`data` 解析、整数 PCM 编码；**v0.4.0 全格式**：fmt 1/3/0xFFFE、Extensible GUID、IEEE float 32/64、24-in-4 容器、`encode_wav_ex` | 无 |
 | `codec/` | 编解码头（OpusHead / Vorbis ID）、VorbisComment/OpusTags、时长换算、**Opus TOC 帧时长** | 无 |
 | `manifest/` | `demux`/`mux` 的流目录清单（流号、包数、链序号、逐包粒度） | 无 |
 | `pipeline/` | Ogg（Opus / Vorbis）→ WAV 转码管线 | ogg + 两个纯 MoonBit 解码器 |
@@ -35,7 +35,7 @@
 3. **写命令先校验后落盘**：`demux`/`mux`/`cat`/`split`/`extract`/`tag`/`to-wav`/`chop`/`remux` 在输入结构错误、截断或清单不符时拒绝写半成品；已有输出先备份，写后回读自检失败则恢复。
 4. **退出码**：`0` 成功；`1` 数据/校验错误；`2` 用法或 I/O 错误。
 5. **MP4 盒子自洽**：`stts` 样本时长和 = `mdhd` duration；`stsz` 逐样本大小和 = `mdat` 负载长度；`stsc` 单 chunk 装全部样本，`stco` 指向 `mdat` 负载起点；`dOps` 是 **Box**（首字节为 Version），不是 FullBox —— 写成 FullBox 会让 ffmpeg 读到 zero channel count。
-6. **发布一致性**：发布包来自 git 跟踪文件，`.moonignore` 排除 `_build`、`*.mbti`、日志等生成物。
+6. **WAV 格式判定**：fmt 标签 1=PCM、3=IEEE float、0xFFFE=Extensible；Extensible 取 SubFormat GUID（16 字节全量比较）判定真实编码，`validBits` 与容器位深分开：`bytes_per_sample = block_align / channels`，帧大小按容器算，不能用有效位深除 8（24-in-4 就是反例）。\n7. **流式解析等价性**：`PageReader` 任意分块喂入的页序列必须与一次性 `parse_pages` 相同；CRC 失败视为失步，跳 1 字节后继续同步；`finish` 把残余字节记为 `Skipped`，保留末尾 3 字节避免切掉半个 `OggS`。\n8. **发布一致性**：发布包来自 git 跟踪文件，`.moonignore` 排除 `_build`、`*.mbti`、日志等生成物。
 
 ## 4. MP4 写侧布局（v0.3.x）
 
@@ -69,7 +69,7 @@ moov
 
 | 层 | 手段 |
 |---|---|
-| 单元/白盒 | 252 个 `moon test`（页/包/CRC/清单/转码/box/Mp4 往返/CLI 解析），含真实 Ogg 文件的逐页 CRC 断言 |
+| 单元/白盒 | 279 个 `moon test`（页/包/CRC/清单/转码/box/Mp4 往返/CLI 解析/WAV 全格式/流式页读取），含真实 Ogg 文件的逐页 CRC 断言 |
 | 合成流闭环 | 合成 OpusHead+OpusTags+音频包 → Ogg → remux → inspect 读回（`mp4/mp4_wbtest.mbt`） |
 | 外部对账 | `scripts/verify_mp4.sh`：真实样本 remux 后 ffprobe 断言编码/声道/采样率/时长，ffmpeg 解码无错 |
 | 端到端 | `scripts/smoke.sh`：CLI 往返逐字节、退出码、边界输入、MP4/remux 项 |
@@ -78,7 +78,7 @@ moov
 
 ## 6. 已知边界与下一期候选
 
-- 2 GiB 文件上限（`Int` 32 位 + `@fs` 整文件 API）；无流式写接口。
+- 2 GiB 文件上限（`Int` 32 位 + `@fs` 整文件 API）；v0.4.0 提供流式**解析**，尚无流式**写**接口。
 - MP4 仅 Opus 单音轨；Vorbis-in-MP4 明确不做。
 - 无 `examples/` 之外的 benchmark 体系；fuzz 仅确定性用例。
-- 下一期候选：流式 `PageReader`/`WavWriter`、CRC/序列化基准、mutation fuzz corpus、WAV float/块保真、MP4 读侧（demux MP4 → Ogg）。
+- 下一期候选：流式写接口 `WavWriter`、CRC/序列化基准、mutation fuzz corpus、MP4 读侧（demux MP4 → Ogg）、WAV 块保真（LIST/fact 保留）。

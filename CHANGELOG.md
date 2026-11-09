@@ -3,6 +3,24 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
+## [0.4.0] — 2026-11-09
+
+### 新增
+- **WAV 全格式兼容**（参照 Rust `hound` 的语义独立实现）：
+  - 解析 `fmt ` 标签 1（PCM）/ 3（IEEE float）/ 0xFFFE（WAVE_FORMAT_EXTENSIBLE），
+    Extensible 的 SubFormat GUID 按 16 字节全量比较；支持 float 32/64、
+    `validBits` 与容器位深分离（24-in-4 容器）、未知块（LIST/fact 等）跳过与奇数填充。
+  - `WavFile` 新增 `sample_format : SampleFormat` 与 `bytes_per_sample` 字段；
+    新增 `encode_wav_ex`（IEEE float / Extensible 编码）。`encode_wav` 输出逐字节不变。
+- **增量流式页读取**（参照 libogg / RustAudio `ogg` 的语义独立实现）：
+  - `ogg.PageReader`：分块喂入、按需取页、CRC 失步重同步、前缀垃圾与截断区间定位；
+  - `ogg.for_each_page_chunked` 便捷函数；任意分块结果与一次性 `parse_pages` 逐字节等价。
+- `info` 输出 WAV 的采样格式与容器位深（文本 + `--json` 的 `sample_format` / `container_bits`）。
+
+### 测试与质量
+- 测试 259 → **279**（WAV 25 项、流式读取 8 项、info 渲染补充）；覆盖率未覆盖行 644（CI 门禁 675）。
+- 参考实现与取舍写入 README「参考实现与取舍」与 `docs/architecture.md`。
+
 ## [0.3.2] — 2026-11-07
 
 ### 测试

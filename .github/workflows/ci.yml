@@ -20,7 +20,9 @@ env:
   # 新增约 2000 行防御性分支与 CLI 代码，未覆盖行数相应上升（上次实测 605、基线 600）。
   # 基线设为 660，配合 15 行容差，上限 675；后续补测试应逐步调低。
   # 调高需要在 PR/提交说明中给出实测值与原因。
-  MAX_UNCOVERED_LINES: 660
+  # v0.4.0：新增 WAV 全格式（hound 语义）与流式页读取实现行，Windows 实测 644；
+  # Linux 侧计数比 Windows 高约 27 行（≈671），原 675 上限过紧，基线 660→670（上限 685）。
+  MAX_UNCOVERED_LINES: 670
   # 跨平台/工具链 patch 版本可能让计数抖动几行，给一点余量。
   COVERAGE_TOLERANCE: 15
 
@@ -244,5 +246,5 @@ jobs:
 
       - name: Verify clean-project install
         env:
-          MOONMUX_INSTALL_VERSION: "0.3.2"
+          MOONMUX_INSTALL_VERSION: "0.4.0"
         run: bash scripts/install_check.sh

@@ -426,3 +426,32 @@ test "ogg and wav info rendering covers text and json" {
     _ => ()
   }
 }
+
+// ---- v0.4.0：WAV 全格式（float/Extensible）在 info 输出层的覆盖 ----
+
+///|
+/// IEEE float WAV 的文本/JSON 渲染，以及 info 对 sample_format 的展示。
+test "wav float info rendering covers text and json" {
+  match
+    @wav.encode_wav_ex(
+      { channels: 1, sample_rate: 8000, bits_per_sample: 32, },
+      b"\x00\x00\x80\x3f",
+      @wav.SampleFormat::Float,
+    ) {
+    Err(msg) => {
+      println("encode_wav_ex error: " + msg)
+      assert_true(false)
+    }
+    Ok(bytes) =>
+      match @wav.WavFile::parse(bytes) {
+        Some(f) => {
+          assert_true(f.sample_format is @wav.SampleFormat::Float)
+          assert_eq(f.bytes_per_sample, 4)
+          show_wav_info("float.wav", bytes, f, false)
+          show_wav_info("float.wav", bytes, f, true)
+          assert_eq(f.format.bits_per_sample, 32)
+        }
+        None => assert_true(false)
+      }
+  }
+}
