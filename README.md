@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml/badge.svg)](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-288%20passing-brightgreen.svg)](#构建与测试)
+[![Tests](https://img.shields.io/badge/tests-299%20passing-brightgreen.svg)](#构建与测试)
 [![Version](https://img.shields.io/badge/version-0.7.0-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
 [![mooncakes](https://img.shields.io/badge/mooncakes-0.7.0-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
 
