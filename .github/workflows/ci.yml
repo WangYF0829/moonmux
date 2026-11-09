@@ -253,7 +253,7 @@ jobs:
 
       - name: Verify clean-project install
         env:
-          MOONMUX_INSTALL_VERSION: "0.7.0"
+          MOONMUX_INSTALL_VERSION: "0.7.1"
         run: bash scripts/install_check.sh
   # 性能基准：release native + Node 脚本（无第三方依赖），表格写入 job summary。
   # 只记录、不设阈值 —— 共享 runner 的绝对耗时没有可比性，回归靠本地对比。
