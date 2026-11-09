@@ -19,7 +19,7 @@
 - 测试 288 → **299**：块保真逐字节往返、24-in-4 + channelMask 往返、WavWriter 与
   encode_wav_ex 等价、扩展块前后位置、以及 fmt 太短 / cbSize / validBits / 参数校验等
   错误分支；覆盖率未覆盖行 682（CI 门禁 715）。
-- README 增加块保真与流式写说明；架构文档补充 WAV 不变量；申报书同步。
+- README 增加块保真与流式写说明；架构文档补充 WAV 不变量；文档同步。
 
 ## [0.6.0] — 2026-11-09
 
@@ -90,7 +90,7 @@
 
 ## [0.3.0] — 2026-11-07
 
-2026 年 11 月按「已有项目维护」方向持续开发：补齐 MP4 写入能力与工程化。
+v0.3.0 起补齐 MP4 写入能力与工程化。
 
 ### 新增
 - `mp4/` 包 —— MP4 / ISOBMFF 写入（Opus-in-MP4）：ISOBMFF box 层、
@@ -108,16 +108,16 @@
 - 237 → 252：box 大小/四码、合成 Ogg→MP4 往返、MP4 布局、CLI 解析、CRC 交叉校验。
 
 ### 文档 / 工程
-- 新增 CHANGELOG；README 增加「2026-11 更新」与库用法示例；申报书更新为 11 月版。
+- 新增 CHANGELOG；README 增加版本更新与库用法示例；相关文档同步更新。
 - 新增 `examples/`（WAV 往返 / Ogg 信息 / Ogg→MP4 三个可运行示例）与
   `docs/architecture.md`（模块边界、关键不变量、测试策略）。
 - 新增 `scripts/verify_mp4.sh`（ffprobe / ffmpeg 外部对账）与
-  `scripts/install_check.sh`（干净工程 `moon add` 复验，回应 10 月终审反馈）。
+  `scripts/install_check.sh`（干净工程 `moon add` 复验）。
 - 发布 v0.3.0 到 mooncakes.io 与 GitHub Release。
 
 ## [0.2.0] — 2026-10-23
 
-10 月参赛版本（GitHub Release + mooncakes.io 0.2.0，后者于 2026-11-06 发布）。
+v0.2.0（GitHub Release；mooncakes.io 0.2.0 于 2026-11-06 发布）。
 
 ### 新增
 - 页级补丁（`patch`）、时间区间裁剪（`chop`）、多逻辑流与链接流的 CLI 工具。
@@ -131,4 +131,4 @@
 ## [0.1.0] — 2026-10-22
 
 首个可用版本：Ogg 容器读写（页/段/包、CRC-32、多逻辑流交织、链接/拆分、结构体检）、
-WAV 读写、Ogg（Opus/Vorbis）→ WAV 转码管线、CLI 基础命令与测试基线。
+WAV 读写、Ogg（Opus/Vorbis）→ WAV 转码管线、CLI 基础命令与测试基础。
