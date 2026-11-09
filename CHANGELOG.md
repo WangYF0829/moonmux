@@ -3,6 +3,22 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
+## [0.6.0] — 2026-11-09
+
+### 新增
+- **性能基准 `scripts/bench.mjs`**（Node，无第三方依赖）：在 release native CLI 上测
+  `verify` / `info` / `dump` / `remux` / `to-ogg` / `demux` 的端到端耗时；自动把真实
+  Opus 样本复制成 16 条 serial 递增的链接流（≈1.0 MiB）作为大输入，多次运行取最小值。
+  CI 新增 `bench · native` job，表格写入 job summary（只记录、不设阈值）。
+- **确定性变异测试 `scripts/fuzz.mjs`**：真实 Ogg Opus / Vorbis / MP4 / WAV 种子 ×
+  6 类变异（翻位、块覆盖、截断、插入、删除、整段复制），只读/单文件命令为靶；
+  断言退出码只能是 0/1/2、无超时/崩溃；固定随机种子可复现。CI 新增 `fuzz · mutation`
+  job 跑 400 次迭代。
+
+### 说明
+- 仅脚本与 CI 增量，**无库 API / 文件格式变更**；测试仍 288 项。
+- README 增加「性能基准」「变异测试」章节与本机实测数据；架构文档补充测试策略。
+
 ## [0.5.0] — 2026-11-09
 
 ### 新增
