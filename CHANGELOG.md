@@ -3,6 +3,26 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
+## [0.5.0] — 2026-11-09
+
+### 新增
+- **MP4 → Ogg 解封装**（`mp4.demux_mp4_opus`，`remux` 的逆操作）：
+  - 解析 `stsd` 样本条目与 `dOps` 配置（版本/声道/pre-skip/输入采样率/增益/映射族）、
+    `stts` 样本时长、`stsc` chunk 映射、`stsz` 样本大小、`stco`（含 `co64`）chunk 偏移；
+  - 按 chunk 切出 Opus 包，重建 OpusHead（字段来自 dOps），OpusTags 输出最小
+    vendor（"moonmux"）+ 0 条注释；granule = pre-skip + 累计样本时长；
+  - 只支持单音轨、Opus、`mdhd` timescale = 48000 的 MP4；坏表/越界/缺 box 全部返回错误。
+- **`to-ogg` 子命令**：MP4（Opus-in-MP4）→ Ogg Opus；用法/退出码与其它写命令一致，
+  写后回读自检（页可解析、首包为 OpusHead、至少 3 个包）。
+
+### 测试与验证
+- 测试 279 → **288**：demux 闭环（音频包/OpusHead 逐字节还原、二次 remux）、
+  坏表防御（缺 moov/mdat/track、stts/stsc/stsz/stco/dOps 各分支）、CLI 解析、
+  `run_to_ogg` 文件 I/O。
+- `scripts/smoke.sh` 新增 4e 段：真实样本 Ogg→MP4→Ogg，回读 Ogg verify 通过、
+  首个音频包逐字节比对、非 MP4 输入拒绝。
+- `scripts/verify_mp4.sh` 新增第 6 段反向闭环：verify、时长一致性、ffmpeg 解码。
+
 ## [0.4.0] — 2026-11-09
 
 ### 新增

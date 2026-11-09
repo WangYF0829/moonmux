@@ -50,8 +50,8 @@ if [ ! -x "$BIN" ]; then
 fi
 
 echo "== 0. 版本与输出类型防护 =="
-"$BIN" version | grep -q "moonmux 0.4.0"
-check $? "version 与模块版本一致（0.4.0）"
+"$BIN" version | grep -q "moonmux 0.5.0"
+check $? "version 与模块版本一致（0.5.0）"
 "$BIN" extract testdata/opus_sample.opus 1 "$TMP" >/dev/null 2>&1
 [ $? -eq 2 ]; check $? "目录作为输出路径被拒绝（2）"
 
@@ -173,6 +173,24 @@ if command -v ffprobe >/dev/null 2>&1; then
 else
   echo "  SKIP  ffprobe 外部对账（未安装）"
 fi
+
+echo "== 4e. to-ogg（MP4 → Ogg 回读）=="
+"$BIN" to-ogg "$TMP/out.m4a" "$TMP/back.ogg" >/dev/null 2>&1
+[[ $? -eq 0 ]] && [ -s "$TMP/back.ogg" ]
+check $? "MP4 → Ogg 输出非空"
+"$BIN" info "$TMP/back.ogg" | grep -q "Opus  声道=1  采样率=48000"
+check $? "回读 Ogg 信息含 Opus 1 声道 / 48000 Hz"
+"$BIN" verify "$TMP/back.ogg" >/dev/null 2>&1
+check $? "回读 Ogg 结构完好（verify → 0）"
+# 音频包逐字节还原：与原 Ogg 的 demux 结果对比（跳过 OpusHead/OpusTags）
+"$BIN" demux testdata/opus_sample.opus "$TMP/rt-orig" >/dev/null 2>&1
+"$BIN" demux "$TMP/back.ogg" "$TMP/rt-back" >/dev/null 2>&1
+cmp -s "$TMP/rt-orig/s1/packet_000002.bin" "$TMP/rt-back/s1/packet_000002.bin"
+check $? "音频包逐字节还原（首个音频包对比）"
+# 非 MP4 输入被拒绝
+"$BIN" to-ogg testdata/opus_sample.opus "$TMP/x.ogg" >/dev/null 2>&1
+[[ $? -eq 1 ]]
+check $? "非 MP4 输入被拒绝（退出 1）"
 
 echo "== 5. 定位 =="
 "$BIN" seek testdata/opus_sample.opus 2500 >/dev/null 2>&1

@@ -38,6 +38,8 @@ pub(all) enum Command {
   Chop(String, String, Int32, Int32)
   /// 把 Ogg（Opus）重新封装成 MP4（Opus-in-MP4，.m4a）
   Remux(String, String)
+  /// 把 MP4（Opus-in-MP4）解封装回 Ogg Opus
+  ToOgg(String, String)
   /// 打印版本
   Version
   /// 打印总用法
@@ -73,6 +75,8 @@ pub fn usage() -> String {
   "                                  按时间裁剪（页精度，头页保留）\n" +
   "  moonmux remux <in.ogg> <out.m4a>\n" +
   "                                  把 Ogg（Opus）重新封装为 MP4（Opus-in-MP4）\n" +
+  "  moonmux to-ogg <in.m4a> <out.ogg>\n" +
+  "                                  把 MP4（Opus）解封装回 Ogg Opus（remux 的逆操作）\n" +
   "  moonmux version                  打印版本\n" +
   "  moonmux help                     显示本帮助"
 }
@@ -131,6 +135,11 @@ pub fn usage_for(topic : String) -> String {
     "  把 Ogg（Opus）重新封装为 MP4 / ISOBMFF 音频容器（.m4a）\n" +
     "  不做转码：Opus 数据包原样搬运，只重建容器（MP4 写侧）\n" +
     "  只支持单段、单逻辑流的 Ogg Opus；Vorbis/链接流请先处理"
+  } else if topic == "to-ogg" {
+    "用法: moonmux to-ogg <in.m4a> <out.ogg>\n" +
+    "  把 MP4（Opus-in-MP4）解封装回 Ogg Opus（remux 的逆操作）\n" +
+    "  不做转码：Opus 数据包逐字节还原；注释未随 MP4 保存，输出最小 OpusTags\n" +
+    "  只支持单音轨、Opus、mdhd timescale=48000 的 MP4"
   } else if topic == "version" {
     "用法: moonmux version"
   } else if topic == "help" {
@@ -472,6 +481,17 @@ pub fn parse(args : Array[String]) -> Command {
       Command::Bad(arity_msg("remux", n, 2), usage_for("remux"))
     } else {
       Command::Remux(args[1], args[2])
+    }
+  } else if sub == "to-ogg" {
+    if n < 2 {
+      Command::Bad(
+        "to-ogg 需要输入文件与输出文件",
+        usage_for("to-ogg"),
+      )
+    } else if n > 2 {
+      Command::Bad(arity_msg("to-ogg", n, 2), usage_for("to-ogg"))
+    } else {
+      Command::ToOgg(args[1], args[2])
     }
   } else if sub == "help" {
     if n > 0 {

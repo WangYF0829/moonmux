@@ -46,3 +46,36 @@ test "usage_for covers every subcommand" {
   }
   assert_true(usage().length() > 0)
 }
+
+///|
+test "cli parse: to-ogg takes input and output" {
+  match parse(["to-ogg", "in.m4a", "out.ogg"]) {
+    ToOgg(src, out) => {
+      assert_eq(src, "in.m4a")
+      assert_eq(out, "out.ogg")
+    }
+    _ => assert_true(false)
+  }
+}
+
+///|
+test "cli parse: to-ogg arity errors" {
+  match parse(["to-ogg"]) {
+    Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["to-ogg", "a.m4a"]) {
+    Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["to-ogg", "a.m4a", "b.ogg", "extra"]) {
+    Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}
+
+///|
+test "cli usage mentions to-ogg" {
+  assert_true(usage().contains("to-ogg"))
+  assert_true(usage_for("to-ogg").contains("Ogg Opus"))
+}

@@ -455,3 +455,50 @@ test "wav float info rendering covers text and json" {
       }
   }
 }
+
+// ---- v0.5.0：to-ogg（MP4 → Ogg）的 I/O 路径 ----
+
+///|
+/// remux 出 MP4 → run_to_ogg 解封装 → 回读 Ogg，断言 OpusHead 与页结构。
+test "run_to_ogg writes a valid ogg from an mp4 file" {
+  let dir = "_build/wbtest-toogg"
+  @fs.create_dir(dir) catch {
+    _ => ()
+  }
+  let src = dir + "/in.ogg"
+  let m4a = dir + "/mid.m4a"
+  let out = dir + "/out.ogg"
+  let mut wrote = true
+  @fs.write_bytes_to_file(src, wb_ogg_opus()) catch {
+    _ => wrote = false
+  }
+  if wrote {
+    run_remux(src, m4a)
+    run_to_ogg(m4a, out)
+    let produced = @fs.read_file_to_bytes(out) catch { _ => b"" }
+    assert_true(produced.length() > 0)
+    let pages = @ogg.parse_pages(produced)
+    assert_true(pages.length() > 0)
+    let packets = @ogg.reassemble(pages)
+    assert_true(packets.length() >= 3)
+    // 首包必须是 OpusHead，且能被 codec 解析
+    match @codec.parse_audio_header(packets[0].data) {
+      Some(info) => {
+        assert_eq(info.codec, "Opus")
+        assert_eq(info.channels, 1)
+      }
+      None => assert_true(false)
+    }
+  } else {
+    assert_true(false)
+  }
+  @fs.remove_file(src) catch {
+    _ => ()
+  }
+  @fs.remove_file(m4a) catch {
+    _ => ()
+  }
+  @fs.remove_file(out) catch {
+    _ => ()
+  }
+}

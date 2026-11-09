@@ -1237,6 +1237,83 @@ fn run_remux(src : String, out : String) -> Unit {
 }
 
 ///|
+/// `to-ogg`：把 MP4（Opus-in-MP4）解封装回 Ogg Opus（`remux` 的逆操作）。
+fn run_to_ogg(src : String, out : String) -> Unit {
+  reject_same_path(src, out)
+  match read_all(src) {
+    None => ()
+    Some(data) =>
+      match @mp4.demux_mp4_opus(data) {
+        Err(msg) => fail_data("错误: to-ogg 失败 —— " + msg)
+        Ok(bytes) => {
+          let bak = backup_output(out)
+          match bak {
+            Unavailable => {
+              fail(
+                "错误: 无法备份已有输出 " + out + "，拒绝覆盖",
+              )
+              return
+            }
+            _ => ()
+          }
+          @fs.write_bytes_to_file(out, bytes) catch {
+            IOError(msg) => {
+              restore_output(out, bak)
+              fail("错误: 无法写入 " + out + " —— " + msg)
+              return
+            }
+          }
+          // 回读自检：页序列可解析、首包是 OpusHead、至少 3 个包
+          let pages = @ogg.parse_pages(bytes)
+          let packets = @ogg.reassemble(pages)
+          let mut ok = pages.length() > 0 && packets.length() >= 3
+          let mut desc = "Ogg"
+          let mut secs = 0.0
+          if ok {
+            match @codec.parse_audio_header(packets[0].data) {
+              Some(info) => {
+                desc = "Ogg/" +
+                  info.codec +
+                  " " +
+                  info.channels.to_string() +
+                  " 声道 / " +
+                  info.sample_rate.to_string() +
+                  " Hz"
+                let last = packets[packets.length() - 1]
+                // 从 0 起算：本命令输出的是从流开头完整导出的文件，
+                // 首粒度就是 pre-skip + 第一页样本数，不能再当作「起点偏移」减一次。
+                secs = @codec.duration_seconds(info, 0L, last.granule_position)
+              }
+              None => ok = false
+            }
+          }
+          if !ok {
+            restore_output(out, bak)
+            fail_data(
+              "错误: 已写出 " +
+              out +
+              "，但回读校验未通过，已恢复原文件（若有）",
+            )
+            return
+          }
+          println(
+            "已写出 " +
+            out +
+            "  " +
+            desc +
+            " / " +
+            format_seconds(secs) +
+            " 秒 / " +
+            bytes.length().to_string() +
+            " 字节",
+          )
+          commit_output(bak)
+        }
+      }
+  }
+}
+
+///|
 /// `demux`：把包按逻辑流分组写成文件。
 ///
 /// 每条逻辑流写进一个子目录 `s1`、`s2`……（按流在文件中首次出现的顺序），
@@ -3175,6 +3252,7 @@ fn main {
     @cli.Command::Chop(src, out, start_ms, end_ms) =>
       run_chop(src, out, start_ms, end_ms)
     @cli.Command::Remux(src, out) => run_remux(src, out)
+    @cli.Command::ToOgg(src, out) => run_to_ogg(src, out)
     @cli.Command::Version => println(@moonmux.describe())
     @cli.Command::Help => println(@cli.usage())
     @cli.Command::Bad(msg, usage) => {

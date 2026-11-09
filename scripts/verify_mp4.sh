@@ -104,6 +104,42 @@ else
   echo "  SKIP  ffmpeg 解码（未安装 ffmpeg）"
 fi
 
+# 6) 反向闭环：MP4 → Ogg，音频包应逐字节还原
+echo
+echo "== 6. 反向解封装（MP4 → Ogg）=="
+"$BIN" to-ogg "$TMP/out.m4a" "$TMP/back.ogg" >/dev/null 2>&1
+if [ $? -eq 0 ] && [ -s "$TMP/back.ogg" ]; then
+  pass "to-ogg 输出非空"
+else
+  fail "to-ogg 输出非空"
+fi
+"$BIN" verify "$TMP/back.ogg" >/dev/null 2>&1
+if [ $? -eq 0 ]; then pass "回读 Ogg verify 通过"; else fail "回读 Ogg verify 通过"; fi
+"$BIN" demux testdata/opus_sample.opus "$TMP/rd_orig" >/dev/null 2>&1
+"$BIN" demux "$TMP/back.ogg" "$TMP/rd_back" >/dev/null 2>&1
+if cmp -s "$TMP/rd_orig/s1/packet_000002.bin" "$TMP/rd_back/s1/packet_000002.bin"; then
+  pass "音频包逐字节还原（首个音频包）"
+else
+  fail "音频包逐字节还原（首个音频包）"
+fi
+BACK_MS="$("$BIN" info "$TMP/back.ogg" --json 2>/dev/null | sed -n 's/.*"duration_ms":\([0-9]*\).*/\1/p' | head -1)"
+if [ -n "$M4_MS" ] && [ -n "$BACK_MS" ]; then
+  awk -v a="$M4_MS" -v b="$BACK_MS" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(d <= 200) }'
+  if [ $? -eq 0 ]; then
+    pass "反向时长一致（MP4 ${M4_MS}ms vs Ogg ${BACK_MS}ms）"
+  else
+    fail "反向时长一致（MP4 ${M4_MS}ms vs Ogg ${BACK_MS}ms）"
+  fi
+else
+  echo "  SKIP  反向时长一致性（缺少工具输出）"
+fi
+if command -v ffmpeg >/dev/null 2>&1; then
+  ffmpeg -v error -i "$TMP/back.ogg" -f null - >/dev/null 2>&1
+  if [ $? -eq 0 ]; then pass "ffmpeg 解码回读 Ogg 无错误"; else fail "ffmpeg 解码回读 Ogg 无错误"; fi
+else
+  echo "  SKIP  ffmpeg 解码回读（未安装 ffmpeg）"
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "verify_mp4: 全部通过"
