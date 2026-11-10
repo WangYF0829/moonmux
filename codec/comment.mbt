@@ -19,6 +19,15 @@
 // 不能把进程拖死（各语言的标签库在这上面出过真实的 OOM 缺陷）。
 
 ///|
+/// 注释条数的绝对上限。
+///
+/// 相对下界（每条至少 6 字节）只能挡住「计数远大于包长」的构造；一个
+/// 1.8 MB 的包仍可合法地声明 30 万条 6 字节条目，解析成 `Tag{key,value}`
+/// 后放大约 40 倍（M-12 / CP-05）。正常音频的注释不会超过 10 万条，
+/// 因此再加一道绝对上限，把注释解析的内存与 CPU 都封顶。
+const MAX_COMMENT_ENTRIES : Int32 = 100000
+
+///|
 /// 一条注释：键 + 值。
 ///
 /// 键是大小写不敏感的 ASCII（可打印字符，不含 `=`），值可以是任意 UTF-8。
@@ -146,13 +155,26 @@ fn parse_comment_until(
     None => return Err("注释包的条目计数字段越界")
   }
   offset = offset + 4
-  // 每条至少 4 字节（长度字段）。先按这个下界挡掉「声称有几十亿条」的包，
-  // 免得循环把内存吃光 —— 各语言标签库都在这上面出过真实的 OOM 缺陷。
-  if count > (packet.length() - offset) / 4 {
+  // 每条有效注释至少 6 字节：4 字节长度字段 + 至少 2 字节的 "A="。
+  // 只按 4 字节/条放行的话，1.8 MB 的包可以声明 45 万条空条目，解析成
+  // Tag 对象后仍有约 20–40 倍放大（M-12 / CP-05）。这里用 Int64 比较，
+  // 避免「剩余字节数 × 下界」在 32 位上出现同类溢出问题。
+  let remaining = (packet.length() - offset).to_int64()
+  if count.to_int64() > remaining / 6L {
     return Err(
       "条目计数 " +
       count.to_string() +
-      " 与包内剩余字节不符（已拒绝）",
+      " 与包内剩余字节不符（每条至少 6 字节，已拒绝）",
+    )
+  }
+  // 绝对上限：挡住「包足够大、条数仍然夸张」的分配放大构造。
+  if count > MAX_COMMENT_ENTRIES {
+    return Err(
+      "条目计数 " +
+      count.to_string() +
+      " 超过上限 " +
+      MAX_COMMENT_ENTRIES.to_string() +
+      "（已拒绝）",
     )
   }
   let tags : Array[Tag] = []

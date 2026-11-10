@@ -180,8 +180,9 @@ fn parse_header(line : String) -> Result[(String, String)?, String] {
       if key == "serial" || key == "packets" || key == "chain" {
         Ok(Some((key, value)))
       } else {
-        // 将来的扩展字段：当作注释忽略，不猜测语义
-        Ok(None)
+        // 未知头部字段必须报错：把 `# seriall=7` 当注释忽略，
+        // mux 会静默改用默认流号 1 —— 结构合法但流号错了。
+        Err("清单头部字段未知：" + line)
       }
     }
   }

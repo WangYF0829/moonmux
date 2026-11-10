@@ -20,6 +20,82 @@ fn page_with(payload : Bytes) -> Bytes {
 }
 
 ///|
+/// 小端写 u32（测试里手工拼包用）。
+fn put_u32(buf : Buffer, v : Int32) -> Unit {
+  buf.write_byte((v % 256).to_byte())
+  buf.write_byte((v / 256 % 256).to_byte())
+  buf.write_byte((v / 65536 % 256).to_byte())
+  buf.write_byte((v / 16777216 % 256).to_byte())
+}
+
+///|
+/// 构造一个最小合法 OpusHead（19 字节）；版本 / 声道 / pre-skip 可指定。
+fn make_opus_head(version : Int32, channels : Int32, pre_skip : Int32) -> Bytes {
+  let buf = Buffer()
+  buf.write_bytes(b"OpusHead".exact_view())
+  buf.write_byte(version.to_byte())
+  buf.write_byte(channels.to_byte())
+  buf.write_byte((pre_skip % 256).to_byte())
+  buf.write_byte((pre_skip / 256 % 256).to_byte())
+  // 输入采样率 48000（只是元数据，Opus 输出恒为 48 kHz）
+  buf.write_byte((0x80 : Byte))
+  buf.write_byte((0xBB : Byte))
+  buf.write_byte((0 : Byte))
+  buf.write_byte((0 : Byte))
+  buf.write_byte((0 : Byte)) // 输出增益
+  buf.write_byte((0 : Byte))
+  buf.write_byte((0 : Byte)) // 声道映射族 0
+  buf.to_bytes()
+}
+
+///|
+/// 最小合法 OpusTags：空 vendor、零条目。
+fn opus_tags_packet() -> Bytes {
+  let buf = Buffer()
+  buf.write_bytes(b"OpusTags".exact_view())
+  put_u32(buf, 0)
+  put_u32(buf, 0)
+  buf.to_bytes()
+}
+
+///|
+/// 合法 Vorbis 识别头（2 声道 / 44100 Hz / block sizes 8、11 / framing=1）。
+fn vorbis_ident_packet() -> Bytes {
+  b"\x01vorbis\x00\x00\x00\x00\x02\x44\xAC\x00\x00\x00\x00\x00\x00\x00\xF4\x01\x00\x00\x00\x00\x00\xB8\x01"
+}
+
+///|
+/// 合法 Vorbis 注释包：空 vendor、零条目、framing=1。
+fn vorbis_comment_packet() -> Bytes {
+  let buf = Buffer()
+  buf.write_bytes(b"\x03vorbis".exact_view())
+  put_u32(buf, 0)
+  put_u32(buf, 0)
+  buf.write_byte((0x01 : Byte))
+  buf.to_bytes()
+}
+
+///|
+/// 能通过最小 setup 预检的 Vorbis setup 头（第 1 个 codebook 为 ordered，
+/// 预检对 ordered 码本只做前缀/边界检查，不解析变长游程）。
+fn vorbis_setup_ordered() -> Bytes {
+  b"\x05vorbis\x00\x42\x43\x56\x00\x00\x00\x00\x00\x01"
+}
+
+///|
+/// C-02 的 221 B PoC 中的恶意 setup：第 1 个 codebook 声明
+/// dimensions=65536、entries=16777216，且没有任何码长数据。
+fn vorbis_setup_malicious() -> Bytes {
+  b"\x05vorbis\x00\x42\x43\x56\xFF\xFF\xFF\xFF\xFF\x00"
+}
+
+///|
+/// 把包序列变成已解析的页（多数测试只需页列表）。
+fn pages_of(packets : Array[@ogg.Packet]) -> Array[@ogg.Page] {
+  @ogg.paginate(packets, packets[0].serial)
+}
+
+///|
 /// Opus 的标识包以 "OpusHead" 开头（RFC 7845 §5.1）。
 test "detect identifies opus by its id packet" {
   match detect(page_with(b"OpusHead")) {
@@ -148,23 +224,33 @@ test "the stream handed to the decoder holds only that stream" {
 }
 
 ///|
-/// 估算只按头部与粒度算 PCM 字节数（2 声道、pre-skip 312、末粒度 48000）。
-test "estimate pcm bytes from headers" {
+/// 估算按解码工作量：Opus 逐包读 TOC 累加样本，完全忽略页 granule。
+test "plan estimate uses opus packet toc and ignores granule" {
   let packets : Array[@ogg.Packet] = [
     {
       data: b"OpusHead\x01\x02\x38\x01\x80\xBB\x00\x00\x00\x00\x00",
       granule_position: 0L,
       serial: 1U,
     },
-    { data: b"audio", granule_position: 48000L, serial: 1U, },
+    { data: opus_tags_packet(), granule_position: 0L, serial: 1U, },
+    // 0x19 = config 3（SILK 60 ms，2880 样本）+ code 1（2 帧）→ 5760 样本
+    { data: b"\x19", granule_position: 0L, serial: 1U, },
+    // 即使 granule 是 Int64 上限，估算也只看 TOC（H-03 / M-13）
+    { data: b"\x19", granule_position: 9223372036854775807L, serial: 1U, },
   ]
-  let pages = @ogg.paginate(packets, 1U)
-  // (48000 - 0 - 312) × 2 声道 × 2 字节
-  assert_eq(estimate_pcm_bytes([pages], 16), (48000L - 312L) * 4L)
+  match plan_segment(pages_of(packets), 16) {
+    Ok(plan) => {
+      assert_eq(plan.channels, 2)
+      assert_eq(plan.sample_rate, 48000)
+      // 2 包 × 5760 样本 × 2 声道 ×（16 位输出 2 B + 解码器内部缓冲 8 B）
+      assert_eq(plan.estimated_bytes, 2L * 5760L * 2L * 10L)
+    }
+    Err(_) => assert_true(false)
+  }
 }
 
 ///|
-/// 估算超过预算时在解码前就拒绝，并说明是 PCM 预算。
+/// 估算超过预算时在解码前就拒绝，并说明是解码内存预算。
 test "the pcm budget is enforced before decoding" {
   let packets : Array[@ogg.Packet] = [
     {
@@ -172,29 +258,166 @@ test "the pcm budget is enforced before decoding" {
       granule_position: 0L,
       serial: 1U,
     },
-    { data: b"audio", granule_position: 48000L, serial: 1U, },
+    { data: opus_tags_packet(), granule_position: 0L, serial: 1U, },
+    { data: b"\x19", granule_position: 48000L, serial: 1U, },
   ]
   let data = @ogg.serialize_pages(@ogg.paginate(packets, 1U))
   match ogg_to_wav_limited(data, 1000L) {
-    Err(msg) => assert_true(msg.contains("MiB"))
+    Err(msg) => {
+      assert_true(msg.contains("MiB"))
+      assert_true(msg.contains("预算"))
+    }
     Ok(_) => assert_true(false)
   }
 }
 
 ///|
-/// 损坏的粒度（Int64 上限）不能让估算溢出成负数而绕过预算。
-test "an absurd granule cannot bypass the budget" {
+/// M-13 / CP-06 回归：损坏的 granule 不再用 `MAX+1` 哨兵绕过判断，
+/// 而是估算直接 Err —— 与用户预算大小无关（调大预算也不能放行）。
+test "absurd vorbis granule is rejected regardless of budget" {
   let packets : Array[@ogg.Packet] = [
-    {
-      data: b"OpusHead\x01\x02\x38\x01\x80\xBB\x00\x00\x00\x00\x00",
-      granule_position: 0L,
-      serial: 1U,
-    },
-    { data: b"audio", granule_position: 9223372036854775807L, serial: 1U, },
+    { data: vorbis_ident_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_ordered(), granule_position: 0L, serial: 1U, },
+    { data: b"\x00", granule_position: 9223372036854775807L, serial: 1U, },
   ]
-  let pages = @ogg.paginate(packets, 1U)
-  // 估算应当直接判为超限，而不是回绕成负数
-  assert_true(estimate_pcm_bytes([pages], 16) > 268435456L)
+  match plan_segment(pages_of(packets), 16) {
+    Err(msg) => assert_true(msg.contains("无法估算"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// H-03 回归：所有页 granule 都为 0 时，预算仍按包数 × TOC 估算并在
+/// 解码前拒绝 —— 不再出现「估算 0 → 放行 → 解码器按包数分配」的绕过。
+test "granule-zero opus cannot bypass the budget" {
+  let packets : Array[@ogg.Packet] = [
+    { data: make_opus_head(1, 1, 312), granule_position: 0L, serial: 1U, },
+    { data: opus_tags_packet(), granule_position: 0L, serial: 1U, },
+  ]
+  let mut i = 0
+  while i < 20 {
+    // 每个 0x19 包 5760 样本；20 包 × 1 声道 × 10 B/样本 ≈ 1.1 MiB
+    packets.push({ data: b"\x19", granule_position: 0L, serial: 1U, })
+    i = i + 1
+  }
+  let data = @ogg.serialize_pages(@ogg.paginate(packets, 1U))
+  match ogg_to_wav_pages(@ogg.parse_pages(data), 1048576L) {
+    Err(msg) => {
+      assert_true(msg.contains("预算"))
+      assert_true(msg.contains("TOC"))
+    }
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// H-04 回归：本项目解析器不接受的头部（OpusHead version=2）必须在解码前
+/// 被拒绝，而不是「估算 0 → 解码器照跑 → 事后才报错」。
+test "opus head version 2 is rejected before decoding" {
+  let packets : Array[@ogg.Packet] = [
+    { data: make_opus_head(2, 1, 312), granule_position: 0L, serial: 1U, },
+    { data: opus_tags_packet(), granule_position: 0L, serial: 1U, },
+    { data: b"\x19", granule_position: 5760L, serial: 1U, },
+  ]
+  let data = @ogg.serialize_pages(@ogg.paginate(packets, 1U))
+  match ogg_to_wav_pages(@ogg.parse_pages(data), 268435456L) {
+    Err(msg) => assert_true(msg.contains("不支持的 Opus 头部"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// C-02 回归：97 B 的恶意 Vorbis 注释（vendor_len=0x7FFFFFFF）必须在交给
+/// moonvorbis 之前被本项目解析器拒绝，返回 Err 而不是崩溃（exit 0xC0000409）。
+test "malicious vorbis comment is rejected before decoding" {
+  let packets : Array[@ogg.Packet] = [
+    { data: vorbis_ident_packet(), granule_position: 0L, serial: 1U, },
+    // 0x7FFFFFFF 的 vendor 长度：解码器里 pos + vendor_len 会回绕成负数。
+    { data: b"\x03vorbis\xFF\xFF\xFF\x7F", granule_position: 0L, serial: 1U, },
+  ]
+  let data = @ogg.serialize_pages(@ogg.paginate(packets, 1U))
+  match ogg_to_wav_pages(@ogg.parse_pages(data), 1048576L) {
+    Err(msg) => assert_true(msg.contains("预检"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// C-02 回归：221 B 的恶意 Vorbis setup（codebook entries=16777216 但无
+/// 码长数据）必须在交给 moonvorbis 之前被拒绝（exit 0xC0000005 是访问违例）。
+test "malicious vorbis setup is rejected before decoding" {
+  let packets : Array[@ogg.Packet] = [
+    { data: vorbis_ident_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_malicious(), granule_position: 0L, serial: 1U, },
+  ]
+  let data = @ogg.serialize_pages(@ogg.paginate(packets, 1U))
+  match ogg_to_wav_pages(@ogg.parse_pages(data), 1048576L) {
+    Err(msg) => assert_true(msg.contains("setup"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// Opus 音频包的 TOC 无法解析时必须在解码前拒绝（不能把不确定的包交给解码器）。
+test "unparseable opus toc is rejected before decoding" {
+  let packets : Array[@ogg.Packet] = [
+    { data: make_opus_head(1, 1, 312), granule_position: 0L, serial: 1U, },
+    { data: opus_tags_packet(), granule_position: 0L, serial: 1U, },
+    { data: b"", granule_position: 5760L, serial: 1U, },
+  ]
+  let data = @ogg.serialize_pages(@ogg.paginate(packets, 1U))
+  match ogg_to_wav_pages(@ogg.parse_pages(data), 268435456L) {
+    Err(msg) => assert_true(msg.contains("TOC"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// Vorbis 的 granule 全部不可用时（-1）必须拒绝，不能按 0 估算放行。
+test "vorbis without usable granule is rejected" {
+  let packets : Array[@ogg.Packet] = [
+    { data: vorbis_ident_packet(), granule_position: -1L, serial: 1U, },
+    { data: vorbis_comment_packet(), granule_position: -1L, serial: 1U, },
+    { data: vorbis_setup_ordered(), granule_position: -1L, serial: 1U, },
+    { data: b"\x00", granule_position: -1L, serial: 1U, },
+  ]
+  match plan_segment(pages_of(packets), 16) {
+    Err(msg) => assert_true(msg.contains("无法估算"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// 预检与解码共用同一次选流结果：多流文件里跳过非音频流，选中的是音频流。
+test "gate picks the audio stream and shares it with decode" {
+  let built = @ogg.mux_streams([
+    {
+      serial: 1U,
+      packets: [{ data: b"fishead", granule_position: 0L, serial: 1U, }],
+    },
+    {
+      serial: 2U,
+      packets: [
+        { data: make_opus_head(1, 1, 312), granule_position: 0L, serial: 2U, },
+        { data: opus_tags_packet(), granule_position: 0L, serial: 2U, },
+        { data: b"\x19", granule_position: 5760L, serial: 2U, },
+      ],
+    },
+  ])
+  let pages = match built {
+    Ok(p) => p
+    Err(_) => []
+  }
+  match plan_segment(pages, 16) {
+    Ok(plan) => {
+      assert_eq(plan.serial, 2U)
+      assert_eq(plan.channels, 1)
+      assert_eq(plan.estimated_bytes, 5760L * 10L)
+    }
+    Err(_) => assert_true(false)
+  }
 }
 
 ///|

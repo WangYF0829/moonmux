@@ -91,11 +91,49 @@ pub fn is_page_start(data : Bytes, offset : Int32) -> Bool {
 /// 重同步时如果只认 "OggS" 魔数，恶意构造的大量伪页头会让每个候选都走一遍
 /// 完整的段表/CRC 校验（约 4600× CPU 放大）。先做两个字节的预筛，
 /// 把绝大多数伪候选挡在解析之前；真正合法的页不受影响。
+///
+/// 它只是**预筛**，不是合法性判据：`parse_pages_lenient` / `PageReader`
+/// 的接受判据必须与 `Page::parse`（以及 CRC 复核）一致，否则同一份文件会
+/// 出现 `info` 接受、`verify` 拒绝的矛盾结论（见 resync_wbtest.mbt 的回归）。
 fn plausible_page_start(data : Bytes, offset : Int32) -> Bool {
   if !is_page_start(data, offset) || offset > data.length() - 7 {
     return false
   }
   data[offset + 4].to_int() == 0 && (data[offset + 5].to_int() & 0xF8) == 0
+}
+
+///|
+/// 只计算 `offset` 处一页的完整字节长度（27 + 段表 + 负载），不复制任何数据。
+///
+/// 返回 `None` 表示这里不是一个结构完整的页（数据不足 / 段表或负载超出
+/// 剩余字节）。结构判据与 `Page::parse` 一致，但不校验 version / 保留位 /
+/// CRC —— 重同步路径据此在物化前先用 `crc32_page_range` 做零拷贝 CRC 复核，
+/// 只有 CRC 通过才构造 `Page`。
+///
+/// 所有上界都用减法表达，且段数 ≤255、负载 ≤65025，求和不会溢出
+/// （`Int32` 在接近 2³¹ 时也不会回绕）。
+fn page_length_at(data : Bytes, offset : Int32) -> Int32? {
+  if offset < 0 || offset > data.length() - 27 {
+    return None
+  }
+  let n_segments = data[offset + 26].to_int()
+  // offset <= data.length() - 27，因此 offset + 27 <= data.length()，不会回绕
+  let table_start = offset + 27
+  if n_segments > data.length() - table_start {
+    return None
+  }
+  let mut payload_len = 0
+  let mut k = 0
+  while k < n_segments {
+    payload_len = payload_len + data[table_start + k].to_int()
+    k = k + 1
+  }
+  // 27 + 255 + 65025 = 65307，远小于 Int32 上限
+  let page_len = 27 + n_segments + payload_len
+  if page_len > data.length() - offset {
+    return None
+  }
+  Some(page_len)
 }
 
 ///|

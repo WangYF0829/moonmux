@@ -246,6 +246,21 @@ pub fn parse(args : Array[String]) -> Command {
   let sub = args[0]
   // 子命令之后的参数个数
   let n = args.length() - 1
+  // 只有 info/dump/verify/extract 接受选项。其余子命令把 `--xxx` 当未知选项拒绝：
+  // 否则它会被当成文件/目录名（例如 `demux x.ogg --json` 会在 CWD 建名为 --json 的目录）。
+  let flags_ok = sub == "info" ||
+    sub == "dump" ||
+    sub == "verify" ||
+    sub == "extract"
+  if !flags_ok {
+    let mut fi = 1
+    while fi < args.length() {
+      if args[fi].has_prefix("--") {
+        return Command::Bad("未知选项: " + args[fi], usage())
+      }
+      fi = fi + 1
+    }
+  }
   if sub == "info" {
     let (pos, json, err) = take_flag(args, 1, "--json")
     match err {

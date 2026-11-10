@@ -165,3 +165,100 @@ test "a truncated tail becomes a skipped range" {
   assert_eq(gaps[0].offset, 27 + pages[0].segments.length() + 4)
   assert_eq(gaps[0].bytes, 27 + pages[1].segments.length() + 4 - 5)
 }
+
+///|
+/// 带页头保留位（RFC 3533 要求为 0，但 `Page::parse` 只校验 version）的页：
+/// 严格解析接受它，容错解析也必须接受 —— `plausible_page_start` 只用于
+/// 筛选候选，不能当合法性判据，否则 info 接受的文件会被 verify 判成
+/// 「不是合法 Ogg」并触发全文件重同步（M-26 回归）。
+fn reserved_bit_blob() -> Bytes {
+  let pages : Array[Page] = [
+    {
+      header_type: (0x0A : Byte), // BOS + 保留位 0x08
+      granule_position: 0L,
+      serial: 1U,
+      sequence: 0U,
+      crc: 0U,
+      segments: [4],
+      payload: b"HEAD",
+    },
+    {
+      header_type: (0x0C : Byte), // EOS + 保留位 0x08
+      granule_position: 960L,
+      serial: 1U,
+      sequence: 1U,
+      crc: 0U,
+      segments: [4],
+      payload: b"DATA",
+    },
+  ]
+  serialize_pages(pages)
+}
+
+///|
+test "lenient parsing accepts every page strict parsing accepts (reserved bits)" {
+  let blob = reserved_bit_blob()
+  let strict = parse_pages(blob)
+  assert_eq(strict.length(), 2)
+  let (lenient, gaps) = parse_pages_lenient(blob)
+  assert_eq(lenient.length(), strict.length())
+  assert_eq(gaps.length(), 0)
+  // 保留位随页头原样保留，没有被改写
+  assert_eq(lenient[0].header_type.to_int(), 0x0A)
+}
+
+///|
+/// 稠密伪页头洪水：1 个垃圾字节 + 每 6 字节一个 `OggS\0\0`，每个候选都能
+/// 通过预筛并凑出一页的段表（约 6.4 KB），但 CRC 必然不符。
+///
+/// 旧实现会为每个候选做「整页物化 + 整页重算 CRC」，实测 1 MiB ≈ 4 s；
+/// 新实现（零拷贝 CRC + 确定性预算）必须在扫描少量字节后即判定伪页头洪水。
+fn fake_header_flood(reps : Int32) -> Bytes {
+  let buf = Buffer()
+  buf.write_byte((0x4A : Byte)) // 让 offset 0 不是页头，强制走重同步
+  let mut i = 0
+  while i < reps {
+    buf.write_bytes(b"OggS".exact_view())
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0 : Byte))
+    i = i + 1
+  }
+  buf.to_bytes()
+}
+
+///|
+test "checked lenient parsing reports a fake-header flood instead of scanning" {
+  let flood = fake_header_flood(11000) // 66,001 字节
+  match parse_pages_lenient_checked(flood) {
+    Ok(_) => assert_true(false) // 必须拒绝：这是伪页头洪水
+    Err(msg) => assert_true(msg.contains("伪页头洪水"))
+  }
+}
+
+///|
+/// 兼容旧签名的 `parse_pages_lenient` 不能返回 Err，但同样必须有限终止：
+/// 超预算后把剩余字节整体记为跳过区间（确定性结果，不依赖计时）。
+test "legacy lenient parsing stays bounded on a fake-header flood" {
+  let flood = fake_header_flood(11000)
+  let (pages, gaps) = parse_pages_lenient(flood)
+  assert_eq(pages.length(), 0)
+  let mut skipped = 0
+  for gap in gaps {
+    assert_true(gap.bytes > 0)
+    skipped = skipped + gap.bytes
+  }
+  assert_eq(skipped, flood.length())
+}
+
+///|
+/// 控制组：正常文件不得被误判为伪页头洪水。
+test "checked lenient parsing accepts normal files" {
+  let blob = three_page_blob()
+  match parse_pages_lenient_checked(blob) {
+    Ok((pages, gaps)) => {
+      assert_eq(pages.length(), 3)
+      assert_eq(gaps.length(), 0)
+    }
+    Err(_) => assert_true(false)
+  }
+}

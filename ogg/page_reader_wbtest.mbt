@@ -264,3 +264,92 @@ test "page reader strict mode stops at garbage and getters report state" {
   assert_true(tolerant.take_pages().length() == parse_pages(stream).length())
   assert_eq(tolerant.skipped().length(), 0)
 }
+
+///|
+/// 带页头保留位（`Page::parse` 只校验 version，接受这种页）的数据：
+/// 流式读取的接受判据必须与 Page::parse + CRC 一致，不能因为
+/// `plausible_page_start` 预筛失败就把整段数据当垃圾（M-26 回归）。
+fn pr_reserved_bit_blob() -> Bytes {
+  let pages : Array[Page] = [
+    {
+      header_type: (0x0A : Byte), // BOS + 保留位 0x08
+      granule_position: 0L,
+      serial: 1U,
+      sequence: 0U,
+      crc: 0U,
+      segments: [4],
+      payload: b"HEAD",
+    },
+    {
+      header_type: (0x0C : Byte), // EOS + 保留位 0x08
+      granule_position: 960L,
+      serial: 1U,
+      sequence: 1U,
+      crc: 0U,
+      segments: [4],
+      payload: b"DATA",
+    },
+  ]
+  serialize_pages(pages)
+}
+
+///|
+test "page reader: accepts reserved-bit pages whose crc is valid (M-26)" {
+  let blob = pr_reserved_bit_blob()
+  let strict = parse_pages(blob)
+  assert_eq(strict.length(), 2)
+  let reader = PageReader::new()
+  reader.feed(blob)
+  reader.finish()
+  assert_eq(reader.take_pages().length(), strict.length())
+  assert_eq(reader.take_skipped().length(), 0)
+}
+
+///|
+/// 稠密伪页头洪水（1 个垃圾字节 + 每 6 字节一个 `OggS\0\0`）：
+/// 每个候选结构上都像一页（约 6.4 KB）但 CRC 不符。旧实现对每个候选
+/// 都解析拷贝整页再重算 CRC（H-01/M-27 同构）；新实现用零拷贝 CRC +
+/// 候选预算，必须有限终止并把剩余缓冲整体记为跳过（确定性断言，不计时）。
+fn pr_fake_flood(reps : Int32) -> Bytes {
+  let buf = Buffer()
+  buf.write_byte((0x4A : Byte)) // 让 offset 0 不是页头，强制走重同步
+  let mut i = 0
+  while i < reps {
+    buf.write_bytes(b"OggS".exact_view())
+    buf.write_byte((0 : Byte))
+    buf.write_byte((0 : Byte))
+    i = i + 1
+  }
+  buf.to_bytes()
+}
+
+///|
+test "page reader: fake OggS flood is stopped by the candidate budget (M-27)" {
+  let flood = pr_fake_flood(11000) // 66,001 字节
+  let reader = PageReader::new()
+  reader.feed(flood)
+  reader.finish()
+  assert_eq(reader.take_pages().length(), 0)
+  let gaps = reader.take_skipped()
+  let mut skipped = 0
+  for g in gaps {
+    assert_true(g.bytes > 0)
+    skipped = skipped + g.bytes
+  }
+  assert_eq(skipped, flood.length())
+  // 预算耗尽后剩余缓冲被整体消费，不会留到下一次 feed 重复扫描
+  assert_eq(reader.buffered(), 0)
+}
+
+///|
+/// `chunk_size` 取 Int32 上限时，`off + size` 若用加法会回绕成负数（M-29）；
+/// 减法边界下应正常按「剩余全部」一次喂入，结果与 parse_pages 一致。
+test "for_each_page_chunked: huge chunk size does not wrap (M-29)" {
+  let stream = pr_stream()
+  let collected : Array[Page] = []
+  let gaps = for_each_page_chunked(stream, 2147483647, fn(page) {
+    collected.push(page)
+  })
+  assert_eq(gaps.length(), 0)
+  assert_eq(collected.length(), parse_pages(stream).length())
+}

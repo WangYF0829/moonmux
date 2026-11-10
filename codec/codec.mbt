@@ -156,6 +156,160 @@ pub fn parse_vorbis_id(data : Bytes) -> AudioInfo? {
 }
 
 ///|
+/// 从 `packet` 的 `start_byte` 之后、第 `bit_offset` 位起，按 LSB-first
+/// 读 `n` 位（Vorbis 头内部一律 LSB-first，`n ≤ 24`）。
+///
+/// 越界或参数非法返回 `None`：这是「安全预检」用的读取器，**绝不读到
+/// 包外**。位读取本身不做任何分配，因此可以放心在解码前的 gate 里使用。
+fn read_bits_lsb(
+  packet : Bytes,
+  start_byte : Int32,
+  bit_offset : Int32,
+  n : Int32,
+) -> Int32? {
+  if n < 0 || n > 24 || bit_offset < 0 {
+    return None
+  }
+  let total_bits = (packet.length() - start_byte) * 8
+  if total_bits < 0 || bit_offset + n > total_bits {
+    return None
+  }
+  let mut v = 0
+  let mut i = 0
+  while i < n {
+    let bit_pos = bit_offset + i
+    let byte_index = start_byte + bit_pos / 8
+    let bit_in_byte = bit_pos % 8
+    let bit = (packet[byte_index].to_int() >> bit_in_byte) & 1
+    v = v | (bit << i)
+    i = i + 1
+  }
+  Some(v)
+}
+
+///|
+/// Vorbis setup 头的最小安全结构校验（解码前的 gate，C-02 兜底之一）。
+///
+/// 只解第一个 codebook 的头部声明，判断「声明的条目数」与「包内实际可读
+/// 位数」是否自洽。C-02 的 221 B PoC 正是声明 `entries=16777215`、非 sparse
+/// 却只给几十字节：第三方解码器逐条读 5 位码长时没有 bit budget 检查，
+/// 会越过包尾做 `unsafe_get`（原生访问违例）。这里在做任何解码之前挡掉它。
+///
+/// **能力边界**：这不是完整的 Vorbis setup 解析器 —— 只校验第一个 codebook
+/// 的声明自洽性；ordered codebook 以及后续 codebook/floor/residue/mapping
+/// 的恶意构造仍可能让解码器崩溃（见 `pipeline/` 文件头与任务报告的残余风险）。
+pub fn validate_vorbis_setup(packet : Bytes) -> Result[Unit, String] {
+  if packet.length() < 8 {
+    return Err(
+      "setup 包过短（" + packet.length().to_string() + " 字节）",
+    )
+  }
+  if packet[0].to_int() != 0x05 || !tag_at(packet, 1, "vorbis") {
+    return Err("不是 Vorbis setup 头（缺少 0x05 + \"vorbis\" 标记）")
+  }
+  // setup 数据从包偏移 7 开始，按 LSB-first 位流解析。
+  let start = 7
+  let total_bits = (packet.length() - start) * 8
+  let mut pos = 0
+  let count = match read_bits_lsb(packet, start, pos, 8) {
+    Some(v) => {
+      pos = pos + 8
+      v + 1
+    }
+    None => return Err("setup 头缺少 codebook 计数")
+  }
+  if count <= 0 {
+    return Err("setup 头的 codebook 计数非法")
+  }
+  // 只校验第一个 codebook；codebook 数量本身有 8 位上限（≤256），
+  // 真正会造成分配/越界放大的是单个 codebook 的 entries × dimensions。
+  // 每个 codebook 以 24 位同步码 0x564342 开头（Vorbis I §3.2.1）。
+  let sync = match read_bits_lsb(packet, start, pos, 24) {
+    Some(v) => {
+      pos = pos + 24
+      v
+    }
+    None =>
+      return Err("setup 头在第 1 个 codebook 的同步码处被截断")
+  }
+  if sync != 0x564342 {
+    return Err(
+      "setup 头第 1 个 codebook 的同步码不是 0x564342（已拒绝）",
+    )
+  }
+  let dimensions = match read_bits_lsb(packet, start, pos, 16) {
+    Some(v) => {
+      pos = pos + 16
+      v + 1
+    }
+    None =>
+      return Err(
+        "setup 头在第 1 个 codebook 的 dimensions 字段处被截断",
+      )
+  }
+  let entries = match read_bits_lsb(packet, start, pos, 24) {
+    Some(v) => {
+      pos = pos + 24
+      v + 1
+    }
+    None =>
+      return Err(
+        "setup 头在第 1 个 codebook 的 entries 字段处被截断",
+      )
+  }
+  // 合理的 codebook 远小于这两个上限；超过即视为恶意/损坏的构造。
+  // （阈值取宽松值，真实 Vorbis 的第一个 codebook 只有几个维度、几千条目。）
+  if dimensions > 4096 || entries > 1048576 {
+    return Err(
+      "setup 头第 1 个 codebook 的 dimensions=" +
+      dimensions.to_string() +
+      " / entries=" +
+      entries.to_string() +
+      " 超出合理范围（已拒绝）",
+    )
+  }
+  let ordered = match read_bits_lsb(packet, start, pos, 1) {
+    Some(v) => {
+      pos = pos + 1
+      v
+    }
+    None =>
+      return Err(
+        "setup 头在第 1 个 codebook 的 ordered 标志处被截断",
+      )
+  }
+  if ordered == 1 {
+    // ordered codebook 的长度用变长游程编码，这里不做位预算判断；
+    // 交给解码器（残余风险见函数文档）。
+    return Ok(())
+  }
+  let sparse = match read_bits_lsb(packet, start, pos, 1) {
+    Some(v) => {
+      pos = pos + 1
+      v
+    }
+    None =>
+      return Err("setup 头在第 1 个 codebook 的 sparse 标志处被截断")
+  }
+  let remaining = total_bits - pos
+  // 无序 codebook：每条目至少 1 位（sparse 时的 used 标志），非 sparse
+  // 时每条目固定 5 位码长。声明的条目数超过剩余位数，就必然导致越界读。
+  let required : Int64 = if sparse == 1 {
+    entries.to_int64()
+  } else {
+    entries.to_int64() * 5L
+  }
+  if required > remaining.to_int64() {
+    return Err(
+      "setup 头声明的 codebook 条目数（" +
+      entries.to_string() +
+      "）与包内剩余位数不符（疑似恶意构造，已拒绝）",
+    )
+  }
+  Ok(())
+}
+
+///|
 /// 依次尝试各编解码的标识头。
 pub fn parse_audio_header(data : Bytes) -> AudioInfo? {
   match parse_opus_head(data) {

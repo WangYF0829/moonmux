@@ -376,3 +376,91 @@ test "remux trims everything when last granule is zero" {
     Ok(_) => assert_true(false)
   }
 }
+
+// ---------- 读侧字段防御：M-15 / M-17 / M-19 回归 ----------
+
+///|
+test "mp4 remux: total sample count rejects Int32 overflow" {
+  // mdhd v0 时长是 32 位；Int32 累加在 ~2^32 个样本处回绕成小正数，
+  // 旧实现会写出时长偏小的容器却通过自检（M-15）。
+  assert_true(
+    match add_total_samples(0L, 960) {
+      Ok(v) => v == 960L
+      Err(_) => false
+    },
+  )
+  assert_true(
+    match add_total_samples(2147472000L, 5760) {
+      Ok(v) => v == 2147477760L
+      Err(_) => false
+    },
+  )
+  // 恰好到 2^31−1 仍允许
+  assert_true(
+    match add_total_samples(2147483647L - 960L, 960) {
+      Ok(v) => v == 2147483647L
+      Err(_) => false
+    },
+  )
+  // 再多 1 个样本就超过 32 位时长字段的可安全表达范围 → 必须 Err 而不是回绕
+  assert_true(
+    match add_total_samples(2147483647L, 1) {
+      Err(msg) => msg.contains("32 位")
+      Ok(_) => false
+    },
+  )
+  assert_true(
+    match add_total_samples(2147483640L, 5760) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+}
+
+///|
+test "mp4 inspect rejects stsz sample count above Int32 range" {
+  match remux_ogg_opus(synthetic_ogg_opus()) {
+    Err(_) => assert_true(false)
+    Ok(mp4) =>
+      match dwb_find(mp4, b"stsz") {
+        Some(p) =>
+          // stsz 是 FullBox：fourcc 后依次是 version/flags(4)、sample_size(4)、
+          // sample_count(4)，所以计数在 fourcc 偏移 + 12。
+          match inspect(dwb_patch_u32_be(mp4, p + 12, 0x80000000)) {
+            // 0x80000000 按有符号读会显示成负数；按不可解析拒绝（M-17）
+            None => assert_true(true)
+            Some(info) => {
+              println("sample_count=" + info.tracks[0].sample_count.to_string())
+              assert_true(false)
+            }
+          }
+        None => assert_true(false)
+      }
+  }
+}
+
+///|
+test "mp4 inspect rejects moov without mvhd" {
+  match remux_ogg_opus(synthetic_ogg_opus()) {
+    Err(_) => assert_true(false)
+    Ok(mp4) => {
+      // 正常文件必须能读
+      assert_true(
+        match inspect(mp4) {
+          Some(_) => true
+          None => false
+        },
+      )
+      // 把 mvhd 的 fourcc 改名（不改变长度）：moov 缺 mvhd。
+      // 旧实现仍返回 Some，info 显示时长 0.00 秒（M-19）。
+      match dwb_find(mp4, b"mvhd") {
+        Some(p) =>
+          match inspect(dwb_patch_fourcc(mp4, p, "free")) {
+            None => assert_true(true)
+            Some(_) => assert_true(false)
+          }
+        None => assert_true(false)
+      }
+    }
+  }
+}

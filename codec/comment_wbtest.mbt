@@ -157,6 +157,41 @@ test "absurd entry count is rejected" {
 }
 
 ///|
+/// M-12 / CP-05 回归：计数必须按「每条至少 6 字节」的下界校验。
+/// 100 条注释至少需要 600 字节，包内只剩 4 字节时必须拒绝。
+test "entry count beyond the 6-byte lower bound is rejected" {
+  let buf = Buffer()
+  buf.write_bytes(b"OpusTags".exact_view())
+  put_u32(buf, 0) // vendor 为空
+  put_u32(buf, 100) // 100 条
+  put_u32(buf, 0) // 只够放 1 个长度字段
+  match parse_comment(buf.to_bytes()) {
+    Err(msg) => assert_true(msg.contains("6 字节"))
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// M-12 / CP-05 回归：包长与条数在「每条 6 字节」下界内仍然自洽时，
+/// 用绝对条数上限挡住 10 万条以上的分配放大构造（Tag 约 100–200 B/条）。
+test "entry count above the absolute cap is rejected" {
+  let buf = Buffer()
+  buf.write_bytes(b"OpusTags".exact_view())
+  put_u32(buf, 0) // vendor 为空
+  put_u32(buf, 100001) // 超过 MAX_COMMENT_ENTRIES
+  // 补足「每条 6 字节」下界所需的剩余字节，确保拦截来自绝对上限
+  let mut i = 0
+  while i < 700000 {
+    buf.write_byte((0 : Byte))
+    i = i + 1
+  }
+  match parse_comment(buf.to_bytes()) {
+    Err(msg) => assert_true(msg.contains("上限"))
+    _ => assert_true(false)
+  }
+}
+
+///|
 /// vendor 长度越界、条目长度越界都要报错，而不是读出垃圾。
 test "out of bounds length fields are rejected" {
   let buf = Buffer()

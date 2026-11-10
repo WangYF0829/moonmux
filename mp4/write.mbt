@@ -302,6 +302,23 @@ fn stco_box(offset : Int32) -> Bytes {
 }
 
 ///|
+/// 累加一个音频包贡献的样本数；超出 mdhd v0 的时长字段可安全表达的范围即报错。
+///
+/// `total_samples` 必须用 Int64 累加：Int32 在 ~2³² 个样本处回绕成小正数，
+/// 会写出时长严重偏小的 mdhd（与 stts 自相矛盾）却通过自检（M-15）。
+fn add_total_samples(total : Int64, samples : Int32) -> Result[Int64, String] {
+  let next = total + samples.to_int64()
+  if next > 2147483647L {
+    return Err(
+      "Opus 总样本数（" +
+      next.to_string() +
+      "）超过 32 位时长上限，无法写入 mdhd",
+    )
+  }
+  Ok(next)
+}
+
+///|
 /// 组装完整 moov。
 ///
 /// `total_samples` 是媒体时间轴的总样本数（含 priming）；movie 时间轴与
@@ -399,17 +416,22 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
   let datas : Array[Bytes] = []
   let sizes : Array[Int32] = []
   let deltas : Array[Int32] = []
-  let mut total_samples = 0
+  let mut total_samples = 0L
   let mut i = 2
   while i < stream.packets.length() {
     let pkt = stream.packets[i]
     match @codec.opus_packet_samples(pkt.data) {
-      Ok(samples) => {
-        datas.push(pkt.data)
-        sizes.push(pkt.data.length())
-        deltas.push(samples)
-        total_samples = total_samples + samples
-      }
+      Ok(samples) =>
+        // Int64 累加 + 即时上界：溢出在写 mdhd 之前就报错，不会回绕成小正数
+        match add_total_samples(total_samples, samples) {
+          Ok(next) => {
+            total_samples = next
+            datas.push(pkt.data)
+            sizes.push(pkt.data.length())
+            deltas.push(samples)
+          }
+          Err(msg) => return Err(msg)
+        }
       Err(msg) =>
         return Err(
           "第 " + (i - 1).to_string() + " 个音频包非法：" + msg,
@@ -417,7 +439,7 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
     }
     i = i + 1
   }
-  if sizes.length() == 0 || total_samples == 0 {
+  if sizes.length() == 0 || total_samples <= 0L {
     return Err("Opus 流没有可封装的音频包")
   }
   // Ogg 侧的末粒度可能小于「所有包时长之和」：尾包带着 end-trim 信息，
@@ -425,8 +447,9 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
   // 用末页粒度作为解码样本总数，从末尾按包裁掉多余部分。
   let last_index = stream.packets.length() - 1
   let last_granule = stream.packets[last_index].granule_position
-  let expected_total = if last_granule >= 0L && last_granule <= 2147483647L {
-    last_granule.to_int()
+  let expected_total : Int64 = if last_granule >= 0L &&
+    last_granule <= 2147483647L {
+    last_granule
   } else {
     total_samples
   }
@@ -434,17 +457,18 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
     let last = datas.length() - 1
     let d = deltas[last]
     let excess = total_samples - expected_total
-    if d <= excess {
+    if d.to_int64() <= excess {
       ignore(datas.pop())
       ignore(sizes.pop())
       ignore(deltas.pop())
-      total_samples = total_samples - d
+      total_samples = total_samples - d.to_int64()
     } else {
-      deltas[last] = d - excess
+      let trimmed = d.to_int64() - excess
+      deltas[last] = trimmed.to_int()
       total_samples = expected_total
     }
   }
-  if sizes.length() == 0 || total_samples <= 0 {
+  if sizes.length() == 0 || total_samples <= 0L {
     return Err("Opus 流没有可封装的音频包（end-trim 后为空）")
   }
   // 把连续相同的样本时长合并成 stts 的 run
@@ -465,8 +489,14 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
   let ftyp = ftyp_box("M4A ", 0, ["M4A ", "isom", "iso2", "mp41"])
   let mdat_bytes = box("mdat", mdat.to_bytes())
   let chunk_offset = ftyp.length() + 8
+  // total_samples 在累加时已保证 <= 2³¹−1（mdhd v0 字段可表达），此处收窄安全
   let moov = moov_box(
-    opus_head, total_samples, pre_skip, runs, sizes, chunk_offset,
+    opus_head,
+    total_samples.to_int(),
+    pre_skip,
+    runs,
+    sizes,
+    chunk_offset,
   )
   // 容器层同样受单文件 2 GiB 限制：ftyp/mdat/moov 三个长度相加可能溢出 Int32
   let total_len = ftyp.length().to_int64() +

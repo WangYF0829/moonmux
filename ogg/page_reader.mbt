@@ -116,13 +116,21 @@ fn PageReader::record_gap(
 
 ///|
 /// 在 `from` 之后找下一个捕获模式 "OggS"。
+///
+/// `plausible_page_start` 只用来**筛选候选**（省掉对每个伪页头的完整解析），
+/// 不是合法性判据；接受与否由 `parse_available` 按 `Page::parse` + CRC 判定。
 fn PageReader::find_capture_from(self : PageReader, from : Int32) -> Int32? {
   let data = self.buf
+  if data.length() < 4 {
+    return None
+  }
+  // 减法边界：p 上限为 data.length() - 4，接近 Int32 上限时不会回绕（M-29）
+  let max_start = data.length() - 4
   let mut p = from
-  while p + 4 <= data.length() {
+  while p <= max_start {
     if is_page_start(data, p) {
       // 候选头不足 7 字节时无法预筛，先停在这里等下一块数据（不能丢掉半个 "OggS"）
-      if p + 7 > data.length() {
+      if data.length() - p < 7 {
         return Some(p)
       }
       if plausible_page_start(data, p) {
@@ -136,9 +144,23 @@ fn PageReader::find_capture_from(self : PageReader, from : Int32) -> Int32? {
 
 ///|
 /// 从当前位置尽量多解析出完整页；数据不足时保留残片等待下一次 feed。
+///
+/// 完整页先做**零拷贝 CRC 复核**（`crc32_page_range` 直接在缓冲字节上按页
+/// 范围算），通过后才 `Page::parse` 物化 —— 旧路径的每个坏候选都要先解析
+/// 复制整页、再重新序列化算 CRC，与 `parse_pages_lenient` 的 H-01 同构，
+/// 一次 feed 塞满伪页头时 CPU 放大约 1000×。
+///
+/// 每次调用还有一个确定性候选预算（`8 × 缓冲长度 + 64 KiB` CRC 字节）：
+/// 超出即放弃重同步，把剩余缓冲整体记为跳过区间并消费掉，避免跨 feed
+/// 重复扫描同一段伪造数据（M-27；与 `parse_pages_lenient` 同一口径）。
+///
+/// 接受判据与 `Page::parse` + CRC 完全一致：version=0 且 CRC 复核通过。
+/// `plausible_page_start` 只用于查找候选，不再当合法性判据（M-26）。
 fn PageReader::parse_available(self : PageReader) -> Unit {
   let mut pos = 0
   let mut stop = false
+  let budget = resync_budget(self.buf.length())
+  let mut spent : Int64 = 0L
   while !stop {
     let data = self.buf
     let avail = data.length() - pos
@@ -165,14 +187,6 @@ fn PageReader::parse_available(self : PageReader) -> Unit {
       }
     } else if avail < 27 {
       stop = true // 页头不完整
-    } else if !plausible_page_start(data, pos) {
-      // 魔数对但 version/头类型非法：按失步处理，不能当页解析
-      self.record_gap(pos, pos + 1)
-      if self.resync {
-        pos = pos + 1
-      } else {
-        stop = true
-      }
     } else {
       let nseg = data[pos + 26].to_int()
       if avail < 27 + nseg {
@@ -187,21 +201,58 @@ fn PageReader::parse_available(self : PageReader) -> Unit {
         if avail < 27 + nseg + payload_len {
           stop = true // 负载不完整
         } else {
-          match Page::parse(data, pos) {
-            Some((page, next)) =>
-              if self.verify_crc && !page_crc_ok(page) {
-                // CRC 不符：失步（或坏页），跳 1 字节继续找
-                self.record_gap(pos, pos + 1)
-                if self.resync {
-                  pos = pos + 1
-                } else {
-                  stop = true
+          let page_len = 27 + nseg + payload_len
+          // 候选的结构扫描成本（页头 27 字节 + 段表指针）也计入预算：
+          // 否则「每 6 字节一个 255 段伪页头」可以用段表扫描放大 CPU，
+          // 而 CRC 预算永远等不到。
+          spent = spent + (27 + nseg).to_int64()
+          let version_ok = data[pos + 4].to_int() == 0
+          if self.verify_crc && spent > budget {
+            // 结构扫描本身就把预算用完了（伪页头洪水）：放弃重同步并消费缓冲
+            self.record_gap(pos, data.length())
+            pos = data.length()
+            stop = true
+          } else if !version_ok {
+            // 结构像页但 version 非法：Page::parse 会拒绝，按失步处理
+            self.record_gap(pos, pos + 1)
+            if self.resync {
+              pos = pos + 1
+            } else {
+              stop = true
+            }
+          } else if self.verify_crc && spent + page_len.to_int64() > budget {
+            // 候选预算用尽：放弃重同步，剩余缓冲整体记为跳过并消费掉。
+            // 若不消费，下一次 feed 会从同一段伪造数据重新扫描，放大跨 feed 累积。
+            self.record_gap(pos, data.length())
+            pos = data.length()
+            stop = true
+          } else {
+            let page_end = pos + page_len
+            let crc_ok = if self.verify_crc {
+              crc32_page_range(data, pos, page_end) ==
+              read_u32_le(data, pos + 22)
+            } else {
+              true
+            }
+            if crc_ok {
+              match Page::parse(data, pos) {
+                Some((page, next)) => {
+                  self.pages.push(page)
+                  pos = next
                 }
-              } else {
-                self.pages.push(page)
-                pos = next
+                None => {
+                  // 结构已按同一规则核对过，正常不可达；保守按坏页处理
+                  self.record_gap(pos, pos + 1)
+                  if self.resync {
+                    pos = pos + 1
+                  } else {
+                    stop = true
+                  }
+                }
               }
-            None => {
+            } else {
+              // CRC 不符：这个候选的整页 CRC 代价已经付出，记入预算
+              spent = spent + page_len.to_int64()
               self.record_gap(pos, pos + 1)
               if self.resync {
                 pos = pos + 1
@@ -298,11 +349,9 @@ pub fn for_each_page_chunked(
   let size = if chunk_size <= 0 { 4096 } else { chunk_size }
   let mut off = 0
   while off < data.length() {
-    let end = if off + size > data.length() {
-      data.length()
-    } else {
-      off + size
-    }
+    // 减法边界：chunk_size 接近 Int32 上限时 `off + size` 会回绕（M-29）
+    let remaining = data.length() - off
+    let end = if size >= remaining { data.length() } else { off + size }
     reader.feed(slice_bytes(data, off, end))
     for page in reader.take_pages() {
       visit(page)

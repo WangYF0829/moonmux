@@ -76,3 +76,45 @@ test "verify_page zeroes the stored crc field" {
   // 太短的输入必须拒绝而不是越界
   assert_false(verify_page(b"OggS", expected))
 }
+
+///|
+/// 零拷贝页范围 CRC 必须与「整页 CRC 字段清零后算 crc32」完全一致，
+/// 并且能与序列化页里存着的 CRC 对上。
+test "crc32_page_range mirrors the zeroed full-page crc" {
+  let pages = paginate(
+    [
+      { data: b"HEAD", granule_position: 0L, serial: 1U, },
+      { data: b"payload-bytes", granule_position: 960L, serial: 1U, },
+      { data: b"x", granule_position: 1920L, serial: 1U, },
+    ],
+    1U,
+  )
+  let blob = serialize_pages(pages)
+  let mut start = 0
+  for p in pages {
+    let len = 27 + p.segments.length() + p.payload.length()
+    let end = start + len
+    // 参考路径：整页复制一份并把 CRC 字段（相对页首 22..25）清零后算 crc32
+    let zeroed = Buffer()
+    let mut i = start
+    while i < end {
+      let rel = i - start
+      if rel >= 22 && rel < 26 {
+        zeroed.write_byte((0 : Byte))
+      } else {
+        zeroed.write_byte(blob[i])
+      }
+      i = i + 1
+    }
+    let expected = crc32(zeroed.to_bytes())
+    assert_eq(crc32_page_range(blob, start, end), expected)
+    // 与页内存储的 CRC 字段一致（序列化时写的正是这个值）
+    assert_eq(crc32_page_range(blob, start, end), read_u32_le(blob, start + 22))
+    // 与公开的 verify_page（对页切片）口径一致
+    assert_true(
+      verify_page(slice_bytes(blob, start, end), read_u32_le(blob, start + 22)),
+    )
+    start = end
+  }
+  assert_eq(start, blob.length())
+}

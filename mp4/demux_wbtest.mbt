@@ -695,3 +695,227 @@ test "demux rejects truncated stsd/dOps/stco/stsc boxes" {
     }
   }
 }
+
+// ---------- 分配前校验：C-01 / H-02 / M-01 回归 ----------
+
+///|
+/// stsz 定长分支：sample_size = `fixed`、sample_count = `count`。
+fn dwb_stsz_fixed(fixed : Int32, count : Int32) -> Bytes {
+  full_box("stsz", 0, 0, u32_array([fixed, count]))
+}
+
+///|
+/// stsz 逐样本分支：sample_size = 0，后接 `sizes` 表。
+fn dwb_stsz_table(sizes : Array[Int32]) -> Bytes {
+  full_box(
+    "stsz",
+    0,
+    0,
+    concat([u32_array([0, sizes.length()]), u32_array(sizes)]),
+  )
+}
+
+///|
+/// stco box（给定 chunk 偏移表）。
+fn dwb_stco_entries(offsets : Array[Int32]) -> Bytes {
+  full_box(
+    "stco",
+    0,
+    0,
+    concat([u32_array([offsets.length()]), u32_array(offsets)]),
+  )
+}
+
+///|
+/// co64 box（单个 chunk 偏移）。
+fn dwb_co64_box(offset : Int64) -> Bytes {
+  let body = Buffer()
+  push_u32_be(body, 1) // entry_count
+  push_u32_be(body, (offset >> 32).to_int()) // 高 32 位
+  push_u32_be(body, offset.to_int()) // 低 32 位（截断取模 2^32）
+  full_box("co64", 0, 0, body.to_bytes())
+}
+
+///|
+/// 构造与 review/poc/wavmp4/gen_mp4.mjs 同构的最小 Opus-in-MP4：
+/// ftyp + mdat + moov/trak/mdia（mdhd/hdlr/minf[smhd, stbl]）。
+///
+/// `demux_mp4_opus` 不要求 mvhd/tkhd/edts/dinf，所以这里不写，文件可以小到
+/// 329 B（与 review/poc/verify/corpus/wm01_stts_wrap.m4a 一致）。
+/// `chunk_table` 拿到 mdat body 偏移，返回 stco 或 co64 box。
+fn dwb_craft_mp4(
+  stts_runs : Array[(Int32, Int32)],
+  stsz : Bytes,
+  samples_per_chunk : Int32,
+  mdat_payload : Bytes,
+  chunk_table : (Int32) -> Bytes,
+) -> Bytes {
+  let head : Bytes = b"OpusHead\x01\x01\x38\x01\x80\xbb\x00\x00\x00\x00\x00"
+  let ftyp = ftyp_box("M4A ", 0, ["M4A ", "isom"])
+  let mdat = box("mdat", mdat_payload)
+  let stbl = box(
+    "stbl",
+    concat([
+      stsd_box(head),
+      stts_box(stts_runs),
+      stsc_box(samples_per_chunk),
+      stsz,
+      chunk_table(ftyp.length() + 8),
+    ]),
+  )
+  let minf = box("minf", concat([full_box("smhd", 0, 0, b""), stbl]))
+  let mdia = box(
+    "mdia",
+    concat([mdhd_box(48000, 0), hdlr_box("soun", ""), minf]),
+  )
+  let moov = box("moov", box("trak", mdia))
+  concat([ftyp, mdat, moov])
+}
+
+///|
+test "demux mp4: stts sample count wrap is rejected before expansion" {
+  // 与 review/poc/verify/corpus/wm01_stts_wrap.m4a 同构（329 B）：
+  // 0x7FFFFFFF + 0x7FFFFFFF + 3 在 Int32 下回绕成 1，恰好等于 stsz 的 1 个
+  // 样本；旧实现据此展开 ~4.29e9 个时长（约 17 GB）。修复后必须在此前 Err。
+  let mp4 = dwb_craft_mp4(
+    [(0x7FFFFFFF, 960), (0x7FFFFFFF, 960), (3, 960)],
+    dwb_stsz_fixed(1, 1),
+    1,
+    b"A",
+    fn(off) { stco_box(off) },
+  )
+  assert_eq(mp4.length(), 329)
+  match demux_mp4_opus(mp4) {
+    Err(msg) => assert_true(msg.contains("stts"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+test "demux mp4: stsz sample count is capped before allocation" {
+  // 与 H-02 PoC 同规模（2,000,000 个 1 字节样本；旧实现峰值 ~587 MB）：
+  // 样本数上限在读取样本表/包数组之前触发，不需要真的构造 2 MB mdat。
+  let mp4 = dwb_craft_mp4(
+    [(2000000, 960)],
+    dwb_stsz_fixed(1, 2000000),
+    2000000,
+    b"A",
+    fn(off) { stco_box(off) },
+  )
+  match demux_mp4_opus(mp4) {
+    Err(msg) => assert_true(msg.contains("上限"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+test "demux mp4: stsz sizes are bounded by mdat payload" {
+  // 定长分支：count × fixed 超过 mdat 实际负载（只有 1 字节）
+  let fixed_bad = dwb_craft_mp4([(2, 960)], dwb_stsz_fixed(1, 2), 2, b"A", fn(
+    off,
+  ) {
+    stco_box(off)
+  })
+  match demux_mp4_opus(fixed_bad) {
+    Err(msg) => assert_true(msg.contains("mdat"))
+    Ok(_) => assert_true(false)
+  }
+  // 逐样本分支：Σsizes 超过 mdat 实际负载
+  let table_bad = dwb_craft_mp4([(2, 960)], dwb_stsz_table([6, 6]), 2, b"A", fn(
+    off,
+  ) {
+    stco_box(off)
+  })
+  match demux_mp4_opus(table_bad) {
+    Err(msg) => assert_true(msg.contains("mdat"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+test "demux mp4: fixed-size sample table decodes" {
+  // 定长分支此前只有拒绝路径的测试；这里用 1000 个 1 字节样本走通正路。
+  let n = 1000
+  let payload = Buffer()
+  let mut i = 0
+  while i < n {
+    payload.write_byte((0x41 : Byte))
+    i = i + 1
+  }
+  let mp4 = dwb_craft_mp4(
+    [(n, 960)],
+    dwb_stsz_fixed(1, n),
+    n,
+    payload.to_bytes(),
+    fn(off) { stco_box(off) },
+  )
+  match demux_mp4_opus(mp4) {
+    Err(msg) => {
+      println("demux error: " + msg)
+      assert_true(false)
+    }
+    Ok(ogg) => {
+      let packets = @ogg.reassemble(@ogg.parse_pages(ogg))
+      assert_eq(packets.length(), n + 2)
+      assert_eq(packets[2].data.length(), 1)
+      assert_eq(packets[2].data[0].to_int(), 0x41)
+      assert_eq(
+        packets[packets.length() - 1].granule_position,
+        n.to_int64() * 960L,
+      )
+    }
+  }
+}
+
+///|
+test "demux mp4: co64 offsets are validated as 64-bit" {
+  // 与 review/poc/wavmp4/data/co64_high.m4a 同构：偏移 = 2^32 + 合法偏移，
+  // 低 32 位截断后恰好落在 mdat 内 —— 旧实现静默接受并解出错误位置（M-01）。
+  let high = dwb_craft_mp4([(1, 960)], dwb_stsz_fixed(1, 1), 1, b"A", fn(off) {
+    dwb_co64_box(0x100000000L + off.to_int64())
+  })
+  match demux_mp4_opus(high) {
+    Err(msg) => assert_true(msg.contains("co64"))
+    Ok(_) => assert_true(false)
+  }
+  // 合法 co64 偏移必须能解（co64 分支此前没有任何测试）
+  let ok = dwb_craft_mp4([(1, 960)], dwb_stsz_fixed(1, 1), 1, b"A", fn(off) {
+    dwb_co64_box(off.to_int64())
+  })
+  match demux_mp4_opus(ok) {
+    Err(_) => assert_true(false)
+    Ok(ogg) => {
+      let packets = @ogg.reassemble(@ogg.parse_pages(ogg))
+      assert_eq(packets.length(), 3)
+      assert_eq(packets[2].data.length(), 1)
+      assert_eq(packets[2].data[0].to_int(), 0x41)
+    }
+  }
+}
+
+///|
+test "demux mp4: stco entry count is bounded by sample count" {
+  // 每个 chunk 至少含一个样本，所以 chunk 数（stco 条目数）不可能超过样本数。
+  // 旧实现只按 box 长度限条目数：一个只声明条目数的 stco 可先分配几百 MB。
+  let mp4 = dwb_craft_mp4([(1, 960)], dwb_stsz_fixed(1, 1), 1, b"A", fn(off) {
+    dwb_stco_entries([off, off])
+  })
+  match demux_mp4_opus(mp4) {
+    Err(msg) => assert_true(msg.contains("stco"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+test "demux mp4: output size estimate counts page headers and lacing" {
+  // 2 GiB 闸门用的是「页头 27 B + 段表 + 负载」这个精确口径。
+  // 1 字节包：1 个段、1 页。
+  assert_eq(ogg_packet_bytes(1L), 29L)
+  // 254/255 字节：255 需要补一个 0 段（[255, 0]），共 2 个段。
+  assert_eq(ogg_packet_bytes(254L), 27L + 1L + 254L)
+  assert_eq(ogg_packet_bytes(255L), 27L + 2L + 255L)
+  // 65025 = 255×255 字节：256 个段 → 拆成两页，页头也要算两次。
+  assert_eq(ogg_packet_bytes(65025L), 27L * 2L + 256L + 65025L)
+  // 单个 2 GiB 级包必然超过单文件输出上限
+  assert_true(ogg_packet_bytes(2147483647L) > 2147483647L)
+}

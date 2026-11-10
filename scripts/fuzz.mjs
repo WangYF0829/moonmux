@@ -186,6 +186,19 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
     failures.push({ iter, seed: seed.name, cmd, reason: "启动失败: " + r.error.message });
     continue;
   }
+  // 平台差异：Windows 上 panic 可能以崩溃码结束，Linux 上可能只是 exit(1)；
+  // 只看退出码会把 Linux 的 panic 误判成普通数据错误，所以额外检查 stderr。
+  const fuzzStderr = r.stderr || "";
+  if (fuzzStderr.includes("PanicError") || /panic/i.test(fuzzStderr)) {
+    failures.push({
+      iter,
+      seed: seed.name,
+      cmd,
+      reason: "疑似 panic",
+      stderr: fuzzStderr.slice(0, 400),
+    });
+    continue;
+  }
   if (r.error?.code === "ETIMEDOUT" || (status === null && r.signal)) {
     failures.push({ iter, seed: seed.name, cmd, reason: "超时/被信号杀死", signal: r.signal });
     continue;

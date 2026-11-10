@@ -8,11 +8,28 @@
 // vendor 串（"moonmux"）+ 0 条注释；音频包与 OpusHead 字段逐字节还原。
 
 ///|
-/// 一个 MP4 样本（= 一个 Opus 包）在文件中的位置与时长。
-priv struct Mp4Sample {
-  offset : Int32
-  size : Int32
-  duration : Int32
+/// 单次解封装的样本数上限。
+///
+/// 每个样本至少要一个 stsz 表项 + 一个 `@ogg.Packet` + 一个 Ogg 页对象，
+/// 内存开销与样本数成正比。只靠输出 2 GiB 闸门管不住这些中间对象：
+/// 2,000,000 个 1 字节样本只有 58 MB 输出，按声明值展开的中间数组却要
+/// ~587 MB（H-02）。因此显式设上限，超限在分配前报错。
+/// 1,048,576 个样本在 20 ms/包下约 5.8 小时音频，足够容器层场景。
+const MAX_DEMUX_SAMPLES : Int64 = 1048576L
+
+///|
+/// 解封装输出的字节上限（与 CLI 的单文件 2 GiB 能力边界一致）。
+const MAX_DEMUX_OUTPUT_BYTES : Int64 = 2147483647L
+
+///|
+/// 一个包在 Ogg 中占用的字节数：页头 27 B + 段表 + 负载。
+///
+/// 单页最多 255 个段、每段最多 255 字节；超长包会拆成多页，每页各带 27 B
+/// 页头。输出 2 GiB 闸门必须按这个精确口径预估，否则会低估实际输出。
+fn ogg_packet_bytes(size : Int64) -> Int64 {
+  let segments = size / 255L + 1L
+  let pages = (segments + 254L) / 255L
+  pages * 27L + segments + size
 }
 
 ///|
@@ -70,15 +87,26 @@ fn demux_slice(data : Bytes, start : Int32, end : Int32) -> Bytes {
 
 ///|
 /// stts：样本时长游程。
-fn read_stts(data : Bytes, b : BoxRef) -> Result[Array[SttsRun], String] {
-  if b.body + 8 > b.next {
+///
+/// `expected_samples` 是 stsz 决定的样本总数：游程样本数之和必须恰好相等。
+/// 累加全程用 Int64 并即时与上界比较 —— 声明值再大也不会被展开/分配，
+/// 更不会因为 32 位回绕而"绕过"一致性检查（C-01：0x7FFFFFFF + 0x7FFFFFFF + 3
+/// 在 Int32 下等于 1，旧实现据此展开 ~4.29×10⁹ 个时长）。
+fn read_stts(
+  data : Bytes,
+  b : BoxRef,
+  expected_samples : Int64,
+) -> Result[Array[SttsRun], String] {
+  let avail = b.next - b.body
+  if avail < 8 {
     return Err("stts 太短")
   }
   let count = rd_u32_be(data, b.body + 4)
-  if count < 0 || count > (b.next - b.body - 8) / 8 {
+  if count < 0 || count > (avail - 8) / 8 {
     return Err("stts 条目数越界")
   }
   let runs : Array[SttsRun] = []
+  let mut total = 0L
   let mut i = 0
   while i < count {
     let p = b.body + 8 + i * 8
@@ -87,31 +115,78 @@ fn read_stts(data : Bytes, b : BoxRef) -> Result[Array[SttsRun], String] {
     if n <= 0 || delta < 0 {
       return Err("stts 游程非法")
     }
+    total = total + n.to_int64()
+    if total > expected_samples {
+      return Err(
+        "stts 覆盖的样本数超过 stsz（" +
+        expected_samples.to_string() +
+        "）",
+      )
+    }
     runs.push({ sample_count: n, delta, })
     i = i + 1
+  }
+  if total != expected_samples {
+    return Err(
+      "stts 覆盖的样本数（" +
+      total.to_string() +
+      "）与 stsz（" +
+      expected_samples.to_string() +
+      "）不一致",
+    )
   }
   Ok(runs)
 }
 
 ///|
 /// stsz：逐样本大小。
-fn read_stsz(data : Bytes, b : BoxRef) -> Result[Array[Int32], String] {
-  if b.body + 12 > b.next {
+///
+/// 上界用的是 **mdat 实际负载字节数**，不是整个文件长度：`fixed = 1` 时
+/// 按文件长度能声明到文件字节数那么多样本，但真正能装进 mdat 的样本总量
+/// 必须 <= mdat 负载，否则按声明值展开就是内存放大（H-02）。
+///
+/// 输出大小预估（页头 + 段表 + 负载，见 `ogg_packet_bytes`）也在**物化
+/// 样本表之前**校验并拦 2 GiB；样本数另有显式上限。三条上界都在分配前：
+/// 自洽的大声明直接 Err，不会先吃掉数 GiB 内存再报错。
+fn read_stsz(
+  data : Bytes,
+  b : BoxRef,
+  mdat_bytes : Int64,
+  packet_overhead : Int64,
+) -> Result[Array[Int32], String] {
+  let avail = b.next - b.body
+  if avail < 12 {
     return Err("stsz 太短")
   }
   let fixed = rd_u32_be(data, b.body + 4)
   let count = rd_u32_be(data, b.body + 8)
-  if count < 0 {
-    return Err("stsz 样本数非法")
+  if fixed < 0 || count < 0 {
+    return Err("stsz 样本大小或样本数非法")
+  }
+  let count64 = count.to_int64()
+  if count64 > MAX_DEMUX_SAMPLES {
+    return Err(
+      "stsz 样本数（" +
+      count64.to_string() +
+      "）超过解封装上限（" +
+      MAX_DEMUX_SAMPLES.to_string() +
+      "）",
+    )
   }
   let sizes : Array[Int32] = []
   if fixed > 0 {
-    // 定长样本同样必须装得进文件：count × fixed 是 mdat 至少占用的字节数。
-    // 只校验 count >= 0 的话，一个 12 字节字段就能声明 0x7FFFFFFF 个样本，
-    // 分配数 GiB 数组后才会被后面的 stts 一致性检查拒绝（内存耗尽 DoS）。
-    if fixed > 0 &&
-      count.to_int64() > data.length().to_int64() / fixed.to_int64() {
-      return Err("stsz 定长样本总数超出文件大小")
+    let total = count64 * fixed.to_int64()
+    if total > mdat_bytes {
+      return Err("stsz 定长样本总大小超出 mdat 大小")
+    }
+    let estimate = ogg_packet_bytes(fixed.to_int64()) * count64 +
+      packet_overhead
+    if estimate > MAX_DEMUX_OUTPUT_BYTES {
+      return Err(
+        "解封装输出预估（" +
+        estimate.to_string() +
+        " B）超过单文件 2 GiB 上限",
+      )
     }
     let mut i = 0
     while i < count {
@@ -119,16 +194,37 @@ fn read_stsz(data : Bytes, b : BoxRef) -> Result[Array[Int32], String] {
       i = i + 1
     }
   } else {
-    if count > (b.next - b.body - 12) / 4 {
+    if count > (avail - 12) / 4 {
       return Err("stsz 表越界")
     }
+    // 第一遍只读表校验并预估输出（不分配）；声明值必须先和 mdat 实际负载
+    // 对齐，自洽的大声明在这里被拒，而不是先物化数 GiB 数组。
+    let mut total = 0L
+    let mut estimate = packet_overhead
     let mut i = 0
     while i < count {
       let size = rd_u32_be(data, b.body + 12 + i * 4)
       if size <= 0 {
         return Err("stsz 中存在空样本")
       }
-      sizes.push(size)
+      total = total + size.to_int64()
+      if total > mdat_bytes {
+        return Err("stsz 样本总大小超出 mdat 大小")
+      }
+      estimate = estimate + ogg_packet_bytes(size.to_int64())
+      if estimate > MAX_DEMUX_OUTPUT_BYTES {
+        return Err(
+          "解封装输出预估（" +
+          estimate.to_string() +
+          " B）超过单文件 2 GiB 上限",
+        )
+      }
+      i = i + 1
+    }
+    // 第二遍才物化（count 已被样本数上限与 box 长度双重约束）
+    i = 0
+    while i < count {
+      sizes.push(rd_u32_be(data, b.body + 12 + i * 4))
       i = i + 1
     }
   }
@@ -137,12 +233,21 @@ fn read_stsz(data : Bytes, b : BoxRef) -> Result[Array[Int32], String] {
 
 ///|
 /// stsc：chunk → 样本数的映射。
-fn read_stsc(data : Bytes, b : BoxRef) -> Result[Array[StscRun], String] {
-  if b.body + 8 > b.next {
+///
+/// `max_entries` 用样本总数做上界：每个游程覆盖至少一个 chunk、每个 chunk
+/// 至少一个样本，所以游程数不可能超过样本数。没有这个上界时，一个只声明
+/// 条目数的 stsc box 也能让解析器先分配几 GiB 数组（同类"先分配后校验"）。
+fn read_stsc(
+  data : Bytes,
+  b : BoxRef,
+  max_entries : Int64,
+) -> Result[Array[StscRun], String] {
+  let avail = b.next - b.body
+  if avail < 8 {
     return Err("stsc 太短")
   }
   let count = rd_u32_be(data, b.body + 4)
-  if count <= 0 || count > (b.next - b.body - 8) / 12 {
+  if count <= 0 || count.to_int64() > max_entries || count > (avail - 8) / 12 {
     return Err("stsc 条目数非法")
   }
   let runs : Array[StscRun] = []
@@ -167,19 +272,85 @@ fn read_stsc(data : Bytes, b : BoxRef) -> Result[Array[StscRun], String] {
 }
 
 ///|
-/// stco：chunk 偏移（32 位）。
-fn read_stco(data : Bytes, b : BoxRef) -> Result[Array[Int32], String] {
-  if b.body + 8 > b.next {
+/// chunk 偏移的公共校验：必须落在 mdat 负载内，且不超出 2 GiB 能力边界。
+///
+/// 文件是一次读进 `Bytes` 的（长度 < 2³¹），所以 64 位偏移 >= 2³¹ 必然非法；
+/// 提前拒绝比在样本循环里读到错误位置更安全（M-01）。
+fn check_chunk_offset(
+  offset : Int64,
+  mdat_body : Int64,
+  mdat_end : Int64,
+) -> Result[Unit, String] {
+  if offset < 0L || offset > 2147483647L {
+    return Err("偏移超出单文件 2 GiB 上限")
+  }
+  if offset < mdat_body || offset >= mdat_end {
+    return Err("偏移不在 mdat 内")
+  }
+  Ok(())
+}
+
+///|
+fn read_stco(
+  data : Bytes,
+  b : BoxRef,
+  mdat_body : Int64,
+  mdat_end : Int64,
+  max_entries : Int64,
+) -> Result[Array[Int64], String] {
+  let avail = b.next - b.body
+  if avail < 8 {
     return Err("stco 太短")
   }
   let count = rd_u32_be(data, b.body + 4)
-  if count <= 0 || count > (b.next - b.body - 8) / 4 {
+  if count <= 0 || count.to_int64() > max_entries || count > (avail - 8) / 4 {
     return Err("stco 条目数非法")
   }
-  let offsets : Array[Int32] = []
+  let offsets : Array[Int64] = []
   let mut i = 0
   while i < count {
-    offsets.push(rd_u32_be(data, b.body + 8 + i * 4))
+    let offset = rd_u32_be(data, b.body + 8 + i * 4).to_int64() & 0xFFFFFFFFL
+    match check_chunk_offset(offset, mdat_body, mdat_end) {
+      Ok(_) => offsets.push(offset)
+      Err(msg) => return Err("stco " + msg)
+    }
+    i = i + 1
+  }
+  Ok(offsets)
+}
+
+///|
+/// co64：64 位 chunk 偏移。
+///
+/// 关键点：先按 Int64 校验，再决定是否收窄；`Int64::to_int` 是截断而不是
+/// 报错，直接截断会把 `2³² + 合法偏移` 静默当成合法偏移使用（M-01）。
+fn read_co64(
+  data : Bytes,
+  b : BoxRef,
+  mdat_body : Int64,
+  mdat_end : Int64,
+  max_entries : Int64,
+) -> Result[Array[Int64], String] {
+  let avail = b.next - b.body
+  if avail < 8 {
+    return Err("co64 太短")
+  }
+  let count = rd_u32_be(data, b.body + 4)
+  if count <= 0 || count.to_int64() > max_entries || count > (avail - 8) / 8 {
+    return Err("co64 条目数非法")
+  }
+  let offsets : Array[Int64] = []
+  let mut i = 0
+  while i < count {
+    let offset = rd_u64_be(data, b.body + 8 + i * 8)
+    // 2³¹ 以上的偏移在 2 GiB 读取边界内不可能指向真实负载
+    if offset < 0L || offset > 2147483647L {
+      return Err("co64 偏移超出单文件 2 GiB 上限")
+    }
+    match check_chunk_offset(offset, mdat_body, mdat_end) {
+      Ok(_) => offsets.push(offset)
+      Err(msg) => return Err("co64 " + msg)
+    }
     i = i + 1
   }
   Ok(offsets)
@@ -191,7 +362,8 @@ fn find_opus_entry(
   data : Bytes,
   stsd : BoxRef,
 ) -> Result[(Int32, Int32), String] {
-  if stsd.body + 8 > stsd.next {
+  let avail = stsd.next - stsd.body
+  if avail < 8 {
     return Err("stsd 太短")
   }
   let count = rd_u32_be(data, stsd.body + 4)
@@ -199,7 +371,7 @@ fn find_opus_entry(
     return Err("stsd 没有样本描述")
   }
   let entry = stsd.body + 8
-  if entry + 8 > stsd.next {
+  if stsd.next - entry < 8 {
     return Err("stsd 样本条目越界")
   }
   let size = rd_u32_be(data, entry)
@@ -207,7 +379,9 @@ fn find_opus_entry(
   if codec != "Opus" {
     return Err("不是 Opus-in-MP4（样本条目为 " + codec + "）")
   }
-  if size < 36 || entry + size > stsd.next {
+  // entry + size 在 Int32 上可回绕成负数从而绕过父 box 边界检查；
+  // 用「剩余字节数」比较（entry <= stsd.next 由上面的检查保证）。
+  if size < 36 || size.to_int64() > (stsd.next - entry).to_int64() {
     return Err("Opus 样本条目长度非法")
   }
   Ok((entry, entry + size))
@@ -221,7 +395,8 @@ fn find_opus_entry(
 /// ChannelMappingFamily(1) [| StreamCount(1) | CoupledCount(1) | Mapping(channels)]
 fn parse_dops(data : Bytes, dops : BoxRef) -> Result[OpusConfig, String] {
   let b = dops.body
-  if b + 11 > dops.next {
+  let avail = dops.next - b
+  if avail < 11 {
     return Err("dOps 太短")
   }
   let version = rd_u8(data, b)
@@ -241,7 +416,7 @@ fn parse_dops(data : Bytes, dops : BoxRef) -> Result[OpusConfig, String] {
   let mut stream_count = 0
   let mut coupled_count = 0
   if family != 0 {
-    if b + 13 + channels > dops.next {
+    if avail < 13 + channels {
       return Err("dOps 声道映射表越界")
     }
     stream_count = rd_u8(data, b + 11)
@@ -327,7 +502,7 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
         Some(mdia) =>
           match child(data, mdia, "hdlr") {
             Some(h) =>
-              if h.body + 12 <= h.next && rd_fourcc(data, h.body + 8) == "soun" {
+              if h.next - h.body >= 12 && rd_fourcc(data, h.body + 8) == "soun" {
                 audio_tracks = audio_tracks + 1
                 if audio_tracks > 1 {
                   return Err("MP4 含多条音频轨，只支持单音轨")
@@ -402,24 +577,36 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
     Ok(c) => c
     Err(msg) => return Err(msg)
   }
-  let stts_runs = match read_stts(data, stts) {
+  let head_bytes = encode_opus_head(config)
+  let tags_bytes = encode_min_opus_tags()
+  let packet_overhead = ogg_packet_bytes(head_bytes.length().to_int64()) +
+    ogg_packet_bytes(tags_bytes.length().to_int64())
+  let mdat_body = mdat.body.to_int64()
+  let mdat_end = mdat.next.to_int64()
+  // stsz 决定样本总数：先按 mdat 实际负载（H-02）+ 样本数上限 + 输出预估
+  // 在分配前卡住，再让 stts 在 Int64 下证明覆盖数量恰好相等（C-01）。
+  let sizes = match
+    read_stsz(data, stsz, mdat_end - mdat_body, packet_overhead) {
     Ok(v) => v
     Err(msg) => return Err(msg)
   }
-  let sizes = match read_stsz(data, stsz) {
+  let sample_count = sizes.length()
+  if sample_count == 0 {
+    return Err("MP4 中没有音频样本")
+  }
+  let stts_runs = match read_stts(data, stts, sample_count.to_int64()) {
     Ok(v) => v
     Err(msg) => return Err(msg)
   }
-  let stsc_runs = match read_stsc(data, stsc) {
+  let stsc_runs = match read_stsc(data, stsc, sample_count.to_int64()) {
     Ok(v) => v
     Err(msg) => return Err(msg)
   }
   // chunk 偏移：stco，缺省时尝试 co64
-  let mut chunk_offsets : Array[Int32] = []
-  match find_box(stbl_children, "stco") {
+  let chunk_offsets = match find_box(stbl_children, "stco") {
     Some(b) =>
-      match read_stco(data, b) {
-        Ok(v) => chunk_offsets = v
+      match read_stco(data, b, mdat_body, mdat_end, sample_count.to_int64()) {
+        Ok(v) => v
         Err(msg) => return Err(msg)
       }
     None => {
@@ -427,51 +614,26 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
         Some(b) => b
         None => return Err("stbl 缺少 stco/co64")
       }
-      if co64.body + 8 > co64.next {
-        return Err("co64 太短")
-      }
-      let count = rd_u32_be(data, co64.body + 4)
-      if count <= 0 || count > (co64.next - co64.body - 8) / 8 {
-        return Err("co64 条目数非法")
-      }
-      let mut i = 0
-      while i < count {
-        chunk_offsets.push(rd_u64_be(data, co64.body + 8 + i * 8).to_int())
-        i = i + 1
+      match
+        read_co64(data, co64, mdat_body, mdat_end, sample_count.to_int64()) {
+        Ok(v) => v
+        Err(msg) => return Err(msg)
       }
     }
   }
-  let sample_count = sizes.length()
-  if sample_count == 0 {
-    return Err("MP4 中没有音频样本")
-  }
-  // 时长表必须覆盖全部样本
-  let mut duration_total = 0
-  for run in stts_runs {
-    duration_total = duration_total + run.sample_count
-  }
-  if duration_total != sample_count {
-    return Err(
-      "stts 覆盖的样本数（" +
-      duration_total.to_string() +
-      "）与 stsz（" +
-      sample_count.to_string() +
-      "）不一致",
-    )
-  }
-  let durations : Array[Int32] = []
-  for run in stts_runs {
-    let mut i = 0
-    while i < run.sample_count {
-      durations.push(run.delta)
-      i = i + 1
-    }
-  }
-  // 按 chunk → 样本表切出样本并计算 granule
-  let samples : Array[Mp4Sample] = []
+  // 组装 Ogg：OpusHead + OpusTags + 音频包。
+  // 按 chunk → 样本表流式生成：时长从 stts 游程按需取（不展开 durations），
+  // 样本位置/大小直接转成包（不物化 samples 数组）。
+  let serial = (0x4D4D5558 : UInt32) // 'MMUX'
+  let packets : Array[@ogg.Packet] = []
+  packets.push({ data: head_bytes, granule_position: 0L, serial, })
+  packets.push({ data: tags_bytes, granule_position: 0L, serial, })
+  let mut cumulative : Int64 = 0L
   let mut sample_i = 0
   let mut sc_i = 0
   let mut chunk_i = 0
+  let mut run_i = 0
+  let mut run_used = 0
   while chunk_i < chunk_offsets.length() && sample_i < sample_count {
     let chunk_no = chunk_i + 1
     while sc_i + 1 < stsc_runs.length() &&
@@ -483,16 +645,32 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
     let mut k = 0
     while k < spc && sample_i < sample_count {
       let size = sizes[sample_i]
-      // 用 Int64 计算 pos+size：size 是 u32 读出的 32 位字段，直接相加会溢出成负数，
-      // 从而绕过 mdat 边界检查，产出 0 字节音频包却不报错。
-      let end64 = pos.to_int64() + size.to_int64()
-      if size <= 0 || pos < mdat.body || end64 > mdat.next.to_int64() {
+      // Int64 计算 pos + size：size 是 u32 读出的 32 位字段，直接相加会溢出成
+      // 负数，从而绕过 mdat 边界检查，产出 0 字节音频包却不报错。
+      let end64 = pos + size.to_int64()
+      if size <= 0 || pos < mdat_body || end64 > mdat_end {
         return Err("样本偏移越界（chunk " + chunk_no.to_string() + "）")
       }
-      let end = end64.to_int()
-      samples.push({ offset: pos, size, duration: durations[sample_i], })
-      pos = end
+      // 从 stts 游程取本样本时长；游程总覆盖在 read_stts 里已证明恰好相等。
+      while run_i < stts_runs.length() &&
+            run_used >= stts_runs[run_i].sample_count {
+        run_i = run_i + 1
+        run_used = 0
+      }
+      if run_i >= stts_runs.length() {
+        return Err("stts 覆盖的样本数不足")
+      }
+      cumulative = cumulative + stts_runs[run_i].delta.to_int64()
+      packets.push({
+        data: demux_slice(data, pos.to_int(), end64.to_int()),
+        // RFC 7845 §4：granule = 已解码样本总数（PCM position = granule − pre-skip），
+        // 不能在这里再加一次 pre-skip，否则 ogg 端会多算一个 pre-skip 的时长。
+        granule_position: cumulative,
+        serial,
+      })
+      pos = end64
       sample_i = sample_i + 1
+      run_used = run_used + 1
       k = k + 1
     }
     chunk_i = chunk_i + 1
@@ -506,28 +684,13 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
       " 个样本",
     )
   }
-  // 组装 Ogg：OpusHead + OpusTags + 音频包
-  let serial = (0x4D4D5558 : UInt32) // 'MMUX'
-  let packets : Array[@ogg.Packet] = []
-  packets.push({ data: encode_opus_head(config), granule_position: 0L, serial, })
-  packets.push({ data: encode_min_opus_tags(), granule_position: 0L, serial, })
-  let mut cumulative : Int64 = 0L
-  for sample in samples {
-    cumulative = cumulative + sample.duration.to_int64()
-    packets.push({
-      data: demux_slice(data, sample.offset, sample.offset + sample.size),
-      // RFC 7845 §4：granule = 已解码样本总数（PCM position = granule − pre-skip），
-      // 不能在这里再加一次 pre-skip，否则 ogg 端会多算一个 pre-skip 的时长。
-      granule_position: cumulative,
-      serial,
-    })
-  }
-  // 输出聚合大小闸门：每包一页（27 字节头 + 段表 + 负载）
+  // 输出聚合大小闸门：与 read_stsz 的预估同口径（页头 + 段表 + 负载）。
+  // read_stsz 已在分配前拦过；这里按实际包再核一次，防止口径漂移。
   let mut out_size = 0L
   for p in packets {
-    out_size = out_size + 27L + 1L + p.data.length().to_int64()
+    out_size = out_size + ogg_packet_bytes(p.data.length().to_int64())
   }
-  if out_size > 2147483647L {
+  if out_size > MAX_DEMUX_OUTPUT_BYTES {
     return Err("解封装输出超过单文件 2 GiB 上限")
   }
   Ok(@ogg.serialize_pages(@ogg.paginate(packets, serial)))

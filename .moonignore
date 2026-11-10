@@ -8,3 +8,8 @@ _mbuild/
 pkg.generated.mbti
 *.mbti
 scripts/measure.py
+review/
+out/
+tmp/
+*.zip
+*.bak

@@ -237,3 +237,62 @@ test "parse_opus_head validates mapping family" {
     None => assert_true(false)
   }
 }
+
+///|
+/// OpusHead 版本不是 1 时必须拒绝 —— 解码器（moonopus）却接受 version ≤15，
+/// 这正是 H-04「估算与解码校验器不一致」的根源；pipeline 的 gate 依赖这里的
+/// 严格性做 fail-closed。
+test "parse_opus_head rejects versions other than 1" {
+  let b = Buffer()
+  b.write_bytes(mk_opus_head(1, 0, 0, 0, []).exact_view())
+  let head = b.to_bytes()
+  let v2 = Buffer()
+  let mut i = 0
+  while i < head.length() {
+    if i == 8 {
+      v2.write_byte((2 : Byte))
+    } else {
+      v2.write_byte(head[i])
+    }
+    i = i + 1
+  }
+  assert_true(parse_opus_head(v2.to_bytes()) is None)
+  assert_true(parse_audio_header(v2.to_bytes()) is None)
+  // 合法版本仍然通过
+  assert_true(parse_opus_head(head) is Some(_))
+}
+
+///|
+/// Vorbis setup 最小预检：接受合法前缀，拒绝 C-02 的 221 B PoC。
+test "validate_vorbis_setup catches the malicious setup" {
+  // 合法前缀：1 个 ordered codebook，后续位流不再展开
+  let ok = b"\x05vorbis\x00\x42\x43\x56\x00\x00\x00\x00\x00\x01"
+  assert_true(validate_vorbis_setup(ok) is Ok(_))
+  // PoC：dimensions=65536、entries=16777216，非 ordered、非 sparse
+  let bad = b"\x05vorbis\x00\x42\x43\x56\xFF\xFF\xFF\xFF\xFF\x00"
+  match validate_vorbis_setup(bad) {
+    Err(msg) => assert_true(msg.contains("codebook"))
+    Ok(_) => assert_true(false)
+  }
+  // 不是 setup 头
+  match validate_vorbis_setup(b"\x03vorbis\x00\x00\x00\x00") {
+    Err(_) => assert_true(true)
+    Ok(_) => assert_true(false)
+  }
+  // 截断
+  match validate_vorbis_setup(b"\x05vorbis") {
+    Err(_) => assert_true(true)
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// 声明的条目数超过包内可读位数（非 sparse 每条约 5 位）必须被拒绝。
+test "validate_vorbis_setup rejects a bit-starved codebook" {
+  // 1 个非 ordered、非 sparse 的 codebook：entries=2，但只剩 6 位
+  let starved = b"\x05vorbis\x00\x42\x43\x56\x00\x00\x01\x00\x00\x00"
+  match validate_vorbis_setup(starved) {
+    Err(msg) => assert_true(msg.contains("条目数"))
+    Ok(_) => assert_true(false)
+  }
+}

@@ -1152,7 +1152,7 @@ fn show_wav_info(
   for c in f.chunks {
     println(
       "扩展块: " +
-      c.fourcc +
+      escape_controls(c.fourcc) +
       " " +
       c.data.length().to_string() +
       " 字节" +
@@ -1204,7 +1204,7 @@ fn show_mp4_info(
   println("文件:   " + path)
   println("格式:   MP4（ISOBMFF）")
   println("字节数: " + data.length().to_string())
-  println("主品牌: " + info.major_brand)
+  println("主品牌: " + escape_controls(info.major_brand))
   println("时长:   " + format_seconds(info.duration_seconds) + " 秒")
   println("轨道数: " + info.tracks.length().to_string())
   let mut i = 0
@@ -1223,7 +1223,7 @@ fn show_mp4_info(
       ") " +
       kind +
       "  " +
-      t.codec +
+      escape_controls(t.codec) +
       "  声道=" +
       t.channels.to_string() +
       "  采样率=" +
@@ -1330,7 +1330,7 @@ fn run_remux(src : String, out : String) -> Unit {
             Some(info) => {
               let track = if info.tracks.length() > 0 {
                 let t = info.tracks[0]
-                t.codec +
+                escape_controls(t.codec) +
                 " " +
                 t.channels.to_string() +
                 " 声道 / " +
@@ -1537,35 +1537,10 @@ fn run_demux(src : String, dir : String) -> Unit {
           created_subs.push(sub)
         }
         let group = streams[si].packets
-        let mut i = 0
-        while i < group.length() {
-          let name = sub + "/packet_" + pad6(i) + ".bin"
-          created_files.push(name)
-          @fs.write_bytes_to_file(name, group[i].data) catch {
-            IOError(msg) => {
-              // 已经写出的前 i 个文件不能留在磁盘上，否则是一个
-              // 「看起来成功、实际缺包」的包目录；若整个目录是本轮建的，
-              // 连父目录一起删，避免后续 mux 把残留的 sN 当完整输入。
-              rollback_demux(dir, created_dir, created_subs, created_files)
-              fail("错误: 无法写入 " + name + " —— " + msg)
-              return
-            }
-          }
-          i = i + 1
-        }
-        // 粒度清单。包文件里没有时间信息，而时间信息正是 Ogg 区别于
-        // 「一堆裸包」的地方：不写这份清单，重新封装出来的每一页粒度都是 0，
-        // 时长归零、无法 seek、时间戳全错。
-        //
-        // 每行一个值，顺序与 packet_%06d.bin 一一对应。-1 表示该包在原文件里
-        // 不携带粒度（RFC 3533：只有页内最后一个完整结束的包才携带），
-        // 它必须与「粒度真的是 0」区分开。
-        //
-        // 清单头部记 `# serial=`（原流号）、`# packets=`（包数，防止目录
-        // 被复用或改动）与 `# chain=`（属于第几段物理流）。没有链序号，
-        // chained 文件重封装时多段会被压成一条交织流：结构仍合法，
-        // 但播放语义从「顺序播」变成「同时播」。
-        // 文本的生成与解析都在 `manifest/` 包里（纯函数、有单元测试）。
+        // 清单先写：它是「这条逻辑流已完整提交」的提交点。
+        // 若先写包、最后写清单，进程被杀会留下「有包、无清单」的目录，
+        // mux 会把它当手工目录静默封装成结构全绿、内容缺失的 Ogg。
+        // 清单头部记录原流号、包数与链序号；粒度逐包对应，-1 表示不携带粒度。
         let granule_list : Array[Int64] = []
         let mut gi = 0
         while gi < group.length() {
@@ -1590,14 +1565,20 @@ fn run_demux(src : String, dir : String) -> Unit {
             return
           }
         }
-        println(
-          "  s" +
-          (si + 1).to_string() +
-          "  serial=" +
-          streams[si].serial.to_string() +
-          "  包数=" +
-          group.length().to_string(),
-        )
+        let mut i = 0
+        while i < group.length() {
+          let name = sub + "/packet_" + pad6(i) + ".bin"
+          created_files.push(name)
+          @fs.write_bytes_to_file(name, group[i].data) catch {
+            IOError(msg) => {
+              // 已写出的文件不能留在磁盘上，否则是一个「看起来成功、缺包」的目录
+              rollback_demux(dir, created_dir, created_subs, created_files)
+              fail("错误: 无法写入 " + name + " —— " + msg)
+              return
+            }
+          }
+          i = i + 1
+        }
         si = si + 1
       }
       println(
@@ -1657,8 +1638,64 @@ fn files_in(dir : String) -> Result[Array[String], String] {
       names.push(e)
     }
   }
-  names.sort()
+  // 数字序：packet_1、packet_2、packet_10；全部失败时退回字典序
+  let mut i = 1
+  while i < names.length() {
+    let mut j = i
+    while j > 0 && packet_less(names[j], names[j - 1]) {
+      let tmp = names[j - 1]
+      names[j - 1] = names[j]
+      names[j] = tmp
+      j = j - 1
+    }
+    i = i + 1
+  }
   Ok(names)
+}
+
+///|
+/// 解析 `packet_<digits>.bin` 的序号；不匹配返回 None。
+/// 手工包目录可能出现 packet_1/2/10，字典序会把 10 排在 2 前面。
+fn packet_number(name : String) -> Int64? {
+  if name.length() < 12 {
+    return None
+  }
+  if !@manifest.starts_with(name, "packet_") ||
+    !@manifest.ends_with(name, ".bin") {
+    return None
+  }
+  let end = name.length() - 4
+  let mut n = 0L
+  let mut i = 7
+  let mut any = false
+  while i < end {
+    match name.get_char(i) {
+      Some(c) => {
+        let d = c.to_int() - 48
+        if d < 0 || d > 9 {
+          return None
+        }
+        n = n * 10L + d.to_int64()
+        any = true
+      }
+      None => return None
+    }
+    i = i + 1
+  }
+  if any {
+    Some(n)
+  } else {
+    None
+  }
+}
+
+///|
+/// `packet_` 文件按数字序比较；无法解析的退回字典序。
+fn packet_less(a : String, b : String) -> Bool {
+  match (packet_number(a), packet_number(b)) {
+    (Some(x), Some(y)) => x < y
+    _ => a < b
+  }
 }
 
 ///|
@@ -2299,14 +2336,6 @@ fn run_extract(src : String, index : Int32, out : String, force : Bool) -> Unit 
         }
       }
       let stream = @ogg.stream_pages(pages, serial)
-      let bak = backup_output(out)
-      match bak {
-        Unavailable => {
-          fail("错误: 无法备份已有输出 " + out + "，拒绝覆盖")
-          return
-        }
-        _ => ()
-      }
       ensure_output_size(pages_byte_size(stream), "extract ")
       let encoded = match @ogg.serialize_pages_checked(stream) {
         Err(msg) => {
@@ -2314,6 +2343,31 @@ fn run_extract(src : String, index : Int32, out : String, force : Bool) -> Unit 
           return
         }
         Ok(b) => b
+      }
+      // --force 只能用于「幂等重跑」，不能成为覆盖任意文件的开关：
+      // 已有输出必须与待写内容相同；或待写内容就是整个输入文件（单流文件抽自己）。
+      // 否则硬链接/符号链接别名会把多流源文件截断（数据丢失且不可恢复）。
+      if force && @fs.path_exists(out) {
+        let existing = read_optional(out)
+        match existing {
+          Some(old) =>
+            if !bytes_same(old, encoded) && !bytes_same(encoded, data) {
+              fail(
+                "错误: --force 只允许覆盖与待写内容相同的已有输出（幂等重跑）—— " +
+                out +
+                "\n  拒绝覆盖不同内容的文件（硬链接/别名会截断源文件）；请先删除该输出或换一个路径",
+              )
+            }
+          None => ()
+        }
+      }
+      let bak = backup_output(out)
+      match bak {
+        Unavailable => {
+          fail("错误: 无法备份已有输出 " + out + "，拒绝覆盖")
+          return
+        }
+        _ => ()
       }
       @fs.write_bytes_to_file(out, encoded) catch {
         IOError(msg) => {
@@ -2842,8 +2896,10 @@ fn run_verify(path : String, json : Bool) -> Unit {
       let (pages, gaps) = @ogg.parse_pages_lenient(data)
       if pages.length() == 0 {
         // 校验类失败用 1（与「文件有问题」一致），不用用法错误的 2
-        println("错误: 不是合法的 Ogg 文件 —— " + path)
-        @sys.exit(1)
+        fail_data_json(
+          "错误: 不是合法的 Ogg 文件 —— " + path,
+          json,
+        )
       }
       // 无法同步的区间是硬错误：那一段数据连页边界都没有
       let findings : Array[@ogg.Finding] = []

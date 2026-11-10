@@ -70,26 +70,46 @@ pub fn crc32(data : Bytes) -> UInt32 {
 }
 
 ///|
+/// 直接在原始字节上计算「一页」的 CRC-32：`[start, end)` 是整页的完整区间，
+/// 页内相对偏移 22..25 的 CRC 字段按 RFC 3533 视为 0。
+///
+/// 全程零拷贝、不构造 `Page`、不重建页字节串 —— 重同步与流式读取的候选
+/// 校验只需要「这页的 CRC 对不对」，不需要页对象。旧路径
+/// （`Page::parse` + `page_crc_ok`）会先复制整页负载、再把整页重新序列化
+/// 一遍算 CRC，单候选成本是一次解析拷贝 + 一次序列化；恶意伪页头洪水
+/// （见 `parse_pages_lenient` 的重同步预算说明）正是靠这里把单候选压到
+/// 恰好一次遍历。
+///
+/// 前置条件：`end - start >= 27`（页头完整）；调用方负责保证区间在界内。
+fn crc32_page_range(data : Bytes, start : Int32, end : Int32) -> UInt32 {
+  let mut crc : UInt32 = 0U
+  let mut i = start
+  let mut rel = 0
+  while i < end {
+    // 相对页首偏移 22..25 是 CRC 字段，计算时置零
+    let value = if rel >= 22 && rel < 26 {
+      0U
+    } else {
+      data[i].to_int().reinterpret_as_uint()
+    }
+    let idx = ((crc >> 24) ^ value).reinterpret_as_int() & 0xFF
+    crc = (crc << 8) ^ crc_table[idx]
+    i = i + 1
+    rel = rel + 1
+  }
+  crc
+}
+
+///|
 /// 校验一整页（含 CRC 字段本身，计算时该字段视为 0）是否自洽。
 ///
-/// `page_bytes` 是磁盘上的原始页（CRC 字段非 0）；先把偏移 22..25 清零，
-/// 再与调用方给出的期望值比较。之前直接对该字节串算 CRC，等于把旧 CRC
-/// 也算了进去，任何真实页都只会返回 false。
+/// `page_bytes` 是磁盘上的原始页（CRC 字段非 0）；计算时把偏移 22..25
+/// 视为 0，再与调用方给出的期望值比较 —— 直接对原始字节算，不复制整页。
 pub fn verify_page(page_bytes : Bytes, expected : UInt32) -> Bool {
   if page_bytes.length() < 27 {
     return false
   }
-  let buf = Buffer(size_hint=page_bytes.length())
-  let mut i = 0
-  while i < page_bytes.length() {
-    if i >= 22 && i < 26 {
-      buf.write_byte((0 : Byte))
-    } else {
-      buf.write_byte(page_bytes[i])
-    }
-    i = i + 1
-  }
-  crc32(buf.to_bytes()) == expected
+  crc32_page_range(page_bytes, 0, page_bytes.length()) == expected
 }
 
 ///|

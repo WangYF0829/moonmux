@@ -31,10 +31,10 @@ env:
   # Linux 侧计数比 Windows 高约 27 行（≈671），阈值 660→670（上限 685）。
   # v0.5.0：新增 MP4 → Ogg 解封装（demux.mbt，含大量坏表防御分支），Windows 实测 683；
   # Linux 侧 ≈710，阈值 670→700（上限 715）。
-  # v0.9.0：修复新增 elst/roll、WAV fact、CLI 契约、重同步预筛、2 GiB 闸门
-  # 等防御性分支与测试，Windows 实测 710；Linux 侧比 Windows 高约 27 行（≈737）。
-  # 阈值 700→730，配合 20 行容差，上限 750。
-  MAX_UNCOVERED_LINES: 730
+  # v0.9.2：安全/资源边界修复新增大量 Int64 上界、解码前 gate 与回归测试，
+  # Windows 实测 757；Linux 侧比 Windows 高约 27 行（≈784）。
+  # 阈值 730→780，配合 20 行容差，上限 800。
+  MAX_UNCOVERED_LINES: 780
   # 跨平台/工具链 patch 版本可能让计数抖动几行，给一点余量。
   COVERAGE_TOLERANCE: 20
 
@@ -114,6 +114,24 @@ jobs:
         run: |
           moon build --target native
           bash scripts/check_version.sh
+      # 发布包内容门禁：moon package 打包的是工作区文件（含未跟踪文件），
+      # 评审/临时目录一旦混入会被永久发布到 mooncakes，无法撤回。
+      - name: Package content gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `moon package` 会先打印 "Package to .../_build/..." 日志行，先滤掉非清单行
+          moon package --list 2>&1 | grep -Ev '^(Package to|Check passed|Finished|Running|Building)' | tee /tmp/pkglist.log
+          if grep -Eq '(^|[\\/])(review|_build|out|tmp)([\\/]|$)' /tmp/pkglist.log; then
+            echo "package contains local scratch files:"
+            grep -E '(^|[\\/])(review|_build|out|tmp)([\\/]|$)' /tmp/pkglist.log
+            exit 1
+          fi
+          count=$(grep -c . /tmp/pkglist.log || true)
+          if [ "$count" -lt 50 ]; then
+            echo "package file list unexpectedly small: $count"
+            exit 1
+          fi
 
       # 生成物不能进版本库：_build、*.mi/*.core/*.mbti、pkg.generated.mbti。
       - name: Verify no generated artifacts are tracked
@@ -271,17 +289,17 @@ jobs:
 
       - name: Verify clean-project install
         env:
-          MOONMUX_INSTALL_VERSION: "0.9.1"
+          MOONMUX_INSTALL_VERSION: "0.9.2"
         run: |
           # 版本 bump 提交可能先于发布到达：轮询等待 mooncakes 出现该版本
           for i in $(seq 1 30); do
             if bash scripts/install_check.sh; then
               exit 0
             fi
-            echo "等待 mooncakes 上的 0.9.1（第 $i 次，最多 30 次）"
+            echo "等待 mooncakes 上的 0.9.2（第 $i 次，最多 30 次）"
             sleep 5
           done
-          echo "mooncakes 上仍未出现可安装的 0.9.1"
+          echo "mooncakes 上仍未出现可安装的 0.9.2"
           exit 1
   # 性能基准：release native + Node 脚本（无第三方依赖），表格写入 job summary。
   # 只记录、不设阈值 —— 共享 runner 的绝对耗时没有可比性，回归靠本地对比。

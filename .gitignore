@@ -31,3 +31,7 @@ smoke.*/
 
 # 生成物（moon info / 编译产物）
 *.mbti
+
+# 本地评审/临时目录
+review/
+out/

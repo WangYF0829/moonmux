@@ -3,6 +3,46 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
+## [0.9.2] — 2026-11-11
+
+### 安全 / 资源边界修复
+- **MP4 解封装**：`stts` 样本数改用 Int64 累加、逐游程与 `stsz` 比较，先校验后展开；
+  `stsz` 定长分支以 mdat 实际负载为界、逐样本分支先做 Σsizes 与输出大小预估再物化；
+  `co64` 偏移按 Int64 校验（≥2³¹ 或不在 mdat 内即拒绝）；新增 1,048,576 样本上限；
+  `inspect` 拒绝缺 `mvhd` 与 `stsz` 计数高位为 1 的输入；remux 的 `total_samples`
+  用 Int64 累加并在超过 32 位时长时返回错误。
+- **Ogg 重同步**：新增零拷贝页 CRC（`crc32_page_range`）与页长计算，候选命中 CRC 后才
+  物化 `Page`；`parse_pages_lenient`/`PageReader` 加确定性候选预算（超限报“疑似伪页头
+  洪水”），并把保留位页的接受判据对齐严格解析；候选边界全部改为减法/Int64，修掉
+  接近 2³¹ 时的回绕窗口。
+- **to-wav 解码边界**：解码前统一 gate（OpusHead/OpusTags、Vorbis ID/comment 用本项目
+  解析器校验，Vorbis setup 首 codebook 做有界位预算检查）；PCM 预算改为按解码工作量
+  估算（Opus 逐包 TOC 时长，不信任页 granule），估算与解码共用同一选流结果；OpusHead
+  version≠1、TOC 不可解析、Vorbis granule 异常时在解码前返回错误。两个已知恶意头
+  PoC 现在返回数据错误而不是崩溃。
+- **写路径安全**：`extract --force` 收紧为只允许幂等覆盖（已有输出与待写内容相同，或
+  待写内容等于整个输入文件），拒绝覆盖不同内容/硬链接别名；`demux` 先写 manifest 再写
+  包文件，中断残留目录会被 `mux` 的包数校验拒绝。
+- **CLI/契约**：`verify --json` 的“不是合法 Ogg”输出 JSON 错误对象；`info` 文本输出的
+  MP4 brand/codec 与 WAV chunk id 做控制字符转义；非选项类子命令遇到 `--xxx` 按未知
+  选项退出 2；manifest 未知头部字段报错；手工包目录按数字序排序（packet_2 在 packet_10 前）。
+- **发布/CI**：`.moonignore` 排除 `review/`、`out/`、`tmp/`、`*.zip`、`*.bak`；CI 增加
+  `moon package --list` 内容门禁（禁止评审/构建/临时目录进包），覆盖率阈值 730→780
+  （容差 20，上限 800）；fuzz 增加 stderr panic 检测；修复 smoke 在 Windows Git Bash
+  下使用 `/tmp` 导致原生 `@fs` 无法建目录的回归（优先进 `_build/smoke.*`）。
+- **隐私**：项目申报书移除个人手机号/邮箱，改为仓库 Issue 联系方式。
+
+### 测试
+- Windows native **369/369**、wasm-gc **344/344**、`moon check --deny-warn` 零警告；
+  覆盖率未覆盖行 **757**（Linux 侧约 784，CI 上限 800）。
+
+### 已知残余
+- `moonvorbis@0.1.4` 的 `unsafe_get` / 缺 bit-budget 是依赖层问题，gate 仅覆盖已识别的
+  畸形头；任意恶意 Vorbis 码流仍可能让 `to-wav` 崩溃，不可把 `to-wav` 直接暴露给
+  不可信输入。Opus 音频 payload 也只校验 TOC，不校验码流内容。
+- MP4 解封装样本数上限 1,048,576（约 5.8 小时 @20 ms 包）为新增能力边界。
+- `@fs` 无 stat/inode/rename：备份/别名检查的整体读入内存与中断窗口仍无法彻底消除。
+
 ## [0.9.1] — 2026-11-10
 
 ### 修复

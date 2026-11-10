@@ -358,3 +358,13 @@ test "manifest rejects duplicate header fields" {
     parse("# moonmux manifest v1\n# moonmux manifest v1\n0\n") is Err(_),
   )
 }
+
+///|
+/// 未知头部字段必须报错：静默忽略会把 `# seriall=7` 变成默认流号 1。
+test "unknown manifest header fields are rejected" {
+  let text = "# moonmux manifest v1\n# granulepos\n# seriall=7\n# packets=1\n# chain=1\n0\n"
+  match parse(text) {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("未知"))
+  }
+}

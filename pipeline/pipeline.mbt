@@ -11,6 +11,13 @@
 // （例如 moonopus 目前只支持 CELT-only 全频带单声道），
 // 把范围外的流如实退回来，比编造一个安静的输出更有用。
 //
+// **解码前 gate**：第三方解码器（moonvorbis 0.1.4）对恶意头部有内存安全
+// 缺陷（review C-02：97/221 字节的构造文件即可越界读/panic）。这里在把
+// 任何流交给解码器之前，先用本项目的 codec 解析器做结构预检：严格校验
+// 标识头、注释包与 Vorbis setup 前缀，校验失败一律 Err —— 绝不把解析器
+// 不认识的头部交给解码器「碰运气」。预检同时产出解码内存估算，估算与
+// 解码共用同一次选流结果（H-03 / H-04）。
+//
 // 关于「交给解码器的到底是什么」：这里先把目标逻辑流**抽成一份独立的
 // 单流 Ogg**（用容器层的 stream_pages），再递给解码器。
 // 直接把整份多流文件丢过去是不行的 —— 解码器看到别的流的包只会报错，
@@ -147,6 +154,215 @@ fn first_audio_stream(
 }
 
 ///|
+/// 估算时计入的解码器内部缓冲（字节 / 样本 / 声道）。
+///
+/// 两个第三方解码器都是「先把整段样本攒进浮点数组再返回」：
+/// moonopus 用 `Array[Double]`（8 B/样本）、moonvorbis 用
+/// `Array[Array[Float]]`（4 B/样本/声道，另有裁剪时的瞬时副本）。
+/// 统一按 8 B 计入，宁可高估 —— 这是预算估算里「解码工作量」与
+/// 「最终 PCM 字节数」的差额来源。
+const DECODER_OVERHEAD_PER_SAMPLE : Int64 = 8L
+
+///|
+/// 一段（链接流中的一段）预检通过后的解码计划。
+///
+/// 估算与解码**共用同一份选择结果**：既避免两套头部校验器给出不同结论
+/// （H-04），也保证「估算失败就当 0 放行」的旧路径不存在。
+priv struct SegmentPlan {
+  serial : UInt32
+  codec : Codec
+  channels : Int32
+  sample_rate : Int32
+  /// 解码期内存峰值估算（字节，含解码器内部浮点缓冲）。
+  estimated_bytes : Int64
+}
+
+///|
+/// `samples × channels × per_sample` 的溢出安全乘法；任何一步溢出返回 `None`。
+fn checked_decoder_bytes(
+  samples : Int64,
+  channels : Int64,
+  per_sample : Int64,
+) -> Int64? {
+  if samples < 0L || channels <= 0L || per_sample <= 0L {
+    return None
+  }
+  if channels > 9223372036854775807L / per_sample {
+    return None
+  }
+  let per_frame = channels * per_sample
+  if samples > 9223372036854775807L / per_frame {
+    return None
+  }
+  Some(samples * per_frame)
+}
+
+///|
+/// 解码前的统一预检（H-03 / H-04 / C-02 的兜底闸门）。
+///
+/// 步骤与理由：
+/// 1. 用容器层选出第一条音频流（与后续解码使用同一个 serial/codec）；
+/// 2. **严格**校验头部：本项目解析器不认的头部一律 `Err`（fail closed），
+///    不再「估算跳过、解码照跑」；
+/// 3. 预先用本项目自己的 `@codec.parse_comment` 解析注释包 —— 第三方解码器
+///    在 vendor/条目长度字段上出过越界读与 panic，而本项目解析器对同样的
+///    数据安全返回 Err（C-02 的 97 B PoC 在此被挡）；
+/// 4. Vorbis 额外校验 setup 头的最小结构（221 B 的恶意 setup 在此被挡）；
+/// 5. 按**解码工作量**估算内存：Opus 逐包读 TOC 累加样本数，完全不信任
+///    页 granule（H-03）；Vorbis 没有逐包时长，只能按 granule 估算并拒绝
+///    不可用的 granule。
+///
+/// 返回的计划同时供估算与解码使用，避免两者选到不同的流。
+fn plan_segment(
+  part : Array[@ogg.Page],
+  bits : Int32,
+) -> Result[SegmentPlan, String] {
+  let target = match first_audio_stream(part) {
+    Ok(t) => t
+    Err(msg) => return Err(msg)
+  }
+  let (serial, codec) = target
+  // 抽成单流并重组头包/音频包。重组会复制负载（约 1 份输入大小），
+  // 但换来了「按包计算解码工作量」与对注释头的完整边界检查；
+  // 与解码器内部按样本数的放大（可达 60×）相比，这份 1× 是廉价且必要的。
+  let packets = @ogg.reassemble(@ogg.stream_pages(part, serial))
+  if packets.length() == 0 {
+    return Err("音频流里没有可重组的包")
+  }
+  let bytes_per_sample : Int64 = if bits == 24 { 3L } else { 2L }
+  let per_sample_unit = bytes_per_sample + DECODER_OVERHEAD_PER_SAMPLE
+  match codec {
+    Codec::Opus => {
+      let info = match @codec.parse_opus_head(packets[0].data) {
+        Some(info) => info
+        None =>
+          return Err(
+            "不支持的 Opus 头部（只接受 OpusHead version=1 且声道/映射合法的流，已拒绝交给解码器）",
+          )
+      }
+      if packets.length() < 2 {
+        return Err("Opus 流缺少注释头（OpusTags）")
+      }
+      match @codec.parse_comment(packets[1].data) {
+        Ok((@codec.CommentKind::Opus, _)) => ()
+        Ok((@codec.CommentKind::Vorbis, _)) =>
+          return Err("Opus 流的第二个包头不是 OpusTags")
+        Err(msg) =>
+          return Err(
+            "Opus 注释头预检失败（已拒绝交给解码器）：" + msg,
+          )
+      }
+      // 音频包 = 头两个包之后；逐包读 TOC 累加样本数。
+      // 任一包的 TOC 无法解析都在解码前拒绝（与解码器的包解析规则一致）。
+      let mut samples : Int64 = 0L
+      let mut i = 2
+      while i < packets.length() {
+        match @codec.opus_packet_samples(packets[i].data) {
+          Ok(n) => samples = samples + n.to_int64()
+          Err(msg) =>
+            return Err(
+              "第 " +
+              (i + 1).to_string() +
+              " 个 Opus 音频包的 TOC 无法解析（已拒绝解码）：" +
+              msg,
+            )
+        }
+        i = i + 1
+      }
+      let estimated = match
+        checked_decoder_bytes(
+          samples,
+          info.channels.to_int64(),
+          per_sample_unit,
+        ) {
+        Some(v) => v
+        None =>
+          return Err(
+            "无法估算 Opus 解码内存：样本数超出可表示范围（文件可能已损坏）",
+          )
+      }
+      Ok({
+        serial,
+        codec,
+        channels: info.channels,
+        sample_rate: info.sample_rate,
+        estimated_bytes: estimated,
+      })
+    }
+    Codec::Vorbis => {
+      let info = match @codec.parse_vorbis_id(packets[0].data) {
+        Some(info) => info
+        None =>
+          return Err(
+            "不支持的 Vorbis 识别头（已拒绝交给解码器）",
+          )
+      }
+      if packets.length() < 2 {
+        return Err("Vorbis 流缺少注释头")
+      }
+      match @codec.parse_comment(packets[1].data) {
+        Ok((@codec.CommentKind::Vorbis, _)) => ()
+        Ok((@codec.CommentKind::Opus, _)) =>
+          return Err("Vorbis 流的第二个包头不是 VorbisComment")
+        Err(msg) =>
+          return Err(
+            "Vorbis 注释头预检失败（已拒绝交给解码器）：" +
+            msg,
+          )
+      }
+      if packets.length() < 3 {
+        return Err("Vorbis 流缺少 setup 头")
+      }
+      match @codec.validate_vorbis_setup(packets[2].data) {
+        Ok(_) => ()
+        Err(msg) =>
+          return Err(
+            "Vorbis setup 头预检失败（已拒绝交给解码器）：" +
+            msg,
+          )
+      }
+      // Vorbis 没有逐包时长字段，只能按页 granule 估算（近似：末值减首值）。
+      // granule 不可用时必须拒绝，而不是当作 0 放行 —— 否则预算闸门失效。
+      let mut first : Int64 = -1L
+      let mut last : Int64 = -1L
+      for p in part {
+        if p.serial == serial && p.granule_position >= 0L {
+          if first < 0L {
+            first = p.granule_position
+          }
+          last = p.granule_position
+        }
+      }
+      if first < 0L || last <= first {
+        return Err(
+          "Vorbis 输出大小无法估算：音频页 granule 缺失或非正（文件可能已损坏，已拒绝）",
+        )
+      }
+      let samples = last - first
+      let estimated = match
+        checked_decoder_bytes(
+          samples,
+          info.channels.to_int64(),
+          per_sample_unit,
+        ) {
+        Some(v) => v
+        None =>
+          return Err(
+            "无法估算 Vorbis 解码内存：granule 超出可表示范围（文件可能已损坏）",
+          )
+      }
+      Ok({
+        serial,
+        codec,
+        channels: info.channels,
+        sample_rate: info.sample_rate,
+        estimated_bytes: estimated,
+      })
+    }
+  }
+}
+
+///|
 /// 识别一个 Ogg 文件里第一条音频逻辑流用的是什么编码。
 ///
 /// 看的是逻辑流，不是「文件的第一个包」：多流文件里第一条逻辑流
@@ -176,82 +392,17 @@ pub fn detect(data : Bytes) -> Result[Codec, String] {
 /// 而不是按第一段的格式硬写 —— 那会让第二段变成音调错误的噪声。
 
 ///|
-/// 转码保留的 PCM 字节上限。
+/// 转码允许的解码期内存峰值预算（字节）。
 ///
 /// 整条链路没有流式写接口（`@fs` 只有整文件写），所以 PCM 必须在内存里
-/// 攒齐再一次性写盘；实测峰值约为输出的 3–4 倍。估算和每段解码后的实际
-/// 字节都会检查，超限就拒绝继续累积。
+/// 攒齐再一次性写盘。预算按**解码工作量**估算：样本数 × 声道数 ×
+/// （输出字节/样本 + 解码器内部缓冲 8 B），样本数对 Opus 逐包读 TOC 得到、
+/// 完全不依赖页 granule。
 ///
 /// **能力边界**：外部解码器一次调用返回整段 PCM，无法在解码过程中施加
-/// 输出上限。因此恶意伪造的 granule 仍可能在调用返回前造成超出本预算的
-/// 瞬时分配；要硬性封顶需要解码器提供流式/带长度上限的接口。
+/// 输出上限；本预算只能保证「估算不通过时绝不进入解码」，无法约束解码器
+/// 内部在声明合法时的瞬时分配。残余风险与实测倍率见任务报告（M-11）。
 const MAX_PCM_BYTES : Int64 = 256L * 1024L * 1024L
-
-///|
-/// 估算整份输出需要多少 16 位 PCM 字节：逐段按「末粒度 − 首粒度 − pre-skip」
-/// 乘声道数。复杂度 O(页数)，不解码、不重组。
-fn estimate_pcm_bytes(chains : Array[Array[@ogg.Page]], bits : Int32) -> Int64 {
-  let mut total : Int64 = 0L
-  for part in chains {
-    // 找该段的第一条音频流：逐流取头部包解析
-    let mut chosen : UInt32? = None
-    let mut channels = 0
-    let mut pre_skip : Int64 = 0L
-    // 一次扫描取所有首包，避免逐流重扫整段造成 O(流数 × 页数)。
-    let firsts = @ogg.first_packets(part)
-    for serial in @ogg.serials_of(part) {
-      match firsts.get(serial) {
-        Some(pkt) =>
-          match @codec.parse_audio_header(pkt) {
-            Some(info) => {
-              chosen = Some(serial)
-              channels = info.channels
-              pre_skip = info.pre_skip.to_int64()
-            }
-            None => ()
-          }
-        None => ()
-      }
-      if chosen is Some(_) {
-        break
-      }
-    }
-    let serial = match chosen {
-      Some(s) => s
-      None => continue
-    }
-    if channels <= 0 {
-      continue
-    }
-    let mut first : Int64 = -1L
-    let mut last : Int64 = -1L
-    for p in part {
-      if p.serial == serial && p.granule_position >= 0L {
-        if first < 0L {
-          first = p.granule_position
-        }
-        last = p.granule_position
-      }
-    }
-    if first < 0L || last <= first {
-      continue
-    }
-    let samples = last - first - pre_skip
-    if samples <= 0L {
-      continue
-    }
-    // 每样本字节数由位深决定：16 位是 2，24 位是 3；固定写 2 会让 24 位低估 1/3
-    let bytes_per_sample = if bits == 24 { 3L } else { 2L }
-    let per_sample = channels.to_int64() * bytes_per_sample
-    // 乘法前检查：损坏的 granule（例如 INT64_MAX）会让乘法回绕成负数，
-    // 上限就永远不触发 —— 直接当成「超限」处理。
-    if per_sample <= 0L || samples > (9223372036854775807L - total) / per_sample {
-      return MAX_PCM_BYTES + 1L
-    }
-    total = total + samples * per_sample
-  }
-  total
-}
 
 ///|
 /// Ogg → WAV。
@@ -260,10 +411,12 @@ pub fn ogg_to_wav(data : Bytes) -> Result[Bytes, String] {
 }
 
 ///|
-/// 同 `ogg_to_wav`，但允许调用方指定 PCM 预算（字节）。
+/// 同 `ogg_to_wav`，但允许调用方指定解码内存峰值预算（字节）。
 ///
-/// 命令行通过 `MOONMUX_MAX_PCM_MB` 覆盖：默认 256 MiB 对单链长文件是一个
-/// 能力上限（约 46 分钟单声道 Opus），知道自己在做什么的用户可以调大。
+/// 命令行通过 `MOONMUX_MAX_PCM_MB` 覆盖。预算按「样本数 × 声道数 ×
+/// （输出字节 + 解码器内部缓冲 8 B）」估算：对 Opus 由逐包 TOC 累加得到
+/// 样本数，对 Vorbis 由页 granule 近似（Vorbis 没有逐包时长字段）。
+/// 估算不通过时在解码之前就返回 Err。
 pub fn ogg_to_wav_limited(data : Bytes, limit : Int64) -> Result[Bytes, String] {
   let pages = @ogg.parse_pages(data)
   if pages.length() == 0 {
@@ -301,28 +454,44 @@ pub fn ogg_to_wav_pages_bits(
     return Err("PCM 内存预算不能为负")
   }
   let chains = @ogg.split_chains(pages)
-  let estimated = estimate_pcm_bytes(chains, bits)
-  if estimated > limit {
-    // 估算函数在数值异常（粒度溢出）时返回 MAX+1 的哨兵值，
-    // 直接打印会变成「预计 256 MiB 超过 256 MiB」这种自相矛盾的话。
-    if estimated > MAX_PCM_BYTES {
+  // 预检 + 估算：与解码共用同一份选择结果（H-04），并按解码工作量估算
+  // （H-03）。任何一段预检失败都直接 Err —— 绝不带着不确定的输入进解码器。
+  let plans : Array[SegmentPlan] = []
+  let mut estimated : Int64 = 0L
+  let mut si = 0
+  while si < chains.length() {
+    let plan = match plan_segment(chains[si], bits) {
+      Ok(p) => p
+      Err(msg) => return Err("第 " + (si + 1).to_string() + " 段：" + msg)
+    }
+    // 累加同样做溢出检查：损坏的 granule/包数不能把估算回绕成一个小值。
+    if plan.estimated_bytes > 9223372036854775807L - estimated {
       return Err(
-        "无法估算输出大小（页粒度超出可表示范围，文件可能已损坏）",
+        "无法估算输出大小（估算值超出可表示范围，文件可能已损坏）",
       )
     }
+    estimated = estimated + plan.estimated_bytes
+    plans.push(plan)
+    si = si + 1
+  }
+  if estimated > limit {
     return Err(
-      "预计输出 " +
+      "预计解码内存峰值 " +
       (estimated / 1048576L).to_string() +
-      " MiB 的 PCM，超过 " +
+      " MiB（" +
+      estimated.to_string() +
+      " 字节），超过 " +
       (limit / 1048576L).to_string() +
-      " MiB 的内存预算（解码峰值约为它的 3–4 倍）。\n" +
+      " MiB（" +
+      limit.to_string() +
+      " 字节）的 PCM 预算。\n" +
+      "  估算按解码工作量（Opus 逐包 TOC + 解码器内部缓冲）计算，不依赖页 granule。\n" +
       "  链接流可先 split 拆开逐段转码；单链文件需要外部切分或重编码。\n" +
       "  确认内存足够时可用环境变量 MOONMUX_MAX_PCM_MB 调大预算",
     )
   }
   // 预分配：避免 Buffer 反复倍增时同时持有新旧两块内存。
-  // 但估算值来自输入（不可全信），预分配封顶 16 MiB，其余按需增长 ——
-  // 否则一个伪造的 granule 就能让进程立刻申请 256 MiB。
+  // 但估算值来自输入（不可全信），预分配封顶 16 MiB，其余按需增长。
   let hint = if estimated > 16777216L { 16777216L } else { estimated }
   let buf = Buffer(size_hint=hint.to_int())
   let mut channels = 0
@@ -330,17 +499,33 @@ pub fn ogg_to_wav_pages_bits(
   let mut seg = 0
   while seg < chains.length() {
     let part = chains[seg]
-    let target = match first_audio_stream(part) {
-      Ok(t) => t
-      Err(msg) => return Err("第 " + (seg + 1).to_string() + " 段：" + msg)
-    }
-    let serial = target.0
-    let codec = target.1
+    // 用预检阶段的同一份选择结果：估算与解码不会选到不同的流。
+    let plan = plans[seg]
+    let serial = plan.serial
+    let codec = plan.codec
     // 抽成独立的单流 Ogg 再交给解码器（见文件头说明）
     let one = @ogg.serialize_pages(@ogg.stream_pages(part, serial))
     let decoded = match decode_stream(one, codec, bits) {
       Ok(d) => d
       Err(msg) => return Err("第 " + (seg + 1).to_string() + " 段：" + msg)
+    }
+    // 解码结果必须与预检读到的头部一致：两套解析器对同一个头不能给出
+    // 不同结论（H-04 的「单一权威」要求）。
+    if decoded.channels != plan.channels ||
+      decoded.sample_rate != plan.sample_rate {
+      return Err(
+        "第 " +
+        (seg + 1).to_string() +
+        " 段：解码结果（" +
+        decoded.channels.to_string() +
+        " 声道 / " +
+        decoded.sample_rate.to_string() +
+        " Hz）与头部声明（" +
+        plan.channels.to_string() +
+        " 声道 / " +
+        plan.sample_rate.to_string() +
+        " Hz）不一致",
+      )
     }
     if channels == 0 {
       channels = decoded.channels

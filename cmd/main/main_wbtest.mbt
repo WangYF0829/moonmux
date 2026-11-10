@@ -599,3 +599,13 @@ test "version constant matches describe output" {
   assert_true(@moonmux.MOONMUX_VERSION.length() > 0)
   assert_eq(@moonmux.describe(), "moonmux " + @moonmux.MOONMUX_VERSION)
 }
+
+///|
+test "packet numbers sort numerically, not lexicographically" {
+  assert_eq(packet_number("packet_000010.bin"), Some(10L))
+  assert_eq(packet_number("packet_1.bin"), Some(1L))
+  assert_eq(packet_number("packet_x.bin"), None)
+  assert_eq(packet_number("other_1.bin"), None)
+  assert_true(packet_less("packet_2.bin", "packet_10.bin"))
+  assert_false(packet_less("packet_10.bin", "packet_2.bin"))
+}

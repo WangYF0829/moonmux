@@ -487,3 +487,21 @@ test "numeric arguments reject overflow" {
     _ => assert_true(false)
   }
 }
+
+///|
+/// 非 flag 子命令的 `--xxx` 必须按未知选项拒绝，不能被当成路径。
+test "non-flag subcommands reject unknown options" {
+  match parse(["demux", "x.ogg", "--json"]) {
+    Command::Bad(msg, _) => assert_true(msg.contains("未知选项"))
+    _ => assert_true(false)
+  }
+  match parse(["tag", "in.ogg", "out.ogg", "K=V", "--force"]) {
+    Command::Bad(msg, _) => assert_true(msg.contains("未知选项"))
+    _ => assert_true(false)
+  }
+  // 选项出现在路径前后仍由 info/dump/verify/extract 支持（回归）
+  match parse(["demux", "--json"]) {
+    Command::Bad(msg, _) => assert_true(msg.contains("未知选项"))
+    _ => assert_true(false)
+  }
+}

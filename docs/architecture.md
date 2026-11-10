@@ -1,7 +1,7 @@
 # moonmux 架构与设计说明
 
 > 本文回答「项目怎么组织、关键不变量是什么、为什么这样取舍」，供后续维护者阅读。
-> 版本：v0.9.1（2026-11-10；正确性/契约修复补丁）。
+> 版本：v0.9.2（2026-11-11；安全/资源边界修复）。
 
 ## 1. 目标与非目标
 
@@ -41,7 +41,7 @@
 9. **头包页隔离**：粒度全为 0 的头包组（OpusHead/OpusTags、Vorbis 三个头包）各自独占一页、在页边界上开始与结束；`paginate_sized` 不得把它们与音频包合并。
 10. **MP4 写侧闸门**：`remux` 只接受单段、单逻辑流的 Ogg；CLI 先过 CRC / 结构 / EOS 检查，库层再自校验页表，链式或多流输入显式拒绝而不是静默截取。
 11. **MP4 读侧防崩溃**：读 box 字段前按 `next - body` 校验长度，截断文件返回 `None`/`Err` 而不是越界 panic；`stsz` 定长样本与样本偏移都用文件大小做上界，`pos + size` 用 Int64 计算防止回绕。
-12. **发布一致性**：发布包由 `moon package`/`moon publish` 按工作区文件生成，`.moonignore` 排除 `_build`、`_*/`、`*.mbti`、日志等生成物；发布前核对包清单，生成物与临时目录不得进包。
+12. **发布一致性**：发布包由 `moon package`/`moon publish` 按工作区文件生成，`.moonignore` 排除 `_build`、`_*/`、`review/`、`out/`、`tmp/`、`*.zip`、`*.mbti`、日志等；CI 对 `moon package --list` 做内容门禁，生成物/评审临时文件不得进包。
 
 ## 4. MP4 写侧布局（v0.3.x）
 
@@ -89,7 +89,7 @@ mdat → 按 chunk 切出样本（= Opus 包）
 
 | 层 | 手段 |
 |---|---|
-| 单元/白盒 | 336 个 `moon test`（页/包/CRC/清单/转码/box/Mp4 往返与解封装/CLI 解析/WAV 全格式/流式页读取），含真实 Ogg 文件的逐页 CRC 断言 |
+| 单元/白盒 | 369 个 `moon test`（页/包/CRC/清单/转码/box/Mp4 往返与解封装/CLI 解析/WAV 全格式/流式页读取），含真实 Ogg 文件的逐页 CRC 断言 |
 | 合成流闭环 | 合成 OpusHead+OpusTags+音频包 → Ogg → remux → inspect 读回（`mp4/mp4_wbtest.mbt`） |
 | 外部对账 | `scripts/verify_mp4.sh`：真实样本 remux 后 ffprobe 断言编码/声道/采样率/时长，ffmpeg 解码无错 |
 | 端到端 | `scripts/smoke.sh`：CLI 往返逐字节、退出码、边界输入、MP4/remux 项 |
@@ -102,7 +102,7 @@ mdat → 按 chunk 切出样本（= Opus 包）
 
 - 2 GiB 文件上限（`Int` 32 位 + `@fs` 整文件 API）；聚合写命令在分配前做 Int64 估算。v0.4.0 起提供流式**解析**；`WavWriter` 是内存内增量接口。
 - MP4 仅 Opus 单音轨；Vorbis-in-MP4 明确不做；不做章节/多轨编辑。
-- `extract` 默认拒绝「输出与输入内容相同」的别名；可用 `--force` 显式允许幂等覆盖（仍拒绝同一路径）。
+- `extract` 默认拒绝「输出与输入内容相同」的别名；`--force` 只允许幂等覆盖（已有输出与待写内容相同），不允许覆盖不同内容——`@fs` 无 stat/inode，无法安全区分硬链接别名与普通文件。
 - 基准与变异测试走 Node 脚本（可复现、无第三方依赖），尚未接入性能回归阈值与 libFuzzer/AFL 覆盖率引导。
 - 备份/别名检查的内存：`@fs` 没有 stat/inode/rename API，覆盖已有输出时需把旧文件整体读入内存做内容比较，峰值约为旧文件大小 + 新输出；无法流式比较或原子替换。
 - 下一期候选：无。容器层读写、MP4 写/解封装、WAV 全格式/块保真/流式写、基准与变异测试均已落地；明确不做 Vorbis-in-MP4 与多音轨 MP4。
