@@ -42,14 +42,14 @@
   唯一临时目录、区分启动失败与超时、fuzz 覆盖 remux。
 
 ### 测试
-- 测试 **315 → 335**；覆盖率未覆盖行 **710**（Windows 实测；Linux ≈737，CI 门禁上限
+- 测试 **315 → 335**（Windows；0.9.1 增加平台专属测试后为 336）；覆盖率未覆盖行 **710**（Windows 实测；Linux ≈737，CI 门禁上限
   730+20=750）。
 - 新增：MP4 edit list/roll/end-trim、largesize/duration、多音轨拒绝、WAV fact/重复块、
   manifest 重复头、页校验、伪 `OggS` 洪泛、CLI 标志位置/版本一致性等回归。
 
 ## [0.8.0] — 2026-11-10
 
-### 修复（独立审阅发现的正确性问题）
+### 修复（正确性问题）
 - **Opus TOC**：SILK 60 ms 帧长 3840 → 2880；code-3 帧数改读 `data[1] >> 2`；
   补 M ≤ 48 与包总时长 ≤ 120 ms 校验。
 - **`remux` 输入闸门**：CLI 先做 CRC / 结构 / EOS 检查；库层拒绝链式与多逻辑流输入
@@ -84,7 +84,7 @@
 ### 文档
 - `项目申报书.md` 重写为工程说明：项目定位、工作内容（按模块）、技术方案与关键设计、
   工程质量与验证、能力边界、开源合规与参考来源、使用方式、发布与开发记录。
-- README 与 CHANGELOG 去除历史评审与赛道相关表述，改为中性的版本历程与能力清单；
+- README 与 CHANGELOG 去除历史项目背景相关表述，改为中性的版本历程与能力清单；
   测试数与版本引用同步更新（299 项测试、v0.7.1）。
 - 本版为文档同步发布：**无代码、API 或文件格式变更**；测试仍 299 项，覆盖率 682。
 
@@ -197,7 +197,7 @@ v0.3.0 起补齐 MP4 写入能力与工程化。
 - 新增 `examples/`（WAV 往返 / Ogg 信息 / Ogg→MP4 三个可运行示例）与
   `docs/architecture.md`（模块边界、关键不变量、测试策略）。
 - 新增 `scripts/verify_mp4.sh`（ffprobe / ffmpeg 外部对账）与
-  `scripts/install_check.sh`（干净工程 `moon add` 复验）。
+  `scripts/install_check.sh`（干净工程 `moon add` 验证）。
 - 发布 v0.3.0 到 mooncakes.io 与 GitHub Release。
 
 ## [0.2.0] — 2026-10-23
