@@ -3,6 +3,17 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
+## [0.9.1] — 2026-11-10
+
+### 修复
+- `mux` 的 `manifest.txt` 是目录/管道/设备时按 I/O 错误退出 **2**（与文档和 smoke 的
+  约定一致；0.9.0 误归为数据错误 1）。
+- `looks_like_packet_member` 的平台测试修正：POSIX 文件名大小写敏感，大写 8.3 短名
+  只在 Windows 上应被识别（单独 `cfg(platform="windows")` 测试覆盖）。
+
+### 测试
+- Windows native **336** 个测试通过（Linux 335，差异来自 Windows 专属测试）。
+
 ## [0.9.0] — 2026-11-10
 
 ### 修复 / 补齐（第二轮：P2 + P3）

@@ -271,17 +271,17 @@ jobs:
 
       - name: Verify clean-project install
         env:
-          MOONMUX_INSTALL_VERSION: "0.9.0"
+          MOONMUX_INSTALL_VERSION: "0.9.1"
         run: |
           # 版本 bump 提交可能先于发布到达：轮询等待 mooncakes 出现该版本
           for i in $(seq 1 30); do
             if bash scripts/install_check.sh; then
               exit 0
             fi
-            echo "等待 mooncakes 上的 0.9.0（第 $i 次，最多 30 次）"
+            echo "等待 mooncakes 上的 0.9.1（第 $i 次，最多 30 次）"
             sleep 5
           done
-          echo "mooncakes 上仍未出现可安装的 0.9.0"
+          echo "mooncakes 上仍未出现可安装的 0.9.1"
           exit 1
   # 性能基准：release native + Node 脚本（无第三方依赖），表格写入 job summary。
   # 只记录、不设阈值 —— 共享 runner 的绝对耗时没有可比性，回归靠本地对比。
