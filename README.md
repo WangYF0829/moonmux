@@ -183,8 +183,8 @@ node scripts/bench.mjs --runs 5
 
 | 操作 | 输入 | 最小耗时 | 吞吐 |
 |---|---:|---:|---:|
-| `verify`（CRC + 结构体检） | 1.02 MiB | 21.7 ms | 47 MB/s |
-| `info --json` | 1.02 MiB | 17.6 ms | 58 MB/s |
+| `verify`（CRC + 结构体检） | 1.02 MiB | 22.9 ms | 44 MB/s |
+| `info --json` | 1.02 MiB | 18.8 ms | 54 MB/s |
 | `dump`（页级转储） | 1.02 MiB | 18.2 ms | 56 MB/s |
 | `remux`（Ogg → MP4） | 65 KiB | 16.9 ms | — |
 | `to-ogg`（MP4 → Ogg） | 66 KiB | 18.7 ms | — |
