@@ -12,8 +12,7 @@
 // 参考对象：cargo bench / hyperfine 的「多次运行取最小值」思路，不引入第三方依赖。
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,9 +39,8 @@ if (!BIN) {
   process.exit(2);
 }
 
-const TMP = join(ROOT, "_build", "bench-tmp");
-rmSync(TMP, { recursive: true, force: true });
-mkdirSync(TMP, { recursive: true });
+mkdirSync(join(ROOT, "_build"), { recursive: true });
+const TMP = mkdtempSync(join(ROOT, "_build", "bench-"));
 process.on("exit", () => rmSync(TMP, { recursive: true, force: true }));
 
 // ---------- Ogg 页处理：把同一个文件复制成多条 serial 递增的逻辑流，拼出大文件 ----------
@@ -98,6 +96,7 @@ function repeatChainedOgg(srcPath, copies) {
 function runOnce(cmdArgs) {
   const t0 = process.hrtime.bigint();
   const r = spawnSync(BIN, cmdArgs, { encoding: "utf8", timeout: 120000 });
+  if (r.error) throw new Error(`启动 CLI 失败: ${r.error.message}`);
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   if (r.error || r.status !== 0) {
     throw new Error(

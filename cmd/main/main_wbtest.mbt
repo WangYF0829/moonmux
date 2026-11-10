@@ -22,20 +22,20 @@ test "dir_number parses the sN form and rejects the rest" {
 }
 
 ///|
-/// 预算文本：合法值换算成字节，0 / 超上限 / 非数字 / 空串都退回默认 256 MiB。
-test "budget text falls back to the default on anything unusual" {
+/// 预算文本：合法值换算成字节；0 / 超上限（2048 MiB）/ 非数字 / 空串返回 None。
+test "budget text validates range and syntax" {
   let mib : Int64 = 1048576L
-  assert_eq(budget_from_text("1"), 1L * mib)
-  assert_eq(budget_from_text("256"), 256L * mib)
-  assert_eq(budget_from_text("4096"), 4096L * mib)
-  assert_eq(budget_from_text("0"), 256L * mib)
-  assert_eq(budget_from_text("4097"), 256L * mib)
-  assert_eq(budget_from_text(""), 256L * mib)
-  assert_eq(budget_from_text("12x"), 256L * mib)
-  assert_eq(budget_from_text("-1"), 256L * mib)
+  assert_eq(budget_from_text_checked("1"), Some(1L * mib))
+  assert_eq(budget_from_text_checked("256"), Some(256L * mib))
+  assert_eq(budget_from_text_checked("2048"), Some(2048L * mib))
+  assert_eq(budget_from_text_checked("0"), None)
+  assert_eq(budget_from_text_checked("2049"), None)
+  assert_eq(budget_from_text_checked(""), None)
+  assert_eq(budget_from_text_checked("12x"), None)
+  assert_eq(budget_from_text_checked("-1"), None)
   // 超过 Int64 的数字不能回绕成 1 而被当成 1 MiB
-  assert_eq(budget_from_text("18446744073709551617"), 256L * mib)
-  assert_eq(budget_from_text("999999999999999999999999"), 256L * mib)
+  assert_eq(budget_from_text_checked("18446744073709551617"), None)
+  assert_eq(budget_from_text_checked("999999999999999999999999"), None)
 }
 
 ///|
@@ -232,9 +232,18 @@ test "plan_mux reads a multi-stream directory" {
       assert_eq(plan.pages[0].granule_position, 0L)
       assert_eq(plan.pages[1].granule_position, 960L)
     }
-    Err(msg) => abort(msg)
+    Err(msg) => abort(mux_fail_text(msg))
   }
   reset_test_dir(dir)
+}
+
+///|
+/// plan_mux 的失败类型转成可读文本（测试断言用）。
+fn mux_fail_text(f : MuxFail) -> String {
+  match f {
+    MuxIo(m) => m
+    MuxData(m) => m
+  }
 }
 
 ///|
@@ -264,7 +273,7 @@ test "plan_mux reads a single-stream directory" {
       assert_eq(plan.pages[0].serial, 5U)
       assert_eq(plan.pages[plan.pages.length() - 1].granule_position, 960L)
     }
-    Err(msg) => abort(msg)
+    Err(msg) => abort(mux_fail_text(msg))
   }
   reset_test_dir(dir)
 }
@@ -280,7 +289,7 @@ test "plan_mux rejects empty and mixed layouts" {
   }
   match plan_mux(empty) {
     Ok(_) => assert_true(false)
-    Err(msg) => assert_true(msg.contains("没有包文件"))
+    Err(msg) => assert_true(mux_fail_text(msg).contains("没有包文件"))
   }
   reset_test_dir(empty)
 
@@ -298,7 +307,9 @@ test "plan_mux rejects empty and mixed layouts" {
   match plan_mux(mixed) {
     Ok(_) => assert_true(false)
     Err(msg) =>
-      assert_true(msg.contains("既有子目录又有散落的包文件"))
+      assert_true(
+        mux_fail_text(msg).contains("既有子目录又有散落的包文件"),
+      )
   }
   reset_test_dir(mixed)
 }
@@ -535,4 +546,47 @@ test "wav info rendering covers preserved chunks" {
         None => assert_true(false)
       }
   }
+}
+
+///|
+test "pages_byte_size counts per-page header and segment table" {
+  let packets : Array[@ogg.Packet] = [
+    { data: b"abc", granule_position: 0L, serial: 1U, },
+    { data: b"defgh", granule_position: 960L, serial: 1U, },
+  ]
+  let pages = @ogg.paginate(packets, 1U)
+  let mut expected = 0L
+  for p in pages {
+    expected = expected +
+      27L +
+      p.segments.length().to_int64() +
+      p.payload.length().to_int64()
+  }
+  assert_eq(pages_byte_size(pages), expected)
+}
+
+///|
+test "escape_controls renders control characters as hex" {
+  assert_eq(escape_controls("ok"), "ok")
+  assert_eq(escape_controls("a\nb"), "a\\x0Ab")
+  assert_eq(escape_controls("\u001b[0m"), "\\x1B[0m")
+  assert_eq(escape_controls("\u007f"), "\\x7F")
+}
+
+///|
+test "looks_like_packet_member only matches real packet members" {
+  assert_true(looks_like_packet_member("packet_000001.bin"))
+  assert_true(looks_like_packet_member("dir/manifest.txt"))
+  assert_true(looks_like_packet_member("PACKET~1.BIN"))
+  assert_true(looks_like_packet_member("MANIFE~1.TXT"))
+  // 8.3 短名的 "~" 后必须是数字，普通文件名不能误拒
+  assert_false(looks_like_packet_member("manife~abc.txt"))
+  assert_false(looks_like_packet_member("packet_000001.ogg"))
+  assert_false(looks_like_packet_member("notes.txt"))
+}
+
+///|
+test "version constant matches describe output" {
+  assert_true(@moonmux.MOONMUX_VERSION.length() > 0)
+  assert_eq(@moonmux.describe(), "moonmux " + @moonmux.MOONMUX_VERSION)
 }

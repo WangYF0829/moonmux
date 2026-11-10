@@ -318,8 +318,9 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
     Some(b) => b
     None => return Err("MP4 缺少 mdat")
   }
-  // 找第一条音频轨
+  // 找音频轨；多音轨必须拒绝，不能静默只解第一条
   let mut trak : BoxRef? = None
+  let mut audio_tracks = 0
   for b in boxes_in(data, moov.body, moov.next) {
     if b.fourcc == "trak" {
       match child(data, b, "mdia") {
@@ -327,6 +328,10 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
           match child(data, mdia, "hdlr") {
             Some(h) =>
               if h.body + 12 <= h.next && rd_fourcc(data, h.body + 8) == "soun" {
+                audio_tracks = audio_tracks + 1
+                if audio_tracks > 1 {
+                  return Err("MP4 含多条音频轨，只支持单音轨")
+                }
                 trak = Some(b)
               }
             None => ()
@@ -516,6 +521,14 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
       granule_position: cumulative,
       serial,
     })
+  }
+  // 输出聚合大小闸门：每包一页（27 字节头 + 段表 + 负载）
+  let mut out_size = 0L
+  for p in packets {
+    out_size = out_size + 27L + 1L + p.data.length().to_int64()
+  }
+  if out_size > 2147483647L {
+    return Err("解封装输出超过单文件 2 GiB 上限")
   }
   Ok(@ogg.serialize_pages(@ogg.paginate(packets, serial)))
 }

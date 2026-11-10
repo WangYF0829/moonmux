@@ -3,6 +3,39 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
+## [0.9.0] — 2026-11-10
+
+### 修复 / 补齐（第二轮：P2 + P3）
+- **MP4 写侧**：补 `edts/elst`（按 pre-skip 裁剪播放时间轴）与 `roll` 样本组；
+  末包粒度不推进时按 Ogg end-trim 裁掉多余样本；`mvhd/tkhd` 用裁剪后时长，
+  `mdhd` 保留媒体总样本数。
+- **MP4 读侧**：支持 64 位 `largesize` 并做边界检查；v1 时长字段钳到 Int32 上限；
+  多条音频轨显式拒绝（不再静默取第一条）。
+- **WAV**：浮点 WAV 写 `fact` 块（样本帧数）；解析拒绝重复 `fmt `/`data` 块。
+- **Ogg**：重同步候选加 version/头类型预筛、跳过伪页头并合并相邻 gap；
+  新增 `validate_page` / `serialize_pages_checked`，CLI 所有写命令改用校验入口；
+  `verify_page` 修正为「CRC 字段清零后再算」。
+- **CLI 契约**：错误/用法信息走 stderr（stdout 只留成功结果，`--json` 失败输出
+  `{"error":...}`）；`info` 增加 `parsed_bytes`/`truncated`；`dump --hex` 对损坏文件
+  仍输出整文件 hex；`extract --force` 允许幂等覆盖内容相同的输出；`--json`/`--hex`
+  可出现在路径前后；无参调用与用法错误统一退出 2；`tags` 对控制字符做 `\xNN` 转义；
+  `plan_mux` 用类型化错误分流（不再按中文文案猜退出码）；`chop` 的结构性限制预检。
+- **资源/边界**：聚合写命令（cat/mux/split/extract/tag/chop/remux/demux/to-wav）
+  在分配前做 2 GiB Int64 估算；`MOONMUX_MAX_PCM_MB` 非法值显式报错、上限改为 2048；
+  restore/commit/备份删除失败不再静默；`looks_like_packet_member` 收紧 8.3 短名。
+- **POSIX**：反斜杠不再当分隔符、`C:foo` 不再被误当作绝对路径。
+- **manifest**：拒绝重复 `serial/packets/chain` 头字段。
+- **CI/工程**：checkout 固定到 v4.2.2 SHA、工具链固定版本；文档-only 推送跳过 CI；
+  `install` job 轮询等待 mooncakes 发布；新增 Windows smoke job 与版本一致性断言脚本；
+  install_check 去掉 Python 依赖、smoke/安装脚本 `mktemp` 可移植；bench/fuzz 使用
+  唯一临时目录、区分启动失败与超时、fuzz 覆盖 remux。
+
+### 测试
+- 测试 **315 → 335**；覆盖率未覆盖行 **710**（Windows 实测；Linux ≈737，CI 门禁上限
+  730+20=750）。
+- 新增：MP4 edit list/roll/end-trim、largesize/duration、多音轨拒绝、WAV fact/重复块、
+  manifest 重复头、页校验、伪 `OggS` 洪泛、CLI 标志位置/版本一致性等回归。
+
 ## [0.8.0] — 2026-11-10
 
 ### 修复（独立审阅发现的正确性问题）
@@ -164,7 +197,7 @@ v0.2.0（GitHub Release；mooncakes.io 0.2.0 于 2026-11-06 发布）。
 - 页级补丁（`patch`）、时间区间裁剪（`chop`）、多逻辑流与链接流的 CLI 工具。
 - `info` / `verify` 的 `--json` 输出；`to-wav` 16/24 位；`dump --hex` 可逆十六进制转储。
 - 容器边界加固（截断/损坏/输出别名防护）、manifest 严格校验、退出码 0/1/2 约定。
-- 覆盖率非回归门禁、双平台 CI、确定性 fuzz、smoke 端到端（POSIX 42 项 / Windows 40 项）。
+- 覆盖率非回归门禁、双平台 CI、确定性 fuzz、smoke 端到端（POSIX 54 项）。
 
 ### 发布
 - GitHub Release `v0.2.0`；mooncakes.io `WangYF0829/moonmux@0.2.0`（build success，可 `moon add` 安装）。

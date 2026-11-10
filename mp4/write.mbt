@@ -97,6 +97,51 @@ fn tkhd_box(track_id : Int32, duration : Int32) -> Bytes {
 }
 
 ///|
+/// edts/elst：用 Edit List 把 pre-skip（priming）裁掉，播放时间轴从真实内容开始。
+///
+/// Opus-in-ISOBMFF 要求用 edit list 跳过 pre-skip；没有它，严格播放器会
+/// 把 priming 也播出来（开头多几毫秒静音/杂音），ffprobe 的容器时长也会偏大。
+fn edts_box(pre_skip : Int32, content_samples : Int32) -> Bytes {
+  let body = Buffer(size_hint=12)
+  push_u32_be(body, 1) // entry_count
+  let seg_duration = ((content_samples.to_int64() * 1000L + 47999L) / 48000L).to_int()
+  push_u32_be(body, seg_duration) // segment_duration（movie timescale = 1000）
+  push_u32_be(body, pre_skip) // media_time（media timescale = 48000）
+  push_u16_be(body, 1) // media_rate_integer
+  push_u16_be(body, 0) // media_rate_fraction
+  let elst = full_box("elst", 0, 0, body.to_bytes())
+  box("edts", elst)
+}
+
+///|
+/// roll 样本组：告诉播放器随机访问某个样本前要先解码多少 pre-roll 样本。
+///
+/// Opus-in-ISOBMFF 规范要求 `roll` 组；缺省时 seek 到中间样本可能丢掉
+/// 开头若干样本（解码器状态不足）。这里把所有样本放进一个组。
+fn roll_group_boxes(pre_skip : Int32, sample_count : Int32) -> Bytes {
+  let roll = if pre_skip <= 0 {
+    0
+  } else if pre_skip > 32767 {
+    -32767
+  } else {
+    -pre_skip
+  }
+  let sgpd_body = Buffer(size_hint=14)
+  push_fourcc(sgpd_body, "roll")
+  push_u32_be(sgpd_body, 2) // default_sample_description_index? 不：version1 下是 default_length
+  push_u32_be(sgpd_body, 1) // entry_count
+  push_u16_be(sgpd_body, roll & 0xFFFF) // roll_distance（int16，负值 = 需要 pre-roll）
+  let sgpd = full_box("sgpd", 1, 0, sgpd_body.to_bytes())
+  let sbgp_body = Buffer(size_hint=16)
+  push_fourcc(sbgp_body, "roll")
+  push_u32_be(sbgp_body, 1) // entry_count
+  push_u32_be(sbgp_body, sample_count)
+  push_u32_be(sbgp_body, 1) // group_description_index
+  let sbgp = full_box("sbgp", 0, 0, sbgp_body.to_bytes())
+  concat([sgpd, sbgp])
+}
+
+///|
 /// mdhd：媒体头（媒体时间轴与媒体时长）。
 fn mdhd_box(timescale : Int32, duration : Int32) -> Bytes {
   let body = Buffer(size_hint=24)
@@ -258,14 +303,24 @@ fn stco_box(offset : Int32) -> Bytes {
 
 ///|
 /// 组装完整 moov。
+///
+/// `total_samples` 是媒体时间轴的总样本数（含 priming）；movie 时间轴与
+/// tkhd/mvhd 的时长用裁剪后的内容样本数（total − pre_skip），并用 edts/elst
+/// 指明从媒体时间轴的 pre_skip 处开始播放。
 fn moov_box(
   opus_head : Bytes,
   total_samples : Int32,
-  movie_duration : Int32,
+  pre_skip : Int32,
   runs : Array[(Int32, Int32)],
   sizes : Array[Int32],
   chunk_offset : Int32,
 ) -> Bytes {
+  let content_samples = if total_samples > pre_skip {
+    total_samples - pre_skip
+  } else {
+    0
+  }
+  let movie_duration = ((content_samples.to_int64() * 1000L + 47999L) / 48000L).to_int()
   let mvhd = mvhd_box(1000, movie_duration)
   let tkhd = tkhd_box(1, movie_duration)
   let mdhd = mdhd_box(48000, total_samples)
@@ -278,11 +333,13 @@ fn moov_box(
       stsc_box(sizes.length()),
       stsz_box(sizes),
       stco_box(chunk_offset),
+      roll_group_boxes(pre_skip, sizes.length()),
     ]),
   )
   let minf = box("minf", concat([smhd_box(), dinf_box(), stbl]))
   let mdia = box("mdia", concat([mdhd, hdlr, minf]))
-  let trak = box("trak", concat([tkhd, mdia]))
+  let edts = edts_box(pre_skip, content_samples)
+  let trak = box("trak", concat([tkhd, edts, mdia]))
   box("moov", concat([mvhd, trak]))
 }
 
@@ -335,23 +392,23 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
       )
   }
   let opus_head = stream.packets[0].data
-  match @codec.parse_opus_head(opus_head) {
+  let pre_skip = match @codec.parse_opus_head(opus_head) {
     None => return Err("OpusHead 解析失败")
-    Some(_) => ()
+    Some(info) => info.pre_skip
   }
+  let datas : Array[Bytes] = []
   let sizes : Array[Int32] = []
   let deltas : Array[Int32] = []
   let mut total_samples = 0
-  let mdat = Buffer()
   let mut i = 2
   while i < stream.packets.length() {
     let pkt = stream.packets[i]
     match @codec.opus_packet_samples(pkt.data) {
       Ok(samples) => {
+        datas.push(pkt.data)
         sizes.push(pkt.data.length())
         deltas.push(samples)
         total_samples = total_samples + samples
-        mdat.write_bytes(pkt.data.exact_view())
       }
       Err(msg) =>
         return Err(
@@ -362,6 +419,33 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
   }
   if sizes.length() == 0 || total_samples == 0 {
     return Err("Opus 流没有可封装的音频包")
+  }
+  // Ogg 侧的末粒度可能小于「所有包时长之和」：尾包带着 end-trim 信息，
+  // 多出来的样本不应写进 MP4（否则容器时长偏大、to-ogg 回读也会多出样本）。
+  // 用末页粒度作为解码样本总数，从末尾按包裁掉多余部分。
+  let last_index = stream.packets.length() - 1
+  let last_granule = stream.packets[last_index].granule_position
+  let expected_total = if last_granule >= 0L && last_granule <= 2147483647L {
+    last_granule.to_int()
+  } else {
+    total_samples
+  }
+  while total_samples > expected_total && datas.length() > 0 {
+    let last = datas.length() - 1
+    let d = deltas[last]
+    let excess = total_samples - expected_total
+    if d <= excess {
+      ignore(datas.pop())
+      ignore(sizes.pop())
+      ignore(deltas.pop())
+      total_samples = total_samples - d
+    } else {
+      deltas[last] = d - excess
+      total_samples = expected_total
+    }
+  }
+  if sizes.length() == 0 || total_samples <= 0 {
+    return Err("Opus 流没有可封装的音频包（end-trim 后为空）")
   }
   // 把连续相同的样本时长合并成 stts 的 run
   let runs : Array[(Int32, Int32)] = []
@@ -374,13 +458,23 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
     runs.push((k - j, deltas[j]))
     j = k
   }
+  let mdat = Buffer()
+  for d in datas {
+    mdat.write_bytes(d.exact_view())
+  }
   let ftyp = ftyp_box("M4A ", 0, ["M4A ", "isom", "iso2", "mp41"])
   let mdat_bytes = box("mdat", mdat.to_bytes())
   let chunk_offset = ftyp.length() + 8
-  let movie_duration = ((total_samples.to_int64() * 1000L + 47999L) / 48000L).to_int()
   let moov = moov_box(
-    opus_head, total_samples, movie_duration, runs, sizes, chunk_offset,
+    opus_head, total_samples, pre_skip, runs, sizes, chunk_offset,
   )
+  // 容器层同样受单文件 2 GiB 限制：ftyp/mdat/moov 三个长度相加可能溢出 Int32
+  let total_len = ftyp.length().to_int64() +
+    mdat_bytes.length().to_int64() +
+    moov.length().to_int64()
+  if total_len > 2147483647L {
+    return Err("生成的 MP4 超过单文件 2 GiB 上限")
+  }
   let file = concat([ftyp, mdat_bytes, moov])
   // 自检：自己写得对不对，先用自己的读侧过一遍
   match inspect(file) {

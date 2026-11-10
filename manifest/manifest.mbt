@@ -238,6 +238,9 @@ pub fn parse(text : String) -> Result[Manifest, String] {
             if c.to_int() == 35 {
               // 注释行：可能是头部字段，也可能是版本行
               if line.contains("moonmux manifest") {
+                if has_version {
+                  return Err("清单的版本行重复")
+                }
                 has_version = true
               }
               match parse_header(line) {
@@ -252,6 +255,9 @@ pub fn parse(text : String) -> Result[Manifest, String] {
                       )
                     Some(v) =>
                       if key == "serial" {
+                        if serial is Some(_) {
+                          return Err("清单的 serial 头部字段重复")
+                        }
                         if v < 0L {
                           return Err("清单的 serial 不能为负：" + line)
                         }
@@ -264,6 +270,9 @@ pub fn parse(text : String) -> Result[Manifest, String] {
                         }
                         serial = Some(v.reinterpret_as_uint64().to_uint())
                       } else if key == "packets" {
+                        if packets is Some(_) {
+                          return Err("清单的 packets 头部字段重复")
+                        }
                         if v < 0L || v > 2147483647L {
                           return Err(
                             "清单的 packets 超出 32 位非负整数范围：" +
@@ -272,6 +281,9 @@ pub fn parse(text : String) -> Result[Manifest, String] {
                         }
                         packets = Some(v.to_int())
                       } else if key == "chain" {
+                        if chain is Some(_) {
+                          return Err("清单的 chain 头部字段重复")
+                        }
                         if v < 1L || v > 2147483647L {
                           return Err(
                             "清单的 chain 必须是 1..2147483647 的整数：" +

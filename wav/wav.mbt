@@ -300,7 +300,10 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
       return None
     }
     if tag_is(bytes, pos, 0x66, 0x6D, 0x74, 0x20) {
-      // "fmt "
+      // "fmt "：重复的 fmt 块是歧义文件（不同解析器可能取不同块），拒绝
+      if format is Some(_) {
+        return None
+      }
       match parse_fmt_chunk(bytes, body, size) {
         Some(parsed) => {
           format = Some(parsed)
@@ -311,7 +314,11 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
         None => return None
       }
     } else if tag_is(bytes, pos, 0x64, 0x61, 0x74, 0x61) {
-      // "data"。经过上面的边界检查后 size 必然小于等于文件长度，
+      // "data"：重复的 data 块同样拒绝（静默取最后一个会丢前一段音频）
+      if pcm is Some(_) {
+        return None
+      }
+      // 经过上面的边界检查后 size 必然小于等于文件长度，
       // 此时转回 Int 是安全的。
       let n = size.to_int()
       let acc = Buffer()
@@ -491,16 +498,25 @@ pub fn encode_wav_ex(
     return Ok(encode_wav(format, data))
   }
   // 其余走 WAVE_FORMAT_EXTENSIBLE：40 字节 fmt、tag 0xFFFE、validBits = 位深、
-  // channelMask = 0、SubFormat GUID 区分 PCM/浮点；不写 fact 块。
+  // channelMask = 0、SubFormat GUID 区分 PCM/浮点。
+  // 浮点（非 PCM）必须带 fact 块声明样本帧数（Microsoft RIFF/WAVE 规范）。
+  let needs_fact = match sample_format {
+    Float => true
+    Int => false
+  }
+  let fact_frames = data.length() / block_align
+  let fact_bytes = if needs_fact { 12 } else { 0 }
   let pad = data.length() % 2
-  let buf = Buffer(size_hint=68 + data.length() + pad)
+  let buf = Buffer(size_hint=68 + fact_bytes + data.length() + pad)
   // "RIFF"
   buf.write_byte((0x52 : Byte))
   buf.write_byte((0x49 : Byte))
   buf.write_byte((0x46 : Byte))
   buf.write_byte((0x46 : Byte))
-  // 文件总长减 8：4("WAVE") + 8+40(fmt) + 8(data 头) + data + pad
-  buf.write_uint_le((60 + data.length() + pad).reinterpret_as_uint())
+  // 文件总长减 8：4("WAVE") + 8+40(fmt) + fact(浮点) + 8(data 头) + data + pad
+  buf.write_uint_le(
+    (60 + fact_bytes + data.length() + pad).reinterpret_as_uint(),
+  )
   // "WAVE"
   buf.write_byte((0x57 : Byte))
   buf.write_byte((0x41 : Byte))
@@ -548,6 +564,12 @@ pub fn encode_wav_ex(
   buf.write_byte((0x38 : Byte))
   buf.write_byte((0x9B : Byte))
   buf.write_byte((0x71 : Byte))
+  // "fact" + 样本帧数（浮点 WAV 必须声明；PCM 不写）
+  if needs_fact {
+    buf.write_bytes(b"fact".exact_view())
+    buf.write_uint_le(4U)
+    buf.write_uint_le(fact_frames.reinterpret_as_uint())
+  }
   // "data"
   buf.write_byte((0x64 : Byte))
   buf.write_byte((0x61 : Byte))
@@ -705,12 +727,26 @@ fn encode_wav_layout(
     )
   }
   let mut chunks_size = 0
+  let mut has_fact_chunk = false
   for c in chunks {
     if c.fourcc.length() != 4 {
       return Err("扩展块 fourcc 必须是 4 个字符: " + c.fourcc)
     }
+    if c.fourcc == "fact" {
+      has_fact_chunk = true
+    }
     chunks_size = chunks_size + 8 + c.data.length() + c.data.length() % 2
   }
+  // 浮点 WAV 必须带 fact 块；解析回来的文件用原始 chunks 保真，不再合成。
+  let needs_fact = match sample_format {
+    Float =>
+      match fmt_payload {
+        None => !has_fact_chunk
+        Some(_) => false
+      }
+    Int => false
+  }
+  let fact_size = if needs_fact { 8 + 4 } else { 0 }
   // 简单布局只在「整数 + <=2 声道 + <=16 位 + 容器=有效位深」时使用，
   // 保证与 `encode_wav` 逐字节一致；扩展块不影响 fmt 布局。
   let simple = match sample_format {
@@ -734,7 +770,13 @@ fn encode_wav_layout(
   }
   let pad = data.length() % 2
   // 文件总长 = RIFF 头(8) + "WAVE"(4) + fmt 块 + 扩展块 + data 块 + padding
-  let total = 12 + (8 + fmt_size) + chunks_size + 8 + data.length() + pad
+  let total = 12 +
+    (8 + fmt_size) +
+    fact_size +
+    chunks_size +
+    8 +
+    data.length() +
+    pad
   let buf = Buffer(size_hint=total)
   // "RIFF" + 文件长度-8（"WAVE" 起算）
   buf.write_byte((0x52 : Byte))
@@ -793,6 +835,13 @@ fn encode_wav_layout(
         buf.write_byte((0x9B : Byte))
         buf.write_byte((0x71 : Byte))
       }
+  }
+  if needs_fact {
+    let fact_payload = Buffer(size_hint=4)
+    fact_payload.write_uint_le(
+      (data.length() / block_align).reinterpret_as_uint(),
+    )
+    write_riff_chunk(buf, "fact", fact_payload.to_bytes())
   }
   // data 之前的扩展块
   for c in chunks {

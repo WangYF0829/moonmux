@@ -17,8 +17,7 @@
 // 失败时打印复现信息（种子、迭代号、变异文件保留在 --keep 目录）。
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -48,9 +47,8 @@ if (!BIN) {
   process.exit(2);
 }
 
-const TMP = join(ROOT, "_build", "fuzz-tmp");
-rmSync(TMP, { recursive: true, force: true });
-mkdirSync(TMP, { recursive: true });
+mkdirSync(join(ROOT, "_build"), { recursive: true });
+const TMP = mkdtempSync(join(ROOT, "_build", "fuzz-"));
 process.on("exit", () => {
   if (!KEEP) rmSync(TMP, { recursive: true, force: true });
   else console.error(`保留变异样本目录: ${TMP}`);
@@ -76,6 +74,7 @@ const randRange = (a, b) => a + randInt(Math.max(1, b - a));
 
 function gen(args2, out) {
   const r = spawnSync(BIN, [...args2, out], { encoding: "utf8", timeout: TIMEOUT_MS });
+  if (r.error) throw new Error(`启动 CLI 失败: ${r.error.message}`);
   if (r.status !== 0) throw new Error(`生成种子失败: ${args2.join(" ")}`);
   return readFileSync(out);
 }
@@ -84,7 +83,7 @@ const seeds = [];
 function addSeed(name, bytes, commands) {
   seeds.push({ name, bytes, commands });
 }
-addSeed("ogg-opus", readFileSync(join(ROOT, "testdata/opus_sample.opus")), ["info", "verify", "seek0", "dump"]);
+addSeed("ogg-opus", readFileSync(join(ROOT, "testdata/opus_sample.opus")), ["info", "verify", "seek0", "dump", "remux"]);
 addSeed("ogg-vorbis", readFileSync(join(ROOT, "testdata/vorbis_sample.ogg")), ["info", "verify", "seek0", "dump"]);
 const m4a = gen(["remux", join(ROOT, "testdata/opus_sample.opus")], join(TMP, "seed.m4a"));
 addSeed("mp4-opus", m4a, ["info", "to-ogg"]);
@@ -159,6 +158,8 @@ function commandArgs(name, file, outPath) {
       return ["dump", file];
     case "to-ogg":
       return ["to-ogg", file, outPath];
+    case "remux":
+      return ["remux", file, outPath];
     default:
       throw new Error(`未知命令 ${name}`);
   }
@@ -180,8 +181,17 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
   const r = spawnSync(BIN, commandArgs(cmd, file, out), { encoding: "utf8", timeout: TIMEOUT_MS });
   runs++;
   const status = r.status;
-  if (r.error?.code === "ETIMEDOUT" || status === null) {
+  if (r.error && r.error.code !== "ETIMEDOUT") {
+    // 二进制不存在/不可执行等启动失败，不能伪装成「超时」
+    failures.push({ iter, seed: seed.name, cmd, reason: "启动失败: " + r.error.message });
+    continue;
+  }
+  if (r.error?.code === "ETIMEDOUT" || (status === null && r.signal)) {
     failures.push({ iter, seed: seed.name, cmd, reason: "超时/被信号杀死", signal: r.signal });
+    continue;
+  }
+  if (status === null) {
+    failures.push({ iter, seed: seed.name, cmd, reason: "进程未启动（status=null）" });
     continue;
   }
   if (status === 0) {

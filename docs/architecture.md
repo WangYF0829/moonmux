@@ -1,7 +1,7 @@
 # moonmux 架构与设计说明
 
 > 本文回答「项目怎么组织、关键不变量是什么、为什么这样取舍」，供评审与后续维护者阅读。
-> 版本：v0.8.0（2026-11-10；审阅问题修复）。
+> 版本：v0.9.0（2026-11-10；第二轮正确性/契约修复）。
 
 ## 1. 目标与非目标
 
@@ -68,7 +68,7 @@ moov
 
 - `ftyp + mdat + moov` 布局使 `stco` 偏移在写 `moov` 前确定（`ftyp` 长度 + 8），无需回填。
 - 每个 Opus 包 = 一个 MP4 样本；样本时长由 TOC（RFC 6716）计算：SILK 10/20/40/60 ms、Hybrid 10/20 ms、CELT 2.5/5/10/20 ms。
-- `dOps` 字段来自 `OpusHead`（pre-skip、输入采样率、声道数、声道映射）。
+- `dOps` 字段来自 `OpusHead`（pre-skip、输入采样率、声道数、声道映射、OutputGain）。\n- 末包粒度不推进时按 Ogg end-trim 裁掉多余样本；`edts/elst` 负责把 pre-skip 从播放时间轴裁掉，`roll` 组声明随机访问的 pre-roll 样本数。
 - 自检：`remux` 产出后立即用 `mp4::inspect` 读回，失败即报错；外部再用 ffprobe / ffmpeg 对账（`scripts/verify_mp4.sh`）。
 
 ## 4.1 MP4 解封装（v0.5.0）
@@ -81,25 +81,25 @@ mdat → 按 chunk 切出样本（= Opus 包）
 ```
 
 - 输出 OpusHead 由 dOps 重建；OpusTags 为最小合成标签（MP4 写侧没有保存注释）；
-- granule = pre-skip + 累计样本时长（stts 的 mdhd timescale 必须为 48000）；
+- granule = 累计解码样本数（PCM position = granule − pre-skip；stts 的 mdhd timescale 必须为 48000）；
 - 坏表防御：所有 `st*` 表读取做长度/计数/递增/越界检查，错误返回中文原因而不是崩溃。
 
 ## 5. 测试策略
 
 | 层 | 手段 |
 |---|---|
-| 单元/白盒 | 299 个 `moon test`（页/包/CRC/清单/转码/box/Mp4 往返与解封装/CLI 解析/WAV 全格式/流式页读取），含真实 Ogg 文件的逐页 CRC 断言 |
+| 单元/白盒 | 335 个 `moon test`（页/包/CRC/清单/转码/box/Mp4 往返与解封装/CLI 解析/WAV 全格式/流式页读取），含真实 Ogg 文件的逐页 CRC 断言 |
 | 合成流闭环 | 合成 OpusHead+OpusTags+音频包 → Ogg → remux → inspect 读回（`mp4/mp4_wbtest.mbt`） |
 | 外部对账 | `scripts/verify_mp4.sh`：真实样本 remux 后 ffprobe 断言编码/声道/采样率/时长，ffmpeg 解码无错 |
 | 端到端 | `scripts/smoke.sh`：CLI 往返逐字节、退出码、边界输入、MP4/remux 项 |
 | 可安装性 | `scripts/install_check.sh`：干净工程 `moon add` → 调用公开 API → 运行 |
 | 性能基准 | `scripts/bench.mjs`（release native，端到端计时，含进程启动；CI `bench` job 记录到 job summary，不设阈值） |
 | 变异测试 | `scripts/fuzz.mjs`（真实样本 × 6 类变异，断言退出码 0/1/2、无超时/崩溃；CI `fuzz` job 固定种子 400 次）+ 各包 `*_fuzz_wbtest.mbt` 确定性用例 |
-| 门禁 | CI：`check --deny-warn`、`fmt --check`、`info`、双平台测试、覆盖率非回归、native smoke、mp4 verify、install、bench、fuzz |
+| 门禁 | CI：`check --deny-warn`、`fmt --check`、`info`、双平台测试、覆盖率非回归、native/Windows smoke、mp4 verify、install（等待发布）、bench、fuzz、版本一致性、固定工具链 |
 
 ## 6. 已知边界与下一期候选
 
-- 2 GiB 文件上限（`Int` 32 位 + `@fs` 整文件 API）；v0.4.0 起提供流式**解析**，尚无流式**写**接口。
-- MP4 仅 Opus 单音轨；Vorbis-in-MP4 明确不做。
+- 2 GiB 文件上限（`Int` 32 位 + `@fs` 整文件 API）；聚合写命令在分配前做 Int64 估算。v0.4.0 起提供流式**解析**；`WavWriter` 是内存内增量接口。
+- MP4 仅 Opus 单音轨；Vorbis-in-MP4 明确不做；不做章节/多轨编辑。\n- `extract` 默认拒绝「输出与输入内容相同」的别名；可用 `--force` 显式允许幂等覆盖（仍拒绝同一路径）。
 - 基准与变异测试走 Node 脚本（可复现、无第三方依赖），尚未接入性能回归阈值与 libFuzzer/AFL 覆盖率引导。
 - 下一期候选：无。容器层读写、MP4 写/解封装、WAV 全格式/块保真/流式写、基准与变异测试均已落地；明确不做 Vorbis-in-MP4 与多音轨 MP4。

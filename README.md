@@ -4,15 +4,15 @@
 
 [![CI](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml/badge.svg)](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-315%20passing-brightgreen.svg)](#构建与测试)
-[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
-[![mooncakes](https://img.shields.io/badge/mooncakes-0.8.0-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
+[![Tests](https://img.shields.io/badge/tests-335%20passing-brightgreen.svg)](#构建与测试)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
+[![mooncakes](https://img.shields.io/badge/mooncakes-0.9.0-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
 
 纯 MoonBit 实现的音频容器工具包，补上 MoonBit 生态中「能解码、不能封装」的最后一环。
 
 ## 2026-11 更新（v0.8.0）
 
-项目当前版本 **v0.8.0**（2026-11-10，正确性修复版）。主要能力与发布里程碑：
+项目当前版本 **v0.9.0**（2026-11-10，第二轮正确性/契约修复版）。主要能力与发布里程碑：
 
 | 项 | 状态 |
 |---|---|
@@ -28,9 +28,10 @@
 | **WAV 块保真**：LIST/fact 等扩展块原样保留，`WavFile::to_bytes` 逐字节还原（含 24-in-4 容器与 channelMask） | **已完成（v0.7.0）** |
 | **流式写接口 `WavWriter`**：增量追加 PCM、可选扩展块，`finish` 生成 WAV | **已完成（v0.7.0）** |
 | **正确性修复（v0.8.0）**：remux 输入闸门 + 拒绝链式/多流、MP4 读侧防越界 panic、stsz 定长样本与样本偏移上界、多声道 OpusHead `StreamCount/CoupledCount`、MP4→Ogg granule 语义、dOps OutputGain 透传、头包页隔离、跨页包替换、WAV 原始 fmt 布局保真、manifest/mux 自检 | **已完成（v0.8.0）** |
-| 测试 / 示例 / 文档 / CHANGELOG / **v0.8.0 发布（mooncakes + GitHub Release）** | **已完成** |
+| **第二轮正确性/契约修复（v0.9.0）**：MP4 写侧补 `edts/elst` + `roll` 样本组与 end-trim、WAV 浮点 `fact` 块与重复块拒绝、Ogg 头包预筛重同步 + 页校验序列化、CLI 诊断走 stderr / JSON 错误对象 / `--hex` 宽容 / 提取 `--force` / 选项任意位置 / tags 控制字符转义、2 GiB 聚合闸门、PCM 预算显式校验、POSIX 路径与 8.3 短名、manifest 重复头拒绝 | **已完成（v0.9.0）** |
+| 测试 / 示例 / 文档 / CHANGELOG / **v0.9.0 发布（mooncakes + GitHub Release）** | **已完成** |
 
-- **已可用（最新发布 v0.8.0）**：`moon add WangYF0829/moonmux` 安装 **v0.8.0**（2026-11-10 正确性修复版：remux 输入闸门、MP4 读侧防崩溃、stsz/偏移上界、多声道 OpusHead、granule 语义、dOps gain、头包页隔离、跨页包替换、WAV fmt 布局保真等；此前 v0.7.x 提供 WAV 块保真与 `WavWriter`，v0.6.0 性能基准与变异测试，v0.5.0 `to-ogg` 解封装，v0.4.0 WAV 全格式与流式页读取）。
+- **已可用（最新发布 v0.9.0）**：`moon add WangYF0829/moonmux` 安装 **v0.9.0**（2026-11-10 正确性修复版：remux 输入闸门、MP4 读侧防崩溃、stsz/偏移上界、多声道 OpusHead、granule 语义、dOps gain、头包页隔离、跨页包替换、WAV fmt 布局保真等；此前 v0.7.x 提供 WAV 块保真与 `WavWriter`，v0.6.0 性能基准与变异测试，v0.5.0 `to-ogg` 解封装，v0.4.0 WAV 全格式与流式页读取）。
 - 变更明细见 [CHANGELOG.md](CHANGELOG.md)。
 
 
@@ -68,7 +69,7 @@ moonmux 补的就是最后两行。
 
 ## 作为库使用
 
-模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）并发布 **0.8.0**（2026-11-10；0.2.0 于 2026-11-06 首发）：
+模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）并发布 **0.9.0**（2026-11-10；0.2.0 于 2026-11-06 首发）：
 
 ```bash
 moon add WangYF0829/moonmux
@@ -123,26 +124,27 @@ v0.4.0 新增库 API：`@ogg.PageReader` / `@ogg.for_each_page_chunked`（增量
 `mux` 还会把已有输出与实际读取的每个包/清单做身份比较，拦截目录外任意文件名的硬链接别名。
 写命令面向单写者：不要并发写同一个输出文件。
 
-**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav` / `chop`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（POSIX 54 项，覆盖往返、退出码、截断、清单异常、FIFO 与输出别名防护）。
+**错误与用法信息统一走 stderr**（stdout 只留成功结果；`--json` 命令失败时输出 `{"error":...}`）。**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav` / `chop`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（POSIX 54 项，覆盖往返、退出码、截断、清单异常、FIFO 与输出别名防护）。
 
 ## 能力边界
 
 | 项 | 上限 | 原因 |
 |---|---|---|
-| 单文件大小 | **2 GiB** | MoonBit `Int` 是 32 位，页偏移与长度都用它；`@fs` 也只有整文件 API |
+| 单文件大小 | **2 GiB** | MoonBit `Int` 是 32 位，页偏移与长度都用它；`@fs` 也只有整文件 API；聚合写命令在分配前显式估算并拒绝越界 |
 | MP4 写侧 | 仅 **Opus-in-MP4**、单音轨、单 chunk | 只补 Opus；Vorbis-in-MP4 非主流且需解析 Vorbis setup，明确不做；`remux` 只接受 Ogg Opus 输入 |
 | MP4 读侧 | 仅解封装 **Opus-in-MP4**（单音轨、`mdhd` timescale=48000） | `to-ogg` 是 `remux` 的逆操作；注释不随 MP4 保存，输出使用最小 OpusTags |
 | `demux` 包数 | **999999** | 包文件名固定 6 位，超过后字典序错乱、`mux` 读回顺序不对 |
-| `to-wav` PCM 预算 | **256 MiB**（`MOONMUX_MAX_PCM_MB` 可调大） | 整条链路没有流式写接口，PCM 必须攒齐再落盘；实测峰值约为预算的 3–4 倍。外部解码器一次返回整段 PCM，恶意伪造的 granule 仍可能造成超出预算的瞬时分配 |
+| `to-wav` PCM 预算 | **256 MiB**（`MOONMUX_MAX_PCM_MB` 可调，1..2048） | 整条链路没有流式写接口，PCM 必须攒齐再落盘；实测峰值约为预算的 3–4 倍。外部解码器一次返回整段 PCM，恶意伪造的 granule 仍可能造成超出预算的瞬时分配 |
 | `chop` Opus 时间戳 | 页精度，约 ±1 页 | 不重写 OpusHead 的 pre-skip；裁剪后首个数据页可能多带不到一页的前导样本 |
 | `to-wav` 速度 | Opus 约 30× 实时（6.02 s 音频 ≈0.2 s）；**Vorbis 1.0 s 音频约需 60–70 s** | 纯 MoonBit 解码器；Vorbis 路径明显更慢，长文件请先 `split`（release native / Windows x64 实测） |
 | chained 拆分 | 整段都由单页流组成时无法拆分 | 与「一段内交织两条单页流」字节相同，规格上不可判定（保守不切） |
 | 裁剪流时长 | 上界 | 容器层拿不到首个音频页的样本数，精确值需解码 |
-| MP4 编辑列表 | 不写 `edts/elst` 与 `roll` 组 | Opus-in-ISOBMFF 规范建议写，但工作量大；容器时长含 priming（约 pre-skip），严格播放器开头可能带几毫秒 priming；`to-ogg` 仍逐包还原、音频数据无损 |
+| MP4 编辑列表 | 已写 `edts/elst`（pre-skip 裁剪）与 `roll` 样本组 | 不做章节/多轨编辑；`mdhd` 保留总样本数，`mvhd/tkhd` 用裁剪后时长 |
 | `remux` 输入 | 单段、单逻辑流 Ogg | 链式/多流输入显式拒绝（exit 1），不再静默只取第一段 |
 | `PageReader` 重同步 | 无候选步进上限 | 大量伪造 `OggS` 的恶意输入可能造成 CPU / `gaps` 放大；普通文件不受影响 |
-| 写侧公开 API | 由调用方保证 `Page` 合法 | `Page` 是 `pub(all)`，段值 >255 等非法构造会在序列化时按字节截断；库用户需先用 `structure_findings` 校验 |
+| 写侧公开 API | `serialize_pages_checked` / `validate_page` 可用 | CLI 写命令已全部走校验入口；库用户直接调用 `serialize_pages` 时仍需自行保证 `Page` 合法 |
 | WAV 块保真布局 | fmt 在 data 之前、扩展块在 fmt 之后的标准布局 | 原始 fmt 与扩展块逐字节写回；fmt 之前出现未知块或非零填充字节的极端布局会按语义规范化（扩展块保留、采样数据无损） |
+| `extract` 幂等重跑 | 需显式 `--force` | 输出与输入内容相同（单流文件抽自己）时默认按别名保护拒绝；`--force` 跳过内容比较（仍拒绝同一路径），可用于幂等重跑 |
 
 内存量级（实测，19 MB / 300 段输入）：`info` 约 2.5×、`verify` 约 2.6×、`cat`/`mux` 约 3.5×；
 `to-wav` 还要叠加解码器的 Double PCM（约 4–5× 输出）。所有命令整文件读入，没有流式写接口。
@@ -349,21 +351,21 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 
 ## 开发状态
 
-当前最新版本为 **v0.8.0**（2026-11-10，正确性修复）。版本历程：v0.2.0（2026-10-23）→ v0.3.0–v0.3.2（2026-11-07：MP4 写入、`remux`、CRC 查表）→ v0.4.0（2026-11-09：WAV 全格式与流式页读取）→ v0.5.0（2026-11-09：MP4 → Ogg 解封装 `to-ogg`）→ v0.6.0（2026-11-09：性能基准与变异测试）→ v0.7.0（2026-11-09：WAV 块保真与 `WavWriter`）→ v0.7.1（2026-11-09：文档同步）→ v0.8.0（2026-11-10：审阅问题修复）。
+当前最新版本为 **v0.9.0**（2026-11-10，正确性/契约修复）。版本历程：v0.2.0（2026-10-23）→ v0.3.0–v0.3.2（2026-11-07：MP4 写入、`remux`、CRC 查表）→ v0.4.0（2026-11-09：WAV 全格式与流式页读取）→ v0.5.0（2026-11-09：MP4 → Ogg 解封装 `to-ogg`）→ v0.6.0（2026-11-09：性能基准与变异测试）→ v0.7.0（2026-11-09：WAV 块保真与 `WavWriter`）→ v0.7.1（2026-11-09：文档同步）→ v0.8.0（2026-11-10：审阅问题修复）→ v0.9.0（2026-11-10：第二轮修复）。
 
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测）、**MP4/ISOBMFF 写入（Opus-in-MP4，`remux`）与解封装（`to-ogg`）**，
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` / `chop` / `remux` / `to-ogg` 十五个子命令，
-315 个测试通过（Windows native 实测；CI 在 ubuntu/windows 上运行），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+335 个测试通过（Windows native 实测；CI 在 ubuntu/windows 上运行），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）、转码验证、Ogg→MP4 外部工具（ffprobe/ffmpeg）对账与 MP4→Ogg 逐包还原验证。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`native` / `wasm-gc` 双后端；
-315 个测试、POSIX 端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
+335 个测试、POSIX 端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
 `scripts/verify_mp4.sh`（ffprobe/ffmpeg 外部对账）、`scripts/install_check.sh`（干净工程 `moon add` 复验）、`scripts/bench.mjs`（性能基准）、`scripts/fuzz.mjs`（确定性变异测试）、
 GitHub Actions CI（ubuntu + windows 矩阵，外加覆盖率非回归门禁与 native 冒烟）。
-变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.0 / v0.3.1 / v0.3.2 / v0.4.0 / v0.5.0 / v0.6.0 / v0.7.0 / v0.7.1 / v0.8.0）。
+变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.0 / v0.3.1 / v0.3.2 / v0.4.0 / v0.5.0 / v0.6.0 / v0.7.0 / v0.7.1 / v0.8.0 / v0.9.0）。
 
-主要新增能力（v0.3.0–v0.8.0）：MP4 / ISOBMFF 封装（Opus-in-MP4）与 `remux`、MP4 → Ogg 解封装 `to-ogg`（读写闭环）；CRC-32 查表优化；WAV 全格式兼容（IEEE float / Extensible / 24-in-4）与增量流式页读取；性能基准与确定性变异测试；WAV 块保真与流式写接口 `WavWriter`；以及 v0.8.0 的 Opus TOC / remux 闸门 / MP4 读侧 / stsz / 多声道头 / granule / dOps gain / 头包页隔离 / 跨页替换 / WAV fmt 布局等正确性修复。
+主要新增能力（v0.3.0–v0.9.0）：MP4 / ISOBMFF 封装（Opus-in-MP4）与 `remux`、MP4 → Ogg 解封装 `to-ogg`（读写闭环）；CRC-32 查表优化；WAV 全格式兼容（IEEE float / Extensible / 24-in-4）与增量流式页读取；性能基准与确定性变异测试；WAV 块保真与流式写接口 `WavWriter`；以及 v0.8.0 的 Opus TOC / remux 闸门 / MP4 读侧 / stsz / 多声道头 / granule / dOps gain / 头包页隔离 / 跨页替换 / WAV fmt 布局等正确性修复。
 仍不做：WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器，边界与原因见上）。
 
 ## 许可证

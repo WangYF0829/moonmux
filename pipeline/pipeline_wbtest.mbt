@@ -232,3 +232,44 @@ test "24-bit sample writer clamps and packs three bytes" {
   assert_eq([b[6], b[7], b[8]], [0x00, 0x00, 0x00].map(fn(x) { x.to_byte() }))
   assert_eq([b[9], b[10], b[11]], [0xFF, 0xFF, 0x7F].map(fn(x) { x.to_byte() }))
 }
+
+///|
+test "pipeline rejects bad page lists and budgets" {
+  // 空页
+  match ogg_to_wav_pages([], 1048576L) {
+    Err(_) => assert_true(true)
+    Ok(_) => assert_true(false)
+  }
+  // 负数预算
+  match ogg_to_wav_pages([], -1L) {
+    Err(_) => assert_true(true)
+    Ok(_) => assert_true(false)
+  }
+  // 位深非法
+  match ogg_to_wav_pages_bits([], 1048576L, 20) {
+    Err(_) => assert_true(true)
+    Ok(_) => assert_true(false)
+  }
+  // 合法 Ogg 但预算极小：应报「超出预算」而不是写出空文件
+  let stream = @ogg.serialize_pages(
+    @ogg.paginate(
+      [
+        {
+          data: b"OpusHead\x01\x01\x38\x01\x80\xbb\x00\x00\x00\x00\x00",
+          granule_position: 0L,
+          serial: 1U,
+        },
+        {
+          data: b"OpusTags\x00\x00\x00\x00\x00\x00\x00\x00",
+          granule_position: 0L,
+          serial: 1U,
+        },
+      ],
+      1U,
+    ),
+  )
+  match ogg_to_wav_pages(@ogg.parse_pages(stream), 0L) {
+    Err(_) => assert_true(true)
+    Ok(_) => assert_true(false)
+  }
+}

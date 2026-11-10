@@ -209,3 +209,58 @@ test "page reader: for_each_page_chunked convenience matches parse_pages" {
     ),
   )
 }
+
+///|
+/// 大量伪造 "OggS"（version/头类型非法）不应拖垮重同步，也不应逐字节记 gap。
+test "page reader resync ignores fake OggS flood" {
+  let stream = pr_stream()
+  let fake = Buffer()
+  let mut i = 0
+  while i < 50 {
+    fake.write_bytes(b"OggS".exact_view())
+    fake.write_byte((0x99 : Byte)) // 非法 version
+    fake.write_byte((0xFF : Byte)) // 保留位全 1
+    let mut k = 0
+    while k < 21 {
+      fake.write_byte((0 : Byte))
+      k = k + 1
+    }
+    i = i + 1
+  }
+  let fake_bytes = fake.to_bytes()
+  let data = append_bytes(fake_bytes, stream)
+  let reader = PageReader::new()
+  reader.feed(data)
+  reader.finish()
+  let pages = reader.take_pages()
+  assert_eq(pages.length(), parse_pages(stream).length())
+  let gaps = reader.take_skipped()
+  let mut skipped = 0
+  for g in gaps {
+    skipped = skipped + g.bytes
+  }
+  assert_eq(skipped, fake_bytes.length())
+  // 连续区间合并后条目数与「坏段数」有关，不应与字节数同量级
+  assert_true(gaps.length() <= 3)
+}
+
+///|
+test "page reader strict mode stops at garbage and getters report state" {
+  let reader = PageReader::with_options(true, false)
+  assert_eq(reader.pages_ready(), 0)
+  assert_eq(reader.buffered(), 0)
+  assert_false(reader.is_finished())
+  assert_eq(reader.pending().length(), 0)
+  reader.feed(b"garbage-before-page")
+  // 严格模式不重同步：缓冲区保留，finish 时整体记为 skipped
+  assert_true(reader.buffered() > 0)
+  reader.finish()
+  assert_true(reader.is_finished())
+  assert_true(reader.take_skipped().length() > 0)
+  // 关闭 CRC 复验：坏 CRC 页也接收
+  let stream = pr_stream()
+  let tolerant = PageReader::with_options(false, true)
+  tolerant.feed(stream)
+  assert_true(tolerant.take_pages().length() == parse_pages(stream).length())
+  assert_eq(tolerant.skipped().length(), 0)
+}

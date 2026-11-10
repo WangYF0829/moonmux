@@ -86,6 +86,19 @@ pub fn is_page_start(data : Bytes, offset : Int32) -> Bool {
 }
 
 ///|
+/// 候选页头的低成本预筛：捕获模式 + version=0 + 保留头类型位为 0。
+///
+/// 重同步时如果只认 "OggS" 魔数，恶意构造的大量伪页头会让每个候选都走一遍
+/// 完整的段表/CRC 校验（约 4600× CPU 放大）。先做两个字节的预筛，
+/// 把绝大多数伪候选挡在解析之前；真正合法的页不受影响。
+fn plausible_page_start(data : Bytes, offset : Int32) -> Bool {
+  if !is_page_start(data, offset) || offset > data.length() - 7 {
+    return false
+  }
+  data[offset + 4].to_int() == 0 && (data[offset + 5].to_int() & 0xF8) == 0
+}
+
+///|
 /// 从 `data` 的 `offset` 处解析一个 Ogg 页，同时给出下一页的起始偏移。
 ///
 /// 返回 `None` 表示此处不是合法页起点（捕获模式不匹配或数据不足），
@@ -190,6 +203,43 @@ pub fn Page::expected_crc(self : Page) -> UInt32 {
   write_capture(probe)
   write_body(probe, self, 0U)
   crc32(probe.to_bytes())
+}
+
+///|
+/// 校验一页的段表与负载是否自洽。
+///
+/// `Page` 是 `pub(all)`，库用户可以构造任意段值。序列化时把 >255 的段
+/// 截断成 1 个字节会静默写出一张自损页（长度字段与负载对不上），
+/// 所以写盘前提供显式校验入口。
+pub fn validate_page(page : Page) -> Result[Unit, String] {
+  let n = page.segments.length()
+  if n > 255 {
+    return Err("页段数 " + n.to_string() + " 超过 255")
+  }
+  let mut total = 0
+  for s in page.segments {
+    if s < 0 || s > 255 {
+      return Err("页段值 " + s.to_string() + " 不在 0..255")
+    }
+    total = total + s
+  }
+  if total != page.payload.length() {
+    return Err(
+      "页段表总和 " +
+      total.to_string() +
+      " 与负载长度 " +
+      page.payload.length().to_string() +
+      " 不一致",
+    )
+  }
+  if page.payload.length() > 65025 {
+    return Err(
+      "页负载长度超过 65025（" +
+      page.payload.length().to_string() +
+      "）",
+    )
+  }
+  Ok(())
 }
 
 ///|

@@ -53,7 +53,7 @@ pub fn parse_pages_lenient(data : Bytes) -> (Array[Page], Array[Skipped]) {
   while offset < data.length() {
     // 已知可信位置：结构能解析就收下（CRC 是否相符由 verify 单独报）
     let mut accepted = false
-    if is_page_start(data, offset) {
+    if plausible_page_start(data, offset) {
       match Page::parse(data, offset) {
         Some((page, next)) =>
           if next > offset {
@@ -71,7 +71,7 @@ pub fn parse_pages_lenient(data : Bytes) -> (Array[Page], Array[Skipped]) {
     let mut probe = offset + 1
     let mut found = -1
     while found < 0 && probe + 27 <= data.length() {
-      if is_page_start(data, probe) {
+      if plausible_page_start(data, probe) {
         match Page::parse(data, probe) {
           Some((page, next)) =>
             if next > probe && page_crc_ok(page) {
@@ -91,6 +91,23 @@ pub fn parse_pages_lenient(data : Bytes) -> (Array[Page], Array[Skipped]) {
     }
   }
   (pages, gaps)
+}
+
+///|
+/// 校验并序列化页序列；任一项不合法都返回 Err。
+///
+/// 写命令应优先用这个入口：合法的 `Page` 数组经 `serialize_pages` 会重新算 CRC，
+/// 而非法段值会被静默截断。这里先逐页校验，再序列化。
+pub fn serialize_pages_checked(pages : Array[Page]) -> Result[Bytes, String] {
+  let mut i = 0
+  while i < pages.length() {
+    match validate_page(pages[i]) {
+      Err(msg) => return Err("第 " + i.to_string() + " 页不合法：" + msg)
+      Ok(_) => ()
+    }
+    i = i + 1
+  }
+  Ok(serialize_pages(pages))
 }
 
 ///|

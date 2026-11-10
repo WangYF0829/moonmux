@@ -81,22 +81,36 @@ fn boxes_in(data : Bytes, start : Int32, end : Int32) -> Array[BoxRef] {
   let out : Array[BoxRef] = []
   let mut p = start
   let mut ok = true
-  while ok && p + 8 <= end {
+  while ok && p >= 0 && p + 8 <= end {
     let size = rd_u32_be(data, p)
     let name = rd_fourcc(data, p + 4)
     let mut body = p + 8
     let mut next = 0
     if size == 1 {
-      if p + 16 <= end {
-        body = p + 16
-        next = p + rd_u64_be(data, p + 8).to_int()
-      } else {
+      // 64 位 largesize：必须能装下 16 字节头且不越过父 box
+      if p + 16 > end {
         ok = false
+      } else {
+        let large = rd_u64_be(data, p + 8)
+        if large < 16L || large > (end - p).to_int64() {
+          ok = false
+        } else {
+          body = p + 16
+          next = p + large.to_int()
+        }
       }
     } else if size == 0 {
       next = end
+    } else if size < 8 {
+      // 2..7 的 size 会让 box 重叠自己的头，属于损坏
+      ok = false
     } else {
-      next = p + size
+      let next64 = p.to_int64() + size.to_int64()
+      if next64 > end.to_int64() {
+        ok = false
+      } else {
+        next = next64.to_int()
+      }
     }
     if ok && (next <= p || next > end) {
       ok = false
@@ -144,12 +158,32 @@ fn read_time_header(data : Bytes, b : BoxRef) -> (Int32, Int32)? {
     if avail < 32 {
       return None
     }
-    Some((rd_u32_be(data, b.body + 20), rd_u64_be(data, b.body + 24).to_int()))
+    let duration = rd_u64_be(data, b.body + 24)
+    Some(
+      (
+        rd_u32_be(data, b.body + 20),
+        if duration > 2147483647L {
+          2147483647
+        } else {
+          duration.to_int()
+        },
+      ),
+    )
   } else {
     if avail < 20 {
       return None
     }
-    Some((rd_u32_be(data, b.body + 12), rd_u32_be(data, b.body + 16)))
+    let duration = rd_u32_be(data, b.body + 16).to_int64() & 0xFFFFFFFFL
+    Some(
+      (
+        rd_u32_be(data, b.body + 12),
+        if duration > 2147483647L {
+          2147483647
+        } else {
+          duration.to_int()
+        },
+      ),
+    )
   }
 }
 

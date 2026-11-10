@@ -21,7 +21,7 @@ pub(all) enum Command {
   /// 把一条链接流按链接点拆成多个 Ogg 文件
   Split(String, String)
   /// 抽出第 n 条逻辑流，写成独立的 Ogg 文件
-  Extract(String, Int32, String)
+  Extract(String, Int32, String, Bool)
   /// 转储页级结构；第二个参数为真时输出十六进制（xxd 兼容）
   Dump(String, Bool)
   /// 列出注释（vendor + KEY=VALUE）
@@ -60,7 +60,7 @@ pub fn usage() -> String {
   "  moonmux cat <in1.ogg> <in2.ogg> ... <out.ogg>\n" +
   "                                  把多个 Ogg 首尾链接（chained）\n" +
   "  moonmux split <file.ogg> <dir>   把链接流按链接点拆开（输出 part1/2…）\n" +
-  "  moonmux extract <file.ogg> <n> <out.ogg>\n" +
+  "  moonmux extract [--force] <file.ogg> <n> <out.ogg>\n" +
   "                                  抽出第 n 条逻辑流（序号见 info）\n" +
   "  moonmux dump <file.ogg> [--hex]  转储页级结构；--hex 输出十六进制（xxd 兼容）\n" +
   "  moonmux tags <file.ogg>          列出注释（vendor + KEY=VALUE）\n" +
@@ -100,7 +100,8 @@ pub fn usage_for(topic : String) -> String {
     "  每条物理流写成 <dir>/part1.ogg、part2.ogg……\n" +
     "  非链接流只写出 part1.ogg，与输入逐字节相同"
   } else if topic == "extract" {
-    "用法: moonmux extract <file.ogg> <n> <out.ogg>\n" +
+    "用法: moonmux extract [--force] <file.ogg> <n> <out.ogg>\n" +
+    "  --force：允许覆盖内容相同的已有输出（默认拒绝硬链接/别名）\n" +
     "  <n> 是 1 起算的逻辑流序号，与 info 列出的顺序一致\n" +
     "  抽出的文件与该流在输入里的那几页逐字节相同"
   } else if topic == "dump" {
@@ -161,6 +162,34 @@ fn arity_msg(sub : String, got : Int32, want : Int32) -> String {
 }
 
 ///|
+/// 从 `args[start..]` 里摘出 `flag`：返回（其余位置参数, 是否出现, 错误）。
+/// 选项可以出现在文件路径之前或之后；未知 `--xxx` 与重复 flag 都报错。
+fn take_flag(
+  args : Array[String],
+  start : Int32,
+  flag : String,
+) -> (Array[String], Bool, String?) {
+  let positional : Array[String] = []
+  let mut seen = false
+  let mut err : String? = None
+  let mut i = start
+  while i < args.length() {
+    if args[i] == flag {
+      if seen {
+        err = Some(flag + " 重复出现")
+      }
+      seen = true
+    } else if args[i].has_prefix("--") {
+      err = Some("未知选项: " + args[i])
+    } else {
+      positional.push(args[i])
+    }
+    i = i + 1
+  }
+  (positional, seen, err)
+}
+
+///|
 /// 解析一个正整数参数：只认十进制数字，且必须大于 0。
 ///
 /// 刻意不接受 `+1`、`1.0`、`0`、`-1` 这些写法（`01` 按十进制 1 处理）—— 逻辑流序号没有
@@ -212,26 +241,25 @@ fn parse_positive(s : String) -> Int32? {
 /// 解析命令行参数（不含可执行文件名本身）。
 pub fn parse(args : Array[String]) -> Command {
   if args.length() == 0 {
-    return Command::Help
+    return Command::Bad("缺少子命令", usage())
   }
   let sub = args[0]
   // 子命令之后的参数个数
   let n = args.length() - 1
   if sub == "info" {
-    if n < 1 {
-      Command::Bad("info 需要一个 Ogg 文件路径", usage_for("info"))
-    } else if n > 2 {
-      Command::Bad(
-        "info 至多接受 文件路径 与 --json",
-        usage_for("info"),
-      )
-    } else if n == 2 && args[2] != "--json" {
-      Command::Bad(
-        "info 只认识 --json，实际是「" + args[2] + "」",
-        usage_for("info"),
-      )
-    } else {
-      Command::Info(args[1], n == 2)
+    let (pos, json, err) = take_flag(args, 1, "--json")
+    match err {
+      Some(msg) => Command::Bad(msg, usage_for("info"))
+      None =>
+        match pos.length() {
+          0 => Command::Bad("info 需要一个文件路径", usage_for("info"))
+          1 => Command::Info(pos[0], json)
+          _ =>
+            Command::Bad(
+              "info 只需要一个文件路径，多余的参数：",
+              usage_for("info"),
+            )
+        }
     }
   } else if sub == "demux" {
     if n < 2 {
@@ -280,40 +308,42 @@ pub fn parse(args : Array[String]) -> Command {
       Command::Split(args[1], args[2])
     }
   } else if sub == "extract" {
-    if n < 3 {
-      Command::Bad(
-        "extract 需要输入文件、逻辑流序号与输出文件",
-        usage_for("extract"),
-      )
-    } else if n > 3 {
-      Command::Bad(arity_msg("extract", n, 3), usage_for("extract"))
-    } else {
-      match parse_positive(args[2]) {
-        None =>
+    let (pos, force, err) = take_flag(args, 1, "--force")
+    match err {
+      Some(msg) => Command::Bad(msg, usage_for("extract"))
+      None =>
+        if pos.length() != 3 {
           Command::Bad(
-            "extract 的逻辑流序号必须是正整数，实际是「" +
-            args[2] +
-            "」",
+            "extract 需要输入文件、逻辑流序号与输出文件",
             usage_for("extract"),
           )
-        Some(k) => Command::Extract(args[1], k, args[3])
-      }
+        } else {
+          match parse_positive(pos[1]) {
+            None =>
+              Command::Bad(
+                "extract 的逻辑流序号必须是正整数，实际是「" +
+                pos[1] +
+                "」",
+                usage_for("extract"),
+              )
+            Some(k) => Command::Extract(pos[0], k, pos[2], force)
+          }
+        }
     }
   } else if sub == "dump" {
-    if n < 1 {
-      Command::Bad("dump 需要一个 Ogg 文件路径", usage_for("dump"))
-    } else if n > 2 {
-      Command::Bad(
-        "dump 至多接受 文件路径 与 --hex",
-        usage_for("dump"),
-      )
-    } else if n == 2 && args[2] != "--hex" {
-      Command::Bad(
-        "dump 只认识 --hex，实际是「" + args[2] + "」",
-        usage_for("dump"),
-      )
-    } else {
-      Command::Dump(args[1], n == 2)
+    let (pos, hex, err) = take_flag(args, 1, "--hex")
+    match err {
+      Some(msg) => Command::Bad(msg, usage_for("dump"))
+      None =>
+        match pos.length() {
+          0 => Command::Bad("dump 需要一个文件路径", usage_for("dump"))
+          1 => Command::Dump(pos[0], hex)
+          _ =>
+            Command::Bad(
+              "dump 只需要一个文件路径，多余的参数：",
+              usage_for("dump"),
+            )
+        }
     }
   } else if sub == "tags" {
     if n < 1 {
@@ -390,20 +420,20 @@ pub fn parse(args : Array[String]) -> Command {
       }
     }
   } else if sub == "verify" {
-    if n < 1 {
-      Command::Bad("verify 需要一个 Ogg 文件路径", usage_for("verify"))
-    } else if n > 2 {
-      Command::Bad(
-        "verify 至多接受 文件路径 与 --json",
-        usage_for("verify"),
-      )
-    } else if n == 2 && args[2] != "--json" {
-      Command::Bad(
-        "verify 只认识 --json，实际是「" + args[2] + "」",
-        usage_for("verify"),
-      )
-    } else {
-      Command::Verify(args[1], n == 2)
+    let (pos, json, err) = take_flag(args, 1, "--json")
+    match err {
+      Some(msg) => Command::Bad(msg, usage_for("verify"))
+      None =>
+        match pos.length() {
+          0 =>
+            Command::Bad("verify 需要一个文件路径", usage_for("verify"))
+          1 => Command::Verify(pos[0], json)
+          _ =>
+            Command::Bad(
+              "verify 只需要一个文件路径，多余的参数：",
+              usage_for("verify"),
+            )
+        }
     }
   } else if sub == "chop" {
     if n < 4 {

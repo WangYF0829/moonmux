@@ -3,7 +3,7 @@
 
 name = "WangYF0829/moonmux"
 
-version = "0.8.0"
+version = "0.9.0"
 
 readme = "README.md"
 

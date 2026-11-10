@@ -55,3 +55,24 @@ test "crc32: known bit patterns" {
     assert_eq(crc32(data), crc32_bitwise_ref(data))
   }
 }
+
+///|
+/// `verify_page` 必须先把页内 CRC 字段清零再计算；否则真实页永远校验失败。
+test "verify_page zeroes the stored crc field" {
+  let page : Page = {
+    header_type: (0x02 : Byte),
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [3],
+    payload: b"abc",
+  }
+  let bytes = page.to_bytes()
+  let expected = page.expected_crc()
+  // 磁盘上的页 CRC 字段非 0，但 verify_page 应能复算通过
+  assert_true(verify_page(bytes, expected))
+  assert_false(verify_page(bytes, expected ^ 1U))
+  // 太短的输入必须拒绝而不是越界
+  assert_false(verify_page(b"OggS", expected))
+}

@@ -7,14 +7,14 @@
 # 每次发布后确认 mooncakes 上的版本确实可安装。
 #
 # 用法: bash scripts/install_check.sh [version]
-#   默认版本：$MOONMUX_INSTALL_VERSION，未设置时 0.8.0
+#   默认版本：$MOONMUX_INSTALL_VERSION，未设置时 0.9.0
 # 退出码: 0 通过；1 失败；2 前提不满足（moon 不可用）
 
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
-VERSION="${1:-${MOONMUX_INSTALL_VERSION:-0.8.0}}"
+VERSION="${1:-${MOONMUX_INSTALL_VERSION:-0.9.0}}"
 
 if ! command -v moon >/dev/null 2>&1; then
   echo "找不到 moon（先安装 MoonBit 工具链）"
@@ -22,7 +22,7 @@ if ! command -v moon >/dev/null 2>&1; then
 fi
 
 mkdir -p _build
-TMP="$(mktemp -d -p _build install-check.XXXXXX 2>/dev/null || mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/moonmux-install.XXXXXX" 2>/dev/null || mktemp -d)"
 cleanup() { rm -rf "$TMP" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
@@ -72,17 +72,7 @@ fn main {
   println("ogg page: " + @ogg.is_page_start(b"OggS", 0).to_string())
 }
 EOF
-python3 - "$PWD/cmd/main/moon.pkg" <<'PY' 2>/dev/null || true
-import sys
-p = sys.argv[1]
-text = open(p, encoding='utf-8').read()
-imports = '"WangYF0829/moonmux", "WangYF0829/moonmux/wav", "WangYF0829/moonmux/ogg"'
-if 'import {' in text:
-    text = text.replace('import {\n}', 'import {\n  ' + imports + ',\n}')
-else:
-    text = text.rstrip() + '\n\nimport {\n  ' + imports + ',\n}\n'
-open(p, 'w', encoding='utf-8').write(text)
-PY
+
 # 没有 python3 时退回文本追加（moon new 的 moon.pkg 结构简单）
 if ! grep -q "WangYF0829/moonmux/wav" cmd/main/moon.pkg 2>/dev/null; then
   {

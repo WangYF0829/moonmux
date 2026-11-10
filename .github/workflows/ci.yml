@@ -3,6 +3,11 @@ name: CI
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.moonignore'
   pull_request:
   workflow_dispatch:
 
@@ -15,6 +20,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # 固定工具链版本：避免 latest 漂移悄悄改变行为；升级需单独提交并跑全量 CI。
+  MOONBIT_INSTALL_VERSION: "0.1.20261012"
   # 未覆盖行数基线（moon coverage analyze 的 Total）。
   # 2026-10-25 全量审查后 Linux native 实测 662、Windows native 635；
   # 新增约 2000 行防御性分支与 CLI 代码，未覆盖行数相应上升（上次实测 605、基线 600）。
@@ -24,11 +31,12 @@ env:
   # Linux 侧计数比 Windows 高约 27 行（≈671），基线 660→670（上限 685）。
   # v0.5.0：新增 MP4 → Ogg 解封装（demux.mbt，含大量坏表防御分支），Windows 实测 683；
   # Linux 侧 ≈710，基线 670→700（上限 715）。
-  # v0.8.0：正确性修复 + 新增回归测试（TOC/MP4 读侧/stsz/多声道/跨页替换/WAV fmt），
-  # Windows 实测 683，Linux 侧 ≈710；基线维持 700（上限 715）。
-  MAX_UNCOVERED_LINES: 700
+  # v0.9.0：第二轮修复新增 elst/roll、WAV fact、TIFF/CLI 契约、重同步预筛、2 GiB 闸门
+  # 等防御性分支与测试，Windows 实测 710；Linux 侧比 Windows 高约 27 行（≈737）。
+  # 基线 700→730，配合 20 行容差，上限 750。
+  MAX_UNCOVERED_LINES: 730
   # 跨平台/工具链 patch 版本可能让计数抖动几行，给一点余量。
-  COVERAGE_TOLERANCE: 15
+  COVERAGE_TOLERANCE: 20
 
 jobs:
   check:
@@ -40,7 +48,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install MoonBit (Unix)
         if: runner.os != 'Windows'
@@ -101,6 +109,12 @@ jobs:
         shell: bash
         run: moon test --deny-warn --target native -j 1 cmd/main
 
+      - name: Version consistency
+        shell: bash
+        run: |
+          moon build --target native
+          bash scripts/check_version.sh
+
       # 生成物不能进版本库：_build、*.mi/*.core/*.mbti、pkg.generated.mbti。
       - name: Verify no generated artifacts are tracked
         shell: bash
@@ -127,7 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install MoonBit
         run: |
@@ -182,7 +196,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install MoonBit
         run: |
@@ -216,7 +230,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install MoonBit
         run: |
@@ -245,7 +259,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install MoonBit
         run: |
@@ -257,8 +271,18 @@ jobs:
 
       - name: Verify clean-project install
         env:
-          MOONMUX_INSTALL_VERSION: "0.8.0"
-        run: bash scripts/install_check.sh
+          MOONMUX_INSTALL_VERSION: "0.9.0"
+        run: |
+          # 版本 bump 提交可能先于发布到达：轮询等待 mooncakes 出现该版本
+          for i in $(seq 1 30); do
+            if bash scripts/install_check.sh; then
+              exit 0
+            fi
+            echo "等待 mooncakes 上的 0.9.0（第 $i 次，最多 30 次）"
+            sleep 5
+          done
+          echo "mooncakes 上仍未出现可安装的 0.9.0"
+          exit 1
   # 性能基准：release native + Node 脚本（无第三方依赖），表格写入 job summary。
   # 只记录、不设阈值 —— 共享 runner 的绝对耗时没有可比性，回归靠本地对比。
   bench:
@@ -266,7 +290,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install MoonBit
         run: |
@@ -296,7 +320,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install MoonBit
         run: |
@@ -311,3 +335,36 @@ jobs:
 
       - name: Run deterministic mutation fuzz
         run: node scripts/fuzz.mjs --iterations 400 --seed 20261109
+  # Windows 上的端到端 smoke：Git Bash 提供 bash/POSIX 工具；
+  # FIFO 相关项在缺少 mkfifo/timeout 时会自行 SKIP。
+  smoke-windows:
+    name: smoke · windows
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install MoonBit (Windows)
+        shell: pwsh
+        run: |
+          irm https://cli.moonbitlang.com/install/powershell.ps1 | iex
+          $bin = Join-Path $env:USERPROFILE '.moon\bin'
+          if (-not (Test-Path (Join-Path $bin 'moon.exe'))) {
+            throw "moon.exe not found under $bin"
+          }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Toolchain version
+        run: moon version --all
+
+      - name: Update package index
+        run: moon update
+
+      - name: Build native CLI
+        run: moon build --target native
+
+      - name: Run smoke.sh
+        run: bash scripts/smoke.sh

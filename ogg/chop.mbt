@@ -273,7 +273,7 @@ pub fn chop_pages(
   if kept == 0 {
     return Err("该时间区间内没有音频页")
   }
-  // 末页若停在跨页包中间，向后补齐到包结束，最多多出一页。
+  // 末页若停在跨页包中间，向后补齐到包结束；超长包可能因此多出多页。
   let mut extending = true
   while extending && last_data_k >= 0 {
     let terminal = last_with_segments(pages, last_data_k)

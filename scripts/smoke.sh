@@ -23,7 +23,7 @@ fi
 # 残留也只落在构建目录内，不会污染仓库根目录。
 mkdir -p _build
 # 每个实例只清理自己的目录；不按时间删除其他 smoke.*，避免慢实例被并发清理。
-TMP="$(mktemp -d -p _build smoke.XXXXXX)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/moonmux-smoke.XXXXXX" 2>/dev/null || mktemp -d)"
 # Windows 上文件句柄释放有延迟，rm -rf 可能第一次删不干净；
 # 重试几次，仍失败就明确提示残留路径。
 cleanup() {
@@ -50,8 +50,8 @@ if [ ! -x "$BIN" ]; then
 fi
 
 echo "== 0. 版本与输出类型防护 =="
-"$BIN" version | grep -q "moonmux 0.8.0"
-check $? "version 与模块版本一致（0.8.0）"
+"$BIN" version | grep -q "moonmux 0.9.0"
+check $? "version 与模块版本一致（0.9.0）"
 "$BIN" extract testdata/opus_sample.opus 1 "$TMP" >/dev/null 2>&1
 [ $? -eq 2 ]; check $? "目录作为输出路径被拒绝（2）"
 

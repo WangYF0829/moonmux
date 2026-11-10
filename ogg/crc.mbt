@@ -71,8 +71,25 @@ pub fn crc32(data : Bytes) -> UInt32 {
 
 ///|
 /// 校验一整页（含 CRC 字段本身，计算时该字段视为 0）是否自洽。
+///
+/// `page_bytes` 是磁盘上的原始页（CRC 字段非 0）；先把偏移 22..25 清零，
+/// 再与调用方给出的期望值比较。之前直接对该字节串算 CRC，等于把旧 CRC
+/// 也算了进去，任何真实页都只会返回 false。
 pub fn verify_page(page_bytes : Bytes, expected : UInt32) -> Bool {
-  crc32(page_bytes) == expected
+  if page_bytes.length() < 27 {
+    return false
+  }
+  let buf = Buffer(size_hint=page_bytes.length())
+  let mut i = 0
+  while i < page_bytes.length() {
+    if i >= 22 && i < 26 {
+      buf.write_byte((0 : Byte))
+    } else {
+      buf.write_byte(page_bytes[i])
+    }
+    i = i + 1
+  }
+  crc32(buf.to_bytes()) == expected
 }
 
 ///|

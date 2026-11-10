@@ -342,3 +342,19 @@ test "manifest rejects empty / truncated / illegal granule lists" {
   // -1（本页无包结束）不参与单调比较，合法
   assert_true(parse("# moonmux manifest v1\n# packets=2\n-1\n100\n") is Ok(_))
 }
+
+///|
+test "manifest rejects duplicate header fields" {
+  assert_true(
+    parse("# moonmux manifest v1\n# serial=1\n# serial=2\n0\n") is Err(_),
+  )
+  assert_true(
+    parse("# moonmux manifest v1\n# packets=1\n# packets=2\n0\n") is Err(_),
+  )
+  assert_true(
+    parse("# moonmux manifest v1\n# chain=1\n# chain=2\n0\n") is Err(_),
+  )
+  assert_true(
+    parse("# moonmux manifest v1\n# moonmux manifest v1\n0\n") is Err(_),
+  )
+}

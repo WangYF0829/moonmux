@@ -34,6 +34,9 @@ pub(all) struct SeekPoint {
 ///
 /// 只看携带真实粒度的页（granule ≥ 0）：-1 的页没有时间信息，
 /// 拿它当路标会把定位带到错误的偏移上。
+///
+/// `target` 落在首/末路标之外时**夹到端点**（clamp），不会返回 None：
+/// 时间轴两端之外的位置在容器层只能定位到最近的可解页。
 pub fn seek_granule(
   pages : Array[Page],
   serial : UInt32,

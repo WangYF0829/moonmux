@@ -574,3 +574,124 @@ test "demux rejects negative stsz count and truncated stts/stco/stsd boxes" {
     }
   }
 }
+
+///|
+/// 把一个合法 MP4 的 moov 里最后一条 trak 复制一份，构造「双音轨」文件。
+fn dwb_duplicate_trak(mp4 : Bytes) -> Bytes? {
+  let moov_pos = match dwb_find(mp4, b"moov") {
+    Some(p) => p - 4
+    None => return None
+  }
+  let moov_size = (mp4[moov_pos].to_int() << 24) |
+    (mp4[moov_pos + 1].to_int() << 16) |
+    (mp4[moov_pos + 2].to_int() << 8) |
+    mp4[moov_pos + 3].to_int()
+  if moov_size <= 8 || moov_pos + moov_size > mp4.length() {
+    return None
+  }
+  // 收集 moov 子 box
+  let children : Array[Bytes] = []
+  let mut pos = moov_pos + 8
+  while pos + 8 <= moov_pos + moov_size {
+    let size = (mp4[pos].to_int() << 24) |
+      (mp4[pos + 1].to_int() << 16) |
+      (mp4[pos + 2].to_int() << 8) |
+      mp4[pos + 3].to_int()
+    if size < 8 || pos + size > moov_pos + moov_size {
+      return None
+    }
+    let buf = Buffer()
+    let mut k = pos
+    while k < pos + size {
+      buf.write_byte(mp4[k])
+      k = k + 1
+    }
+    children.push(buf.to_bytes())
+    pos = pos + size
+  }
+  // 找到 trak 并复制
+  let mut trak_bytes : Bytes = b""
+  for c in children {
+    if c.length() >= 4 &&
+      c[4].to_int() == 0x74 &&
+      c[5].to_int() == 0x72 &&
+      c[6].to_int() == 0x61 &&
+      c[7].to_int() == 0x6B {
+      trak_bytes = c
+    }
+  }
+  if trak_bytes.length() == 0 {
+    return None
+  }
+  let body = Buffer()
+  for c in children {
+    body.write_bytes(c.exact_view())
+  }
+  body.write_bytes(trak_bytes.exact_view())
+  let payload = body.to_bytes()
+  let new_size = payload.length() + 8
+  let head = Buffer()
+  head.write_byte((new_size / 16777216 % 256).to_byte())
+  head.write_byte((new_size / 65536 % 256).to_byte())
+  head.write_byte((new_size / 256 % 256).to_byte())
+  head.write_byte((new_size % 256).to_byte())
+  head.write_bytes(b"moov".exact_view())
+  head.write_bytes(payload.exact_view())
+  let out = Buffer()
+  let mut i = 0
+  while i < moov_pos {
+    out.write_byte(mp4[i])
+    i = i + 1
+  }
+  out.write_bytes(head.to_bytes().exact_view())
+  Some(out.to_bytes())
+}
+
+///|
+test "demux rejects MP4 with multiple audio tracks" {
+  match remux_ogg_opus(dwb_ogg_opus()) {
+    Err(_) => assert_true(false)
+    Ok(mp4) =>
+      match dwb_duplicate_trak(mp4) {
+        None => assert_true(false)
+        Some(two_tracks) => {
+          assert_true(dwb_rejects(two_tracks))
+          // 原始单轨文件仍然可解
+          match demux_mp4_opus(mp4) {
+            Ok(_) => assert_true(true)
+            Err(_) => assert_true(false)
+          }
+        }
+      }
+  }
+}
+
+///|
+test "demux rejects truncated stsd/dOps/stco/stsc boxes" {
+  match remux_ogg_opus(dwb_ogg_opus()) {
+    Err(_) => assert_true(false)
+    Ok(mp4) => {
+      // stsd / dOps / stco 的 box 头声明 size=8
+      let names : Array[Bytes] = [b"stsd", b"dOps", b"stco"]
+      for name in names {
+        match dwb_find(mp4, name) {
+          Some(p) => assert_true(dwb_rejects(dwb_patch_u32_be(mp4, p - 4, 8)))
+          None => assert_true(false)
+        }
+      }
+      // stco 条目数 0
+      match dwb_body(mp4, b"stco") {
+        Some(b) => assert_true(dwb_rejects(dwb_patch_u32_be(mp4, b + 4, 0)))
+        None => assert_true(false)
+      }
+      // stsc 游程：first_chunk 非 1 / samples_per_chunk 0
+      match dwb_body(mp4, b"stsc") {
+        Some(b) => {
+          assert_true(dwb_rejects(dwb_patch_u32_be(mp4, b + 8, 2)))
+          assert_true(dwb_rejects(dwb_patch_u32_be(mp4, b + 12, 0)))
+        }
+        None => assert_true(false)
+      }
+    }
+  }
+}

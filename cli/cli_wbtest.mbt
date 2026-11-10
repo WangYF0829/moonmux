@@ -5,10 +5,54 @@
 // 多给的参数被静默忽略。
 
 ///|
-/// 无参数时给出帮助。
-test "empty args shows help" {
+/// 无参数时按「缺子命令」报用法错误（退出码 2），不能静默成功。
+test "empty args reports missing subcommand" {
   match parse([]) {
-    Command::Help => assert_true(true)
+    Command::Bad(msg, usage) => {
+      assert_true(msg.length() > 0)
+      assert_true(usage.length() > 0)
+    }
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// `--json` / `--hex` 可以出现在文件路径前或后；未知/重复选项必须拒绝。
+test "flags may appear before or after the positional argument" {
+  match parse(["info", "--json", "a.ogg"]) {
+    Command::Info(p, json) => {
+      assert_eq(p, "a.ogg")
+      assert_true(json)
+    }
+    _ => assert_true(false)
+  }
+  match parse(["info", "a.ogg", "--json"]) {
+    Command::Info(p, json) => {
+      assert_eq(p, "a.ogg")
+      assert_true(json)
+    }
+    _ => assert_true(false)
+  }
+  match parse(["dump", "--hex", "a.ogg"]) {
+    Command::Dump(p, hex) => {
+      assert_eq(p, "a.ogg")
+      assert_true(hex)
+    }
+    _ => assert_true(false)
+  }
+  match parse(["verify", "--json", "a.ogg"]) {
+    Command::Verify(p, json) => {
+      assert_eq(p, "a.ogg")
+      assert_true(json)
+    }
+    _ => assert_true(false)
+  }
+  match parse(["info", "a.ogg", "--bogus"]) {
+    Command::Bad(msg, _) => assert_true(msg.length() > 0)
+    _ => assert_true(false)
+  }
+  match parse(["info", "a.ogg", "--json", "--json"]) {
+    Command::Bad(msg, _) => assert_true(msg.length() > 0)
     _ => assert_true(false)
   }
 }
@@ -259,7 +303,7 @@ test "extract arity and positive index" {
     _ => assert_true(false)
   }
   match parse(["extract", "a.ogg", "2", "out.ogg"]) {
-    Command::Extract(src, n, out) => {
+    Command::Extract(src, n, out, _) => {
       assert_eq(src, "a.ogg")
       assert_eq(n, 2)
       assert_eq(out, "out.ogg")
@@ -268,7 +312,7 @@ test "extract arity and positive index" {
   }
   // 多位数也要收下
   match parse(["extract", "a.ogg", "12", "out.ogg"]) {
-    Command::Extract(_, n, _) => assert_eq(n, 12)
+    Command::Extract(_, n, _, _) => assert_eq(n, 12)
     _ => assert_true(false)
   }
   // 非正整数一律在解析阶段拒绝，并说明实际收到了什么
@@ -439,7 +483,7 @@ test "numeric arguments reject overflow" {
   }
   // 边界内的正常值仍然通过
   match parse(["extract", "a.ogg", "2147483647", "out.ogg"]) {
-    Command::Extract(_, n, _) => assert_eq(n, 2147483647)
+    Command::Extract(_, n, _, _) => assert_eq(n, 2147483647)
     _ => assert_true(false)
   }
 }

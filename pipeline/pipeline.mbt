@@ -380,10 +380,24 @@ pub fn ogg_to_wav_pages_bits(
   if buf.length() == 0 {
     return Err("解码后的 PCM 为空（流里没有可解码的音频包）")
   }
+  let frame_bytes = channels * (bits / 8)
+  if frame_bytes > 0 && buf.length() % frame_bytes != 0 {
+    return Err(
+      "解码后的 PCM 不是完整帧（长度 " +
+      buf.length().to_string() +
+      "，帧大小 " +
+      frame_bytes.to_string() +
+      "）",
+    )
+  }
   let format : @wav.WavFormat = {
     channels,
     sample_rate,
     bits_per_sample: bits,
+  }
+  let total = buf.length().to_int64() + 60L
+  if total > 2147483647L {
+    return Err("WAV 输出超过单文件 2 GiB 上限")
   }
   Ok(@wav.encode_wav(format, buf.to_bytes()))
 }

@@ -97,10 +97,20 @@ fn PageReader::record_gap(
   end : Int32,
 ) -> Unit {
   if end > start {
-    self.gaps.push({
-      offset: (self.base + start.to_int64()).to_int(),
-      bytes: end - start,
-    })
+    let offset = (self.base + start.to_int64()).to_int()
+    // 合并相邻区间：伪页头/碎片如果每发现一次就记一条，gaps 会膨胀到
+    // 与输入字节数同量级；连续区间合并后条目数只与「坏段数」有关。
+    if self.gaps.length() > 0 {
+      let last = self.gaps[self.gaps.length() - 1]
+      if last.offset + last.bytes == offset {
+        self.gaps[self.gaps.length() - 1] = {
+          offset: last.offset,
+          bytes: last.bytes + (end - start),
+        }
+        return
+      }
+    }
+    self.gaps.push({ offset, bytes: end - start, })
   }
 }
 
@@ -111,7 +121,13 @@ fn PageReader::find_capture_from(self : PageReader, from : Int32) -> Int32? {
   let mut p = from
   while p + 4 <= data.length() {
     if is_page_start(data, p) {
-      return Some(p)
+      // 候选头不足 7 字节时无法预筛，先停在这里等下一块数据（不能丢掉半个 "OggS"）
+      if p + 7 > data.length() {
+        return Some(p)
+      }
+      if plausible_page_start(data, p) {
+        return Some(p)
+      }
     }
     p = p + 1
   }
@@ -149,6 +165,14 @@ fn PageReader::parse_available(self : PageReader) -> Unit {
       }
     } else if avail < 27 {
       stop = true // 页头不完整
+    } else if !plausible_page_start(data, pos) {
+      // 魔数对但 version/头类型非法：按失步处理，不能当页解析
+      self.record_gap(pos, pos + 1)
+      if self.resync {
+        pos = pos + 1
+      } else {
+        stop = true
+      }
     } else {
       let nseg = data[pos + 26].to_int()
       if avail < 27 + nseg {

@@ -244,3 +244,135 @@ test "mp4 inspect reads version-1 mvhd and rejects short payloads" {
     Some(_) => assert_true(false)
   }
 }
+
+///|
+/// 在字节流里查找子串（测试用）。
+fn mp4_contains(data : Bytes, needle : Bytes) -> Bool {
+  if needle.length() == 0 || needle.length() > data.length() {
+    return false
+  }
+  let mut i = 0
+  while i + needle.length() <= data.length() {
+    let mut same = true
+    let mut j = 0
+    while j < needle.length() {
+      if data[i + j].to_int() != needle[j].to_int() {
+        same = false
+      }
+      j = j + 1
+    }
+    if same {
+      return true
+    }
+    i = i + 1
+  }
+  false
+}
+
+///|
+test "mp4 remux writes edit list and roll sample group" {
+  match remux_ogg_opus(synthetic_ogg_opus()) {
+    Err(_) => assert_true(false)
+    Ok(mp4) => {
+      assert_true(mp4_contains(mp4, b"edts"))
+      assert_true(mp4_contains(mp4, b"elst"))
+      assert_true(mp4_contains(mp4, b"sgpd"))
+      assert_true(mp4_contains(mp4, b"sbgp"))
+      // 只写一条 edit list 项（pre-skip 裁剪）
+      match inspect(mp4) {
+        Some(info) => assert_eq(info.tracks.length(), 1)
+        None => assert_true(false)
+      }
+    }
+  }
+}
+
+///|
+/// 末包粒度不推进时，多出来的样本必须被裁掉（Ogg end-trim 语义）。
+fn mp4_ogg_with_end_trim() -> Bytes {
+  let head : Bytes = b"OpusHead\x01\x01\x38\x01\x80\xbb\x00\x00\x00\x00\x00"
+  let tags : Bytes = b"OpusTags\x06\x00\x00\x00moonmux\x00\x00\x00\x00"
+  let p1 : Bytes = b"\xfc\x01\x02"
+  let p2 : Bytes = b"\xfc\x03\x04"
+  let p3 : Bytes = b"\xfc\x05\x06"
+  let packets : Array[@ogg.Packet] = [
+    { data: head, granule_position: 0L, serial: 1U, },
+    { data: tags, granule_position: 0L, serial: 1U, },
+    { data: p1, granule_position: 960L, serial: 1U, },
+    { data: p2, granule_position: 1920L, serial: 1U, },
+    // 末包不推进粒度：后 960 个样本应被 trim
+    { data: p3, granule_position: 1920L, serial: 1U, },
+  ]
+  @ogg.serialize_pages(@ogg.paginate(packets, 1U))
+}
+
+///|
+test "mp4 remux trims samples beyond the last granule" {
+  let src = mp4_ogg_with_end_trim()
+  match remux_ogg_opus(src) {
+    Err(_) => assert_true(false)
+    Ok(mp4) =>
+      match inspect(mp4) {
+        Some(info) => {
+          assert_eq(info.tracks[0].sample_count, 2)
+          // 内容时长 = 1920 − pre_skip(312) 样本 ≈ 33.5 ms
+          assert_true(
+            info.duration_seconds > 0.03 && info.duration_seconds < 0.04,
+          )
+        }
+        None => assert_true(false)
+      }
+  }
+}
+
+///|
+/// 用自定义 OpusHead / 粒度列表拼 Ogg 流（测试 remux 的边界裁剪用）。
+fn mp4_custom_ogg(head : Bytes, granules : Array[Int64]) -> Bytes {
+  let tags : Bytes = b"OpusTags\x06\x00\x00\x00moonmux\x00\x00\x00\x00"
+  let packets : Array[@ogg.Packet] = [
+    { data: head, granule_position: 0L, serial: 1U, },
+    { data: tags, granule_position: 0L, serial: 1U, },
+  ]
+  let mut i = 0
+  while i < granules.length() {
+    packets.push({
+      data: b"\xfc\x01\x02",
+      granule_position: granules[i],
+      serial: 1U,
+    })
+    i = i + 1
+  }
+  @ogg.serialize_pages(@ogg.paginate(packets, 1U))
+}
+
+///|
+test "remux trims the last sample partially and clamps pre-skip" {
+  let head : Bytes = b"OpusHead\x01\x01\x38\x01\x80\xbb\x00\x00\x00\x00\x00"
+  // 3 个 960 样本包（和 2880），末粒度 2400 → 最后一个包只保留 480 样本
+  let partial = mp4_custom_ogg(head, [960L, 1920L, 2400L])
+  match remux_ogg_opus(partial) {
+    Err(_) => assert_true(false)
+    Ok(mp4) =>
+      match inspect(mp4) {
+        Some(info) => assert_eq(info.tracks[0].sample_count, 3)
+        None => assert_true(false)
+      }
+  }
+  // pre-skip 超过 int16：roll_distance 夹到 -32767，不写出坏值
+  let big_skip : Bytes = b"OpusHead\x01\x01\x40\x9c\x80\xbb\x00\x00\x00\x00\x00"
+  let big = mp4_custom_ogg(big_skip, [960L])
+  match remux_ogg_opus(big) {
+    Ok(mp4) => assert_true(mp4_contains(mp4, b"sgpd"))
+    Err(_) => assert_true(false)
+  }
+}
+
+///|
+test "remux trims everything when last granule is zero" {
+  let head : Bytes = b"OpusHead\x01\x01\x38\x01\x80\xbb\x00\x00\x00\x00\x00"
+  let all_trimmed = mp4_custom_ogg(head, [960L, 0L])
+  match remux_ogg_opus(all_trimmed) {
+    Err(_) => assert_true(true)
+    Ok(_) => assert_true(false)
+  }
+}

@@ -680,7 +680,7 @@ test "encode_wav_ex float32 roundtrips with extensible header" {
   let data : Bytes = b"\x00\x00\x80\x3f"
   match encode_wav_ex(fmt, data, Float) {
     Ok(encoded) => {
-      assert_eq(encoded.length(), 68 + 4)
+      assert_eq(encoded.length(), 68 + 12 + 4)
       assert_eq(encoded[16].to_int(), 40) // fmt 块长
       assert_eq(encoded[20].to_int(), 0xFE) // tag 低字节
       assert_eq(encoded[21].to_int(), 0xFF) // tag 高字节
@@ -702,6 +702,13 @@ test "encode_wav_ex float32 roundtrips with extensible header" {
         assert_eq(encoded[44 + gi].to_int(), float_guid[gi])
         gi = gi + 1
       }
+      // fact 块（紧接 fmt 之后，偏移 60）：浮点 WAV 声明样本帧数（1 帧）
+      assert_eq(encoded[60].to_int(), 0x66) // 'f'
+      assert_eq(encoded[61].to_int(), 0x61) // 'a'
+      assert_eq(encoded[62].to_int(), 0x63) // 'c'
+      assert_eq(encoded[63].to_int(), 0x74) // 't'
+      assert_eq(encoded[64].to_int(), 4) // fact 负载长度（小端）
+      assert_eq(encoded[68].to_int(), 1) // 样本帧数（小端）
       match WavFile::parse(encoded) {
         Some(w) => {
           assert_eq(w.format.channels, 1)
@@ -730,7 +737,7 @@ test "encode_wav_ex float64 roundtrips with extensible header" {
   let data : Bytes = b"\x00\x00\x00\x00\x00\x00\xf0\x3f"
   match encode_wav_ex(fmt, data, Float) {
     Ok(encoded) => {
-      assert_eq(encoded.length(), 68 + 8)
+      assert_eq(encoded.length(), 68 + 12 + 8)
       assert_eq(encoded[20].to_int(), 0xFE)
       assert_eq(encoded[32].to_int(), 8) // block_align
       assert_eq(encoded[34].to_int(), 64) // 容器位深
@@ -738,6 +745,9 @@ test "encode_wav_ex float64 roundtrips with extensible header" {
       assert_eq(encoded[44].to_int(), 3) // GUID: FLOAT
       assert_eq(encoded[58].to_int(), 0x9B)
       assert_eq(encoded[59].to_int(), 0x71)
+      // fact：紧接 fmt 之后，1 帧
+      assert_eq(encoded[60].to_int(), 0x66)
+      assert_eq(encoded[68].to_int(), 1)
       match WavFile::parse(encoded) {
         Some(w) => {
           assert_eq(w.format.bits_per_sample, 64)
@@ -1329,5 +1339,80 @@ test "silent fallback when raw fmt payload is inconsistent" {
   match encode_wav_layout(fmt, data, Int, 2, 4, [], Some(ext_raw)) {
     Ok(out) => assert_eq(out.length(), ext.length())
     Err(_) => assert_true(false)
+  }
+}
+
+///|
+/// 手工拼带重复 fmt / data 块的 WAV：解析器必须拒绝，不能静默取最后一个。
+fn build_wav_duplicate_block(kind : Int32) -> Bytes {
+  let data : Bytes = b"\x00\x00"
+  let total = 12 + 8 + 16 + 8 + 2 + 8 + 2
+  let buf = Buffer()
+  buf.write_bytes(b"RIFF".exact_view())
+  put_u32(buf, total - 8)
+  buf.write_bytes(b"WAVE".exact_view())
+  buf.write_bytes(b"fmt ".exact_view())
+  put_u32(buf, 16)
+  put_u16(buf, 1)
+  put_u16(buf, 1)
+  put_u32(buf, 8000)
+  put_u32(buf, 16000)
+  put_u16(buf, 2)
+  put_u16(buf, 16)
+  if kind == 0 {
+    // 第二个 fmt
+    buf.write_bytes(b"fmt ".exact_view())
+    put_u32(buf, 16)
+    put_u16(buf, 1)
+    put_u16(buf, 1)
+    put_u32(buf, 8000)
+    put_u32(buf, 16000)
+    put_u16(buf, 2)
+    put_u16(buf, 16)
+  }
+  buf.write_bytes(b"data".exact_view())
+  put_u32(buf, data.length())
+  buf.write_bytes(data.exact_view())
+  if kind == 1 {
+    // 第二个 data
+    buf.write_bytes(b"data".exact_view())
+    put_u32(buf, data.length())
+    buf.write_bytes(data.exact_view())
+  }
+  buf.to_bytes()
+}
+
+///|
+test "parse rejects duplicate fmt/data chunks" {
+  assert_true(WavFile::parse(build_wav_duplicate_block(0)) is None)
+  assert_true(WavFile::parse(build_wav_duplicate_block(1)) is None)
+}
+
+///|
+test "float encode writes fact chunk with frame count" {
+  let fmt : WavFormat = { channels: 2, sample_rate: 8000, bits_per_sample: 32, }
+  let data : Bytes = b"\x00\x00\x80\x3f\x00\x00\x00\x00"
+  match encode_wav_ex(fmt, data, Float) {
+    Err(_) => assert_true(false)
+    Ok(encoded) =>
+      match WavFile::parse(encoded) {
+        Some(w) => {
+          let mut has_fact = false
+          for c in w.chunks {
+            if c.fourcc == "fact" {
+              has_fact = true
+              assert_eq(c.data.length(), 4)
+              // 1 帧（8 字节 / 每帧 2 声道 × 4 字节）
+              assert_eq(c.data[0].to_int() | (c.data[1].to_int() << 8), 1)
+            }
+          }
+          assert_true(has_fact)
+          match w.to_bytes() {
+            Ok(back) => assert_eq(back.length(), encoded.length())
+            Err(_) => assert_true(false)
+          }
+        }
+        None => assert_true(false)
+      }
   }
 }
