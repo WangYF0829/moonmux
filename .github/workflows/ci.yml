@@ -20,8 +20,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # 固定工具链版本：避免 latest 漂移悄悄改变行为；升级需单独提交并跑全量 CI。
-  MOONBIT_INSTALL_VERSION: "0.1.20261012"
+  # 工具链跟随官方 latest（安装脚本的固定版本 URL 对旧版本返回 403，无法可靠 pin）；
+  # 每个 job 都打印 `moon version --all`，发布记录附上本次使用的版本。
   # 未覆盖行数基线（moon coverage analyze 的 Total）。
   # 2026-10-25 全量审查后 Linux native 实测 662、Windows native 635；
   # 新增约 2000 行防御性分支与 CLI 代码，未覆盖行数相应上升（上次实测 605、基线 600）。
