@@ -95,7 +95,7 @@ mdat → 按 chunk 切出样本（= Opus 包）
 | 可安装性 | `scripts/install_check.sh`：干净工程 `moon add` → 调用公开 API → 运行 |
 | 性能基准 | `scripts/bench.mjs`（release native，端到端计时，含进程启动；CI `bench` job 记录到 job summary，不设阈值） |
 | 变异测试 | `scripts/fuzz.mjs`（真实样本 × 6 类变异，断言退出码 0/1/2、无超时/崩溃；CI `fuzz` job 固定种子 400 次）+ 各包 `*_fuzz_wbtest.mbt` 确定性用例 |
-| 门禁 | CI：`check --deny-warn`、`fmt --check`、`info`、双平台测试、覆盖率非回归、native/Windows smoke、mp4 verify、install（等待发布）、bench、fuzz、版本一致性、固定工具链 |
+| 门禁 | CI：`check --deny-warn`、`fmt --check`、`info`、双平台测试、覆盖率非回归、native/Windows smoke、mp4 verify、install（等待发布）、bench、fuzz、版本一致性、工具链版本记录 |
 
 ## 6. 已知边界与下一期候选
 

@@ -577,12 +577,21 @@ test "escape_controls renders control characters as hex" {
 test "looks_like_packet_member only matches real packet members" {
   assert_true(looks_like_packet_member("packet_000001.bin"))
   assert_true(looks_like_packet_member("dir/manifest.txt"))
-  assert_true(looks_like_packet_member("PACKET~1.BIN"))
-  assert_true(looks_like_packet_member("MANIFE~1.TXT"))
+  assert_true(looks_like_packet_member("packet~1.bin"))
+  assert_true(looks_like_packet_member("manife~1.txt"))
   // 8.3 短名的 "~" 后必须是数字，普通文件名不能误拒
   assert_false(looks_like_packet_member("manife~abc.txt"))
   assert_false(looks_like_packet_member("packet_000001.ogg"))
   assert_false(looks_like_packet_member("notes.txt"))
+}
+
+///|
+/// Windows 路径大小写不敏感，大写 8.3 短名同样要识别；POSIX 下文件名区分大小写，
+/// 大写形式是普通文件名，不应误拒。
+#cfg(platform="windows")
+test "looks_like_packet_member folds case on Windows" {
+  assert_true(looks_like_packet_member("PACKET~1.BIN"))
+  assert_true(looks_like_packet_member("MANIFE~1.TXT"))
 }
 
 ///|

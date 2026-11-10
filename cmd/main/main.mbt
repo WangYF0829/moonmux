@@ -1771,8 +1771,9 @@ fn read_manifest(sub : String) -> Result[@manifest.Manifest, MuxFail] {
       return Err(MuxIo("无法检查清单 " + path + " —— " + msg))
   }
   if !regular {
+    // 特殊文件（目录/管道/设备）属于「读不到」而非「内容不合规」：退出 2
     return Err(
-      MuxData(
+      MuxIo(
         "清单不是普通文件（可能是目录、管道或设备）—— " +
         path,
       ),

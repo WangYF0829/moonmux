@@ -25,7 +25,7 @@
   restore/commit/备份删除失败不再静默；`looks_like_packet_member` 收紧 8.3 短名。
 - **POSIX**：反斜杠不再当分隔符、`C:foo` 不再被误当作绝对路径。
 - **manifest**：拒绝重复 `serial/packets/chain` 头字段。
-- **CI/工程**：checkout 固定到 v4.2.2 SHA、工具链固定版本；文档-only 推送跳过 CI；
+- **CI/工程**：checkout 固定到 v4.2.2 SHA、每个 job 记录工具链版本（官方安装脚本对旧版本 URL 返回 403，暂无法 pin）；文档-only 推送跳过 CI；
   `install` job 轮询等待 mooncakes 发布；新增 Windows smoke job 与版本一致性断言脚本；
   install_check 去掉 Python 依赖、smoke/安装脚本 `mktemp` 可移植；bench/fuzz 使用
   唯一临时目录、区分启动失败与超时、fuzz 覆盖 remux。
