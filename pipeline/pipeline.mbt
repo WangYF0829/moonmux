@@ -377,6 +377,9 @@ pub fn ogg_to_wav_pages_bits(
   if channels == 0 || sample_rate == 0 {
     return Err("没有解出任何音频数据")
   }
+  if buf.length() == 0 {
+    return Err("解码后的 PCM 为空（流里没有可解码的音频包）")
+  }
   let format : @wav.WavFormat = {
     channels,
     sample_rate,

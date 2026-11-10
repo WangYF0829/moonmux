@@ -20,10 +20,12 @@ env:
   # 新增约 2000 行防御性分支与 CLI 代码，未覆盖行数相应上升（上次实测 605、基线 600）。
   # 基线设为 660，配合 15 行容差，上限 675；后续补测试应逐步调低。
   # 调高需要在 PR/提交说明中给出实测值与原因。
-  # v0.7.0：新增 WAV 全格式（hound 语义）与流式页读取实现行，Windows 实测 644；
+  # v0.4.0：新增 WAV 全格式（hound 语义）与流式页读取实现行，Windows 实测 644；
   # Linux 侧计数比 Windows 高约 27 行（≈671），基线 660→670（上限 685）。
-  # v0.7.0：新增 MP4 → Ogg 解封装（demux.mbt，含大量坏表防御分支），Windows 实测 683；
+  # v0.5.0：新增 MP4 → Ogg 解封装（demux.mbt，含大量坏表防御分支），Windows 实测 683；
   # Linux 侧 ≈710，基线 670→700（上限 715）。
+  # v0.8.0：正确性修复 + 新增回归测试（TOC/MP4 读侧/stsz/多声道/跨页替换/WAV fmt），
+  # Windows 实测 683，Linux 侧 ≈710；基线维持 700（上限 715）。
   MAX_UNCOVERED_LINES: 700
   # 跨平台/工具链 patch 版本可能让计数抖动几行，给一点余量。
   COVERAGE_TOLERANCE: 15
@@ -233,9 +235,11 @@ jobs:
         run: moon build --target native
 
       - name: Verify MP4 with ffprobe
+        env:
+          REQUIRE_MP4_TOOLS: "1"
         run: bash scripts/verify_mp4.sh
 
-  # 回应 10 月终审反馈：在干净工程里实测 mooncakes 版本可安装、可运行。
+  # 在干净工程里实测 mooncakes 版本可安装、可运行。
   install:
     name: install · moon add
     runs-on: ubuntu-latest
@@ -253,7 +257,7 @@ jobs:
 
       - name: Verify clean-project install
         env:
-          MOONMUX_INSTALL_VERSION: "0.7.1"
+          MOONMUX_INSTALL_VERSION: "0.8.0"
         run: bash scripts/install_check.sh
   # 性能基准：release native + Node 脚本（无第三方依赖），表格写入 job summary。
   # 只记录、不设阈值 —— 共享 runner 的绝对耗时没有可比性，回归靠本地对比。
@@ -277,6 +281,7 @@ jobs:
 
       - name: Run benchmark
         run: |
+          set -o pipefail
           node scripts/bench.mjs --runs 5 | tee bench.txt
           {
             echo "### bench (native release, ubuntu-latest)"

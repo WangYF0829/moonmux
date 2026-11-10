@@ -1078,7 +1078,7 @@ test "encode_wav_layout rejects bad chunk fourcc" {
     { fourcc: "LIS", data: b"\x01", after_data: false, },
   ]
   assert_true(
-    match encode_wav_layout(format, b"\x00\x00", Int, 2, 0, bad) {
+    match encode_wav_layout(format, b"\x00\x00", Int, 2, 0, bad, None) {
       Err(_) => true
       Ok(_) => false
     },
@@ -1098,7 +1098,7 @@ test "encode_wav_layout rejects invalid format and misaligned data" {
     bits_per_sample: 16,
   }
   assert_true(
-    match encode_wav_layout(bad_format, b"", Int, 2, 0, []) {
+    match encode_wav_layout(bad_format, b"", Int, 2, 0, [], None) {
       Err(_) => true
       Ok(_) => false
     },
@@ -1109,7 +1109,7 @@ test "encode_wav_layout rejects invalid format and misaligned data" {
     bits_per_sample: 16,
   }
   assert_true(
-    match encode_wav_layout(format, b"\x00", Int, 2, 0, []) {
+    match encode_wav_layout(format, b"\x00", Int, 2, 0, [], None) {
       Err(_) => true
       Ok(_) => false
     },
@@ -1148,4 +1148,186 @@ test "parse rejects short fmt, small cbsize and oversized valid bits" {
       Some(_) => false
     },
   )
+}
+
+///|
+/// 手工拼一个 fmt 块 18 字节（PCM + cbSize=0）的 WAV：旧实现会把它重写成 16 字节。
+fn build_wav_fmt18() -> Bytes {
+  let data : Bytes = b"\x01\x02\x03\x04"
+  let total = 12 + 8 + 18 + 8 + data.length()
+  let buf = Buffer()
+  buf.write_bytes(b"RIFF".exact_view())
+  put_u32(buf, total - 8)
+  buf.write_bytes(b"WAVE".exact_view())
+  buf.write_bytes(b"fmt ".exact_view())
+  put_u32(buf, 18)
+  put_u16(buf, 1) // PCM
+  put_u16(buf, 1)
+  put_u32(buf, 8000)
+  put_u32(buf, 16000)
+  put_u16(buf, 2)
+  put_u16(buf, 16)
+  put_u16(buf, 0) // cbSize = 0
+  buf.write_bytes(b"data".exact_view())
+  put_u32(buf, data.length())
+  buf.write_bytes(data.exact_view())
+  buf.to_bytes()
+}
+
+///|
+test "to_bytes preserves tag-1 24-bit fmt layout" {
+  // encode_wav 对 24 位整数写 tag1 + 16 字节 fmt（block_align=3）。
+  // 旧 to_bytes 会改写成 40 字节 Extensible，破坏逐字节往返。
+  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 24, }
+  let original = encode_wav(fmt, b"\x01\x02\x03\x04\x05\x06")
+  match WavFile::parse(original) {
+    Some(w) =>
+      match w.to_bytes() {
+        Ok(back) =>
+          assert_true(
+            back.length() == original.length() &&
+            ({
+              let mut same = true
+              let mut i = 0
+              while i < back.length() {
+                if back[i].to_int() != original[i].to_int() {
+                  same = false
+                }
+                i = i + 1
+              }
+              same
+            }),
+          )
+        Err(msg) => {
+          println("to_bytes error: " + msg)
+          assert_true(false)
+        }
+      }
+    None => assert_true(false)
+  }
+}
+
+///|
+test "to_bytes preserves 18-byte fmt chunk" {
+  let original = build_wav_fmt18()
+  match WavFile::parse(original) {
+    Some(w) =>
+      match w.to_bytes() {
+        Ok(back) =>
+          assert_true(
+            back.length() == original.length() &&
+            ({
+              let mut same = true
+              let mut i = 0
+              while i < back.length() {
+                if back[i].to_int() != original[i].to_int() {
+                  same = false
+                }
+                i = i + 1
+              }
+              same
+            }),
+          )
+        Err(_) => assert_true(false)
+      }
+    None => assert_true(false)
+  }
+}
+
+///|
+test "to_bytes preserves extensible fmt for stereo 16-bit" {
+  // 2 声道 / 16 位本可以用简单 16 字节 fmt；原始文件是 Extensible 时必须保留
+  // （否则 channelMask 丢失，且 72 字节文件会缩成 48 字节）。
+  let original = build_wav_ext(1, 2, 8000, 16, 16, 4, b"\x01\x02\x03\x04")
+  match WavFile::parse(original) {
+    Some(w) =>
+      match w.to_bytes() {
+        Ok(back) =>
+          assert_true(
+            back.length() == original.length() &&
+            ({
+              let mut same = true
+              let mut i = 0
+              while i < back.length() {
+                if back[i].to_int() != original[i].to_int() {
+                  same = false
+                }
+                i = i + 1
+              }
+              same
+            }),
+          )
+        Err(_) => assert_true(false)
+      }
+    None => assert_true(false)
+  }
+}
+
+///|
+/// 按给定字段拼 16 字节 fmt 负载（测试 to_bytes 的原始布局校验用）。
+fn raw_fmt16(
+  tag : Int32,
+  channels : Int32,
+  sample_rate : Int32,
+  block_align : Int32,
+  bits : Int32,
+) -> Bytes {
+  let buf = Buffer()
+  put_u16(buf, tag)
+  put_u16(buf, channels)
+  put_u32(buf, sample_rate)
+  put_u32(buf, sample_rate * block_align)
+  put_u16(buf, block_align)
+  put_u16(buf, bits)
+  buf.to_bytes()
+}
+
+///|
+fn slice_bytes(src : Bytes, start : Int32, end : Int32) -> Bytes {
+  let buf = Buffer()
+  let mut i = start
+  while i < end {
+    buf.write_byte(src[i])
+    i = i + 1
+  }
+  buf.to_bytes()
+}
+
+///|
+test "silent fallback when raw fmt payload is inconsistent" {
+  let fmt : WavFormat = { channels: 1, sample_rate: 8000, bits_per_sample: 16, }
+  let data : Bytes = b"\x00\x00"
+  let good = raw_fmt16(1, 1, 8000, 2, 16)
+  let cases : Array[Bytes] = [
+    b"", // 长度 < 16
+    slice_bytes(build_wav_simple(1, 1, 8000, 2, 16, b"\x00\x00"), 20, 37), // 17 字节奇数长度
+    raw_fmt16(0x55, 1, 8000, 2, 16), // 未知 tag
+    raw_fmt16(1, 2, 8000, 2, 16), // 声道不符
+    raw_fmt16(1, 1, 44100, 2, 16), // 采样率不符
+    raw_fmt16(1, 1, 8000, 4, 16), // 块对齐不符
+    raw_fmt16(1, 1, 8000, 2, 24), // 容器位深不符
+    raw_fmt16(0xFFFE, 1, 8000, 2, 16), // Extensible 却只有 16 字节
+    raw_fmt16(1, 1, 8000, 2, 16) + b"\x00\x00\x00\x00", // tag1 不是 16/18 字节
+  ]
+  for raw in cases {
+    match encode_wav_layout(fmt, data, Int, 2, 0, [], Some(raw)) {
+      Ok(out) => assert_true(out.length() > 0)
+      Err(msg) => {
+        println("unexpected err: " + msg)
+        assert_true(false)
+      }
+    }
+  }
+  // 合法原始布局原样写回
+  match encode_wav_layout(fmt, data, Int, 2, 0, [], Some(good)) {
+    Ok(out) => assert_true(slice_bytes(out, 20, 36).length() == 16)
+    Err(_) => assert_true(false)
+  }
+  // Extensible 原始 40 字节 + 匹配的 channelMask：保留原布局
+  let ext = build_wav_ext(1, 1, 8000, 16, 16, 2, b"\x00\x00")
+  let ext_raw = slice_bytes(ext, 20, 60)
+  match encode_wav_layout(fmt, data, Int, 2, 4, [], Some(ext_raw)) {
+    Ok(out) => assert_eq(out.length(), ext.length())
+    Err(_) => assert_true(false)
+  }
 }

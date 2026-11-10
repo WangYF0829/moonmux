@@ -696,3 +696,40 @@ test "reassemble does not glue packets across a broken continuation" {
   assert_eq(packets2.length(), 1)
   assert_true(same_bytes(packets2[0].data, b"A"))
 }
+
+///|
+/// 头包组（粒度全为 0）必须各自独占一页并在页边界上开始/结束。
+///
+/// RFC 7845 §3 要求 OpusHead/OpusTags 分别在首页与第二页；Vorbis I A.2
+/// 要求三个头包各自成页。旧实现只隔离第 0 组，会把 OpusTags 和音频页合并。
+test "paginate_sized isolates header groups" {
+  let packets : Array[Packet] = [
+    { data: b"OPUSHEAD", granule_position: 0L, serial: 1U, },
+    { data: repeat_byte((0x41 : Byte), 300), granule_position: 0L, serial: 1U, },
+    {
+      data: repeat_byte((0x42 : Byte), 900),
+      granule_position: 960L,
+      serial: 1U,
+    },
+    {
+      data: repeat_byte((0x43 : Byte), 900),
+      granule_position: 1920L,
+      serial: 1U,
+    },
+  ]
+  let pages = paginate_sized(packets, 1U, 4096)
+  // 3 页：BOS 头、Tags 头、两条音频合并
+  assert_eq(pages.length(), 3)
+  assert_eq(pages[0].segments.length(), 1)
+  assert_eq(pages[0].granule_position, 0L)
+  // 第二页只有 Tags（300 字节 = 255 + 45 两个段），粒度 0
+  assert_eq(pages[1].segments.length(), 2)
+  assert_eq(pages[1].granule_position, 0L)
+  // 第三页只有音频包，粒度取最后一个包的 1920
+  assert_eq(pages[2].granule_position, 1920L)
+  // 重组后包内容与顺序不变
+  let restored = reassemble(parse_pages(serialize_pages(pages)))
+  assert_eq(restored.length(), 4)
+  assert_true(same_bytes(restored[1].data, packets[1].data))
+  assert_eq(structure_problems(parse_pages(serialize_pages(pages))).length(), 0)
+}

@@ -328,3 +328,17 @@ test "reject serial values beyond 32 bits" {
     Err(_) => assert_true(false)
   }
 }
+
+///|
+test "manifest rejects empty / truncated / illegal granule lists" {
+  // 0 字节、仅注释、只有版本行没有粒度的清单都不是合法清单
+  assert_true(parse("") is Err(_))
+  assert_true(parse("# moonmux manifest v1\n") is Err(_))
+  assert_true(parse("# moonmux manifest v1\n# packets=0\n") is Err(_))
+  // 粒度 < -1
+  assert_true(parse("# moonmux manifest v1\n# packets=2\n-2\n0\n") is Err(_))
+  // 粒度不单调
+  assert_true(parse("# moonmux manifest v1\n# packets=2\n100\n50\n") is Err(_))
+  // -1（本页无包结束）不参与单调比较，合法
+  assert_true(parse("# moonmux manifest v1\n# packets=2\n-1\n100\n") is Ok(_))
+}

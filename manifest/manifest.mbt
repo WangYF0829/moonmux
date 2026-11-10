@@ -286,7 +286,14 @@ pub fn parse(text : String) -> Result[Manifest, String] {
               }
             } else {
               match parse_int_strict(line) {
-                Some(v) => granules.push(v)
+                Some(v) => {
+                  // granule 的合法范围是 -1（本页无包结束）或 >=0；
+                  // 更小的负值只可能来自损坏/伪造清单，必须拒绝。
+                  if v < -1L {
+                    return Err("清单里的粒度值小于 -1：" + line)
+                  }
+                  granules.push(v)
+                }
                 None =>
                   return Err("清单里有无法解析的粒度行：" + line)
               }
@@ -302,6 +309,31 @@ pub fn parse(text : String) -> Result[Manifest, String] {
   // 静默当成「没有时间信息」会让 mux 写出所有粒度都是 0 的文件。
   if has_version && granules.length() == 0 {
     return Err("清单没有任何粒度行（文件可能被截断）")
+  }
+  // 0 字节 / 仅注释 / 只有 # packets=0 的清单不是「合法旧清单」：
+  // 放进 mux 会写出所有粒度都是 0 的文件（时长 0、seek 全废）。
+  let no_packets = match packets {
+    Some(0) | None => true
+    Some(_) => false
+  }
+  if no_packets && granules.length() == 0 {
+    return Err("清单为空（没有包数与粒度行）")
+  }
+  // 粒度必须单调不减（-1 表示本页没有包结束，跳过不参与比较）。
+  let mut last : Int64 = -1L
+  for g in granules {
+    if g >= 0L {
+      if g < last {
+        return Err(
+          "清单的粒度不是单调不减（" +
+          g.to_string() +
+          " < " +
+          last.to_string() +
+          "）",
+        )
+      }
+      last = g
+    }
   }
   Ok({ serial, packets, chain, granules, })
 }

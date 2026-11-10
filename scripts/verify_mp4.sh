@@ -39,6 +39,16 @@ trap cleanup EXIT INT TERM
 FAIL=0
 pass() { printf "  PASS  %s\n" "$1"; }
 fail() { printf "  FAIL  %s\n" "$1"; FAIL=$((FAIL + 1)); }
+# CI 的 mp4 job 会装好 ffmpeg；若仍然缺失，说明外部对账一项都没跑，
+# 不能静默 SKIP 后全绿（REQUIRE_MP4_TOOLS=1 时按失败处理）。
+REQUIRE_MP4_TOOLS="${REQUIRE_MP4_TOOLS:-0}"
+skip_or_fail() {
+  if [ "$REQUIRE_MP4_TOOLS" = "1" ]; then
+    fail "$1（环境要求 ffmpeg/ffprobe，但工具缺失）"
+  else
+    echo "  SKIP  $1（未安装 ffmpeg）"
+  fi
+}
 
 echo "== MP4 写侧验证（$BIN）=="
 
@@ -93,17 +103,17 @@ if command -v ffprobe >/dev/null 2>&1; then
       fail "时长一致（MP4 ${M4_MS}ms vs Ogg ${OGG_MS}ms）"
     fi
   else
-    echo "  SKIP  时长一致性（缺少工具输出）"
+    skip_or_fail "时长一致性"
   fi
 else
-  echo "  SKIP  ffprobe 对账（未安装 ffmpeg）"
+  skip_or_fail "ffprobe 对账"
 fi
 
 if command -v ffmpeg >/dev/null 2>&1; then
   ffmpeg -v error -i "$TMP/out.m4a" -f null - >/dev/null 2>&1
   if [ $? -eq 0 ]; then pass "ffmpeg 解码 MP4 无错误"; else fail "ffmpeg 解码 MP4 无错误"; fi
 else
-  echo "  SKIP  ffmpeg 解码（未安装 ffmpeg）"
+  skip_or_fail "ffmpeg 解码 MP4"
 fi
 
 # 6) 反向闭环：MP4 → Ogg，音频包应逐字节还原
@@ -133,13 +143,13 @@ if [ -n "${M4_MS:-}" ] && [ -n "$BACK_MS" ]; then
     fail "反向时长一致（MP4 ${M4_MS}ms vs Ogg ${BACK_MS}ms）"
   fi
 else
-  echo "  SKIP  反向时长一致性（缺少工具输出）"
+  skip_or_fail "反向时长一致性"
 fi
 if command -v ffmpeg >/dev/null 2>&1; then
   ffmpeg -v error -i "$TMP/back.ogg" -f null - >/dev/null 2>&1
   if [ $? -eq 0 ]; then pass "ffmpeg 解码回读 Ogg 无错误"; else fail "ffmpeg 解码回读 Ogg 无错误"; fi
 else
-  echo "  SKIP  ffmpeg 解码回读（未安装 ffmpeg）"
+  skip_or_fail "ffmpeg 解码回读 Ogg"
 fi
 
 echo

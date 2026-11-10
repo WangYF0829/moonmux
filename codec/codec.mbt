@@ -80,6 +80,23 @@ pub fn parse_opus_head(data : Bytes) -> AudioInfo? {
   if channels == 0 {
     return None
   }
+  let family = data[18].to_int()
+  if family == 0 {
+    // 映射族 0 只支持单声道 / 立体声（RFC 7845 §5.1.1）
+    if channels > 2 {
+      return None
+    }
+  } else {
+    // 映射族非 0：必须带 StreamCount / CoupledCount / ChannelMapping(channels)
+    if data.length() < 21 + channels {
+      return None
+    }
+    let stream_count = data[19].to_int()
+    let coupled_count = data[20].to_int()
+    if stream_count == 0 || coupled_count > stream_count {
+      return None
+    }
+  }
   Some({
     codec: "Opus",
     channels,

@@ -3,6 +3,38 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
+## [0.8.0] — 2026-11-10
+
+### 修复（独立审阅发现的正确性问题）
+- **Opus TOC**：SILK 60 ms 帧长 3840 → 2880；code-3 帧数改读 `data[1] >> 2`；
+  补 M ≤ 48 与包总时长 ≤ 120 ms 校验。
+- **`remux` 输入闸门**：CLI 先做 CRC / 结构 / EOS 检查；库层拒绝链式与多逻辑流输入
+  （不再静默只取第一段）；stts 时长不再因 TOC 错误偏大。
+- **MP4 读侧防崩溃**：box 字段读取先按 `next - body` 校验长度，截断文件返回
+  `None`/`Err` 而不是越界 panic；mvhd/mdhd version 1 按 64 位字段解析。
+- **`stsz` 与样本偏移**：定长样本数与样本偏移用文件大小做上界；`pos + size` 改用
+  Int64 计算，修复溢出后 0 字节音频包「假成功」。
+- **多声道 OpusHead**：dOps / OpusHead 保留 `StreamCount` / `CoupledCount`，
+  family≠0 输出 21+C 字节，5.1/7.1 流往返后头部合法。
+- **granule 语义**：MP4 → Ogg 写累计样本数（RFC 7845 §4，PCM = granule − pre-skip）。
+- **dOps OutputGain**：从 OpusHead 透传 Q7.8 增益，带 gain 的流往返不再归零。
+- **头包页隔离**：`paginate_sized` 不再把 OpusTags / Vorbis 头包与音频包合并
+  （RFC 7845 §3 / Vorbis I A.2）。
+- **`replace_packet` 跨页**：修正向前回溯条件，带大封面/超长 OpusTags 的跨页包可正确替换。
+- **WAV fmt 布局保真**：`WavFile::to_bytes` 保存并原样写回原始 fmt 负载（16 / 18 / 40 字节），
+  tag1+24bit、tag3+16 字节、Extensible 小声道数不再被改写，channelMask 不再丢失。
+- **manifest / mux**：拒绝空清单、granule < -1 与非单调清单；`mux` 落盘前在内存里
+  回读校验页数 / CRC / 结构，通过才写。
+- **工程加固**：LICENSE 去掉 Apache HTTP Server 子组件声明；`.moonignore` 排除 `_*/`
+  与开发脚本；CI bench 步骤启用 `pipefail`；`verify_mp4.sh` 在 CI 强制要求
+  ffmpeg/ffprobe；smoke 断言数文案修正；补全 bash 补全与 `moon.mod` 描述。
+
+### 测试
+- 测试 **299 → 315**；覆盖率未覆盖行 **683**（CI 门禁 715）。
+- 新增回归：Opus TOC 全配置（含 SILK 60 ms / code-3 上限）、32 字节截断 MP4、
+  stsz 定长样本上界、样本偏移溢出、family=1 六声道 OpusHead、跨页包替换、
+  头包页隔离、WAV 原始 fmt 布局回退、manifest 空/坏清单等。
+
 ## [0.7.1] — 2026-11-09
 
 ### 文档

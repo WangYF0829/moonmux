@@ -130,12 +130,26 @@ fn child(data : Bytes, parent : BoxRef, name : String) -> BoxRef? {
 
 ///|
 /// mvhd / mdhd 的时间字段（version 0 用 32 位，version 1 用 64 位）。
-fn read_time_header(data : Bytes, b : BoxRef) -> (Int32, Int32) {
+///
+/// 必须先用 `next - body` 校验字段长度：box 头长度合法但不带完整 payload
+/// （例如 size=8 的空 mvhd 位于文件末尾）时，直接 `rd_u8` 会越界 panic。
+/// 读侧承诺「坏文件返回 None 而不是崩溃」，这里同样返回 None。
+fn read_time_header(data : Bytes, b : BoxRef) -> (Int32, Int32)? {
+  let avail = b.next - b.body
+  if avail < 4 {
+    return None
+  }
   let version = rd_u8(data, b.body)
   if version == 1 {
-    (rd_u32_be(data, b.body + 20), rd_u64_be(data, b.body + 24).to_int())
+    if avail < 32 {
+      return None
+    }
+    Some((rd_u32_be(data, b.body + 20), rd_u64_be(data, b.body + 24).to_int()))
   } else {
-    (rd_u32_be(data, b.body + 12), rd_u32_be(data, b.body + 16))
+    if avail < 20 {
+      return None
+    }
+    Some((rd_u32_be(data, b.body + 12), rd_u32_be(data, b.body + 16)))
   }
 }
 
@@ -207,16 +221,23 @@ pub fn inspect(data : Bytes) -> Mp4Info? {
     Some(b) => b
     None => return None
   }
+  if ftyp.next - ftyp.body < 4 {
+    return None
+  }
   let major = rd_fourcc(data, ftyp.body)
   let moov_children = boxes_in(data, moov.body, moov.next)
   let mut timescale = 0
   let mut duration = 0
   match find_box(moov_children, "mvhd") {
-    Some(b) => {
-      let pair = read_time_header(data, b)
-      timescale = pair.0
-      duration = pair.1
-    }
+    Some(b) =>
+      match read_time_header(data, b) {
+        Some(pair) => {
+          timescale = pair.0
+          duration = pair.1
+        }
+        // mvhd 截断：整个文件视为不可识别，而不是崩溃或给出错误时长
+        None => return None
+      }
     None => ()
   }
   let tracks : Array[Mp4Track] = []
@@ -236,11 +257,14 @@ pub fn inspect(data : Bytes) -> Mp4Info? {
           let mut ts = 0
           let mut dur = 0
           match find_box(mdia_children, "mdhd") {
-            Some(m) => {
-              let pair = read_time_header(data, m)
-              ts = pair.0
-              dur = pair.1
-            }
+            Some(m) =>
+              match read_time_header(data, m) {
+                Some(pair) => {
+                  ts = pair.0
+                  dur = pair.1
+                }
+                None => return None
+              }
             None => ()
           }
           let mut codec = ""

@@ -1186,7 +1186,15 @@ fn run_remux(src : String, out : String) -> Unit {
   reject_same_path(src, out)
   match read_all(src) {
     None => ()
-    Some(data) =>
+    Some(data) => {
+      // 与其它写命令一致：先完整校验输入（CRC / 结构 / EOS），
+      // 否则截断或 CRC 损坏的输入会被「洗白」成合法 MP4 且 exit 0。
+      let pages = @ogg.parse_pages(data)
+      if pages.length() == 0 {
+        fail_data("错误: 不是合法的 Ogg 文件 —— " + src)
+        return
+      }
+      require_fully_parsed(src, pages, data)
       match @mp4.remux_ogg_opus(data) {
         Err(msg) => fail_data("错误: remux 失败 —— " + msg)
         Ok(bytes) => {
@@ -1244,6 +1252,7 @@ fn run_remux(src : String, out : String) -> Unit {
           }
         }
       }
+    }
   }
 }
 
@@ -1878,6 +1887,32 @@ fn run_mux(dir : String, out : String) -> Unit {
       }
     Ok(plan) => {
       reject_mux_alias(plan, out)
+      // mux 是唯一没有写后回读自检的写命令：写盘前先在内存里解析一遍，
+      // 页数 / CRC / 结构（BOS/EOS/页序）全过才落盘。
+      let encoded = @ogg.serialize_pages(plan.pages)
+      let reparsed = @ogg.parse_pages(encoded)
+      let mut self_bad = if reparsed.length() != plan.pages.length() {
+        1
+      } else {
+        0
+      }
+      for p in reparsed {
+        if !@ogg.page_crc_ok(p) {
+          self_bad = self_bad + 1
+        }
+      }
+      for f in @ogg.structure_findings(reparsed) {
+        match f.severity {
+          @ogg.Severity::Error => self_bad = self_bad + 1
+          _ => ()
+        }
+      }
+      if self_bad > 0 {
+        fail_data(
+          "错误: mux 生成的内存结果自检未通过，拒绝写出",
+        )
+        return
+      }
       let bak = backup_output(out)
       match bak {
         Unavailable => {
@@ -1886,7 +1921,7 @@ fn run_mux(dir : String, out : String) -> Unit {
         }
         _ => ()
       }
-      @fs.write_bytes_to_file(out, @ogg.serialize_pages(plan.pages)) catch {
+      @fs.write_bytes_to_file(out, encoded) catch {
         IOError(msg) => {
           restore_output(out, bak)
           fail("错误: 无法写入 " + out + " —— " + msg)

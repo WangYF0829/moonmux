@@ -314,3 +314,37 @@ test "replacing a packet on a shared page keeps the layout" {
     assert_true(page_crc_ok(p))
   }
 }
+
+///|
+/// 替换一个跨页的包（OpusTags 超过 65025 字节 → 跨多页）。
+///
+/// 旧实现向前回溯循环条件恒假，前几页仍保留旧包残片、重建页缺 continued，
+/// 产物结构损坏；修好后必须整体替换并保持结构自洽。
+test "replacing a cross-page packet rebuilds all its pages" {
+  let serial = 21U
+  let head : Bytes = b"IDHEADER"
+  let huge_tags = repeat_byte((0x54 : Byte), 255 * 255 + 1000)
+  let packets : Array[Packet] = [
+    { data: head, granule_position: 0L, serial, },
+    { data: huge_tags, granule_position: 0L, serial, },
+    { data: b"AUDIO", granule_position: 960L, serial, },
+  ]
+  let pages = paginate(packets, serial)
+  assert_true(pages.length() >= 4) // head 页 + Tags 跨页 + 音频页
+  let new_tags = repeat_byte((0x4E : Byte), 255 * 255 + 2000)
+  let updated = match replace_packet(pages, serial, 1, new_tags) {
+    Ok(p) => p
+    Err(_) => []
+  }
+  assert_true(updated.length() >= 4)
+  let after = reassemble(updated)
+  assert_eq(after.length(), 3)
+  assert_eq(after[1].data.length(), new_tags.length())
+  assert_true(same_bytes(after[1].data, new_tags))
+  assert_eq(structure_findings(updated).length(), 0)
+  let reparsed = parse_pages(serialize_pages(updated))
+  assert_eq(structure_findings(reparsed).length(), 0)
+  for p in reparsed {
+    assert_true(page_crc_ok(p))
+  }
+}

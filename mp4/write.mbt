@@ -165,7 +165,7 @@ fn dops_box(opus_head : Bytes) -> Bytes {
   push_u8(body, channels)
   push_u16_be(body, pre_skip)
   push_u32_be(body, input_rate)
-  push_u16_be(body, 0) // output gain（Q7.8 dB）
+  push_u16_be(body, le16_at(opus_head, 16)) // output gain（Q7.8 dB，来自 OpusHead）
   push_u8(body, family) // channel mapping family
   if family != 0 && opus_head.length() >= 21 + channels {
     push_u8(body, opus_head[19].to_int()) // stream count
@@ -299,8 +299,25 @@ pub fn remux_ogg_opus(ogg_data : Bytes) -> Result[Bytes, String] {
   if pages.length() == 0 {
     return Err("不是合法的 Ogg 文件")
   }
+  // 写侧只接受单段、单逻辑流的 Ogg：其它形态必须显式拒绝，
+  // 不能静默只取第一段/第一条流（那等于静默丢数据且返回成功）。
+  let chains = @ogg.split_chains(pages)
+  if chains.length() != 1 {
+    return Err(
+      "只支持单段（未链接）的 Ogg 文件：检测到 " +
+      chains.length().to_string() +
+      " 段",
+    )
+  }
   let packets = @ogg.reassemble(pages)
   let streams = @ogg.group_by_stream(packets)
+  if streams.length() != 1 {
+    return Err(
+      "只支持单逻辑流的 Ogg 文件：检测到 " +
+      streams.length().to_string() +
+      " 条逻辑流",
+    )
+  }
   let mut chosen : @ogg.LogicalStream? = None
   for st in streams {
     if st.packets.length() >= 3 {

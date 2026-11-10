@@ -268,6 +268,23 @@ fn group_segs(group : Array[Packet]) -> Int32 {
 pub const DEFAULT_PAGE_TARGET : Int32 = 4096
 
 ///|
+/// 头包组：组内所有包的粒度都是 0（OpusHead/OpusTags、Vorbis 三个头包）。
+/// RFC 7845 §3 与 Vorbis I A.2 要求头包在页边界上「开始新页、结束本页」，
+/// 不能和后续音频包同页；使用 granule==0 作为判据与具体编解码无关。
+fn group_is_header_like(group : Array[Packet]) -> Bool {
+  if group.length() == 0 {
+    return false
+  }
+  let mut yes = true
+  for p in group {
+    if p.granule_position != 0L {
+      yes = false
+    }
+  }
+  yes
+}
+
+///|
 /// 按目标页大小重新分页 —— 「攒够再出页」，而不是一包一页。
 ///
 /// `paginate` 一包一页，页数等于包数。一个 6 秒的 Opus 文件因此会从 9 页涨到
@@ -284,9 +301,11 @@ pub const DEFAULT_PAGE_TARGET : Int32 = 4096
 /// 没有真粒度（手工准备的包目录、旧清单）时每个包自成一组，退化为纯粹的
 /// 按大小打包 —— 此时本来就没有时间信息可保。
 ///
-/// 两处特殊处理：
+/// 三处特殊处理：
 /// - **第一组独占 BOS 页**。RFC 7845 §3 要求首页只放标识头，
 ///   把 OpusTags 甚至音频包塞进 BOS 页会被解码器拒绝。
+/// - **头包组（粒度全为 0）各自独占一页**，且在页边界上开始/结束：
+///   这是 RFC 7845 §3 与 Vorbis I A.2 对头包的硬性要求。
 /// - **单组超过一页容量**（手工目录里的超长包）时交回 `paginate` 逐包分页，
 ///   续页带 continued 标志，粒度只写在末页。
 ///
@@ -362,10 +381,15 @@ pub fn paginate_sized(
       continue
     }
     let mut end = gi + 1
-    if gi > 0 {
+    // 头包组必须独占一页：既不能把后面的头包/音频页并进来，也不能被前面的页吞掉。
+    // 否则 mux 产物会出现「OpusTags 与音频包同一页」，违反 RFC 7845 §3 与 Vorbis I A.2。
+    if gi > 0 && !group_is_header_like(head) {
       let mut size = group_bytes(head)
       let mut segs = group_segs(head)
       while end < split_groups.length() {
+        if group_is_header_like(split_groups[end]) {
+          break
+        }
         let gs = group_bytes(split_groups[end])
         let gg = group_segs(split_groups[end])
         // 合并的判据是「**加进来**会不会超过目标」，不是「当前是否已超」。

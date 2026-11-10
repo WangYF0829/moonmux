@@ -163,3 +163,84 @@ test "mp4 remux rejects non-opus and header-only streams" {
     Ok(_) => assert_true(false)
   }
 }
+
+///|
+/// mvhd version 1（64 位时间字段）必须按 version 1 布局解析，而不是崩溃。
+fn mp4_with_mvhd_v1(mvhd_payload_len : Int32, duration : Int64) -> Bytes {
+  let ftyp : Bytes = b"\x00\x00\x00\x10ftypM4A \x00\x00\x00\x00"
+  let body = Buffer()
+  body.write_byte((1 : Byte)) // version
+  body.write_byte((0 : Byte))
+  body.write_byte((0 : Byte))
+  body.write_byte((0 : Byte))
+  // creation/modification time（16 字节）
+  let mut i = 0
+  while i < 16 {
+    body.write_byte((0 : Byte))
+    i = i + 1
+  }
+  // timescale = 1000
+  body.write_byte((0 : Byte))
+  body.write_byte((0 : Byte))
+  body.write_byte((0x03 : Byte))
+  body.write_byte((0xE8 : Byte))
+  // duration（8 字节大端）
+  let mut shift = 56
+  while shift >= 0 {
+    let v = ((duration >> shift) & 0xFFL).to_int()
+    body.write_byte(v.to_byte())
+    shift = shift - 8
+  }
+  let body_bytes = body.to_bytes()
+  // 按 mvhd_payload_len 截断或补零，构造「字段不足」的版本 1 头部
+  let payload = Buffer()
+  let wanted = if mvhd_payload_len <= body_bytes.length() {
+    mvhd_payload_len
+  } else {
+    body_bytes.length()
+  }
+  let mut k = 0
+  while k < wanted {
+    payload.write_byte(body_bytes[k])
+    k = k + 1
+  }
+  let mvhd_size = 8 + payload.length()
+  let mvhd = Buffer()
+  mvhd.write_byte((mvhd_size / 16777216 % 256).to_byte())
+  mvhd.write_byte((mvhd_size / 65536 % 256).to_byte())
+  mvhd.write_byte((mvhd_size / 256 % 256).to_byte())
+  mvhd.write_byte((mvhd_size % 256).to_byte())
+  mvhd.write_bytes(b"mvhd".exact_view())
+  mvhd.write_bytes(payload.to_bytes().exact_view())
+  let moov_body = mvhd.to_bytes()
+  let moov_size = 8 + moov_body.length()
+  let moov = Buffer()
+  moov.write_byte((moov_size / 16777216 % 256).to_byte())
+  moov.write_byte((moov_size / 65536 % 256).to_byte())
+  moov.write_byte((moov_size / 256 % 256).to_byte())
+  moov.write_byte((moov_size % 256).to_byte())
+  moov.write_bytes(b"moov".exact_view())
+  moov.write_bytes(moov_body.exact_view())
+  let out = Buffer()
+  out.write_bytes(ftyp.exact_view())
+  out.write_bytes(moov.to_bytes().exact_view())
+  out.to_bytes()
+}
+
+///|
+test "mp4 inspect reads version-1 mvhd and rejects short payloads" {
+  match inspect(mp4_with_mvhd_v1(32, 48000L)) {
+    Some(info) =>
+      assert_true(
+        info.tracks.length() == 0 &&
+        info.duration_seconds > 47.9 &&
+        info.duration_seconds < 48.1,
+      )
+    None => assert_true(false)
+  }
+  // version=1 但只有 20 字节时间字段：必须拒绝而不是越界读
+  match inspect(mp4_with_mvhd_v1(20, 48000L)) {
+    None => assert_true(true)
+    Some(_) => assert_true(false)
+  }
+}

@@ -5,7 +5,8 @@
 // 容器层把 Ogg Opus 重新封装成 MP4 时，必须知道每个包对应多少样本，
 // 才能正确填写 stts（每个样本的时长）与 mdhd（媒体时长）。
 //
-// 依据：RFC 6716 §3.1（TOC 字节与帧长表）、RFC 7845 §4（Ogg 中的 Opus）。
+// 依据：RFC 6716 §3.1（TOC 字节与帧长表）、§3.2.5（code 3 的帧数字段）、
+// RFC 7845 §4（Ogg 中的 Opus）。
 // 本函数只算时长，不校验包体完整性 —— 包体 CRC/长度由容器层负责。
 
 ///|
@@ -16,7 +17,9 @@
 ///   config 12–15  Hybrid SWB/FB：10/20 ms → 480/960
 ///   config 16–31  CELT NB/WB/SWB/FB：2.5/5/10/20 ms → 120/240/480/960
 ///
-/// 帧数：code 0 → 1；code 1、2 → 2；code 3 → 读 TOC 后一字节低 6 位（1..63）。
+/// 帧数：code 0 → 1；code 1、2 → 2；code 3 → 第二字节的 bits2..7
+/// （`data[1] >> 2`，RFC 6716 §3.2.5）。
+/// RFC 上限：帧数 M ≤ 48，且包总时长 ≤ 120 ms（5760 样本 @48 kHz）。
 pub fn opus_packet_samples(data : Bytes) -> Result[Int32, String] {
   if data.length() == 0 {
     return Err("Opus 数据包为空")
@@ -25,10 +28,18 @@ pub fn opus_packet_samples(data : Bytes) -> Result[Int32, String] {
   let config = (toc >> 3) & 0x1F
   let code = toc & 0x03
   let frame = if config <= 11 {
-    480 << (config & 3)
+    // SILK：10/20/40/60 ms。60 ms 是 2880，不是 480 << 3 = 3840。
+    let k = config & 3
+    if k == 3 {
+      2880
+    } else {
+      480 << k
+    }
   } else if config <= 15 {
+    // Hybrid：10/20 ms
     480 << ((config - 12) & 1)
   } else {
+    // CELT：2.5/5/10/20 ms
     120 << (config & 3)
   }
   let frames = if code == 0 {
@@ -39,11 +50,19 @@ pub fn opus_packet_samples(data : Bytes) -> Result[Int32, String] {
     if data.length() < 2 {
       return Err("Opus 包 code=3 但缺少帧数字节")
     }
-    let n = data[1].to_int() & 0x3F
+    // RFC 6716 §3.2.5：第二字节 bit0=VBR、bit1=padding、bits2..7=帧数 M
+    let n = data[1].to_int() >> 2
     if n == 0 {
       return Err("Opus 包 code=3 但帧数为 0")
     }
+    if n > 48 {
+      return Err("Opus 包 code=3 帧数超过 RFC 上限 48")
+    }
     n
   }
-  Ok(frame * frames)
+  let total = frame * frames
+  if total > 5760 {
+    return Err("Opus 包总时长超过 RFC 上限 120 ms")
+  }
+  Ok(total)
 }

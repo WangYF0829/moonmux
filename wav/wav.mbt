@@ -64,6 +64,10 @@ pub(all) struct WavFile {
   chunks : Array[WavChunk]
   /// WAVE_FORMAT_EXTENSIBLE 的声道掩码（普通格式为 0）；块保真往返时原样写回。
   channel_mask : Int32
+  /// 解析到的原始 fmt 块负载（含 cbSize / Extensible 扩展）。
+  /// `to_bytes` 原样写回，保留 16 / 18 / 40 字节等原始布局；
+  /// 由编码器新建的 WavFile 走空值，按语义重新生成。
+  fmt_bytes : Bytes
 }
 
 ///|
@@ -286,6 +290,7 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
   let mut pos = 12
   let mut format : (WavFormat, SampleFormat, Int32, Int32)? = None
   let mut pcm : Bytes? = None
+  let mut fmt_raw : Bytes? = None
   let chunks : Array[WavChunk] = []
   while pos <= riff_end - 8 {
     let size = rd_u32(bytes, pos + 4)
@@ -297,7 +302,12 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
     if tag_is(bytes, pos, 0x66, 0x6D, 0x74, 0x20) {
       // "fmt "
       match parse_fmt_chunk(bytes, body, size) {
-        Some(parsed) => format = Some(parsed)
+        Some(parsed) => {
+          format = Some(parsed)
+          // 记住 fmt 的原始字节：24-bit tag1、18 字节 fmt、Extensible
+          // 等布局在 to_bytes 时必须原样写回，否则「逐字节往返」不成立。
+          fmt_raw = Some(wav_slice(bytes, body, body + size.to_int()))
+        }
         None => return None
       }
     } else if tag_is(bytes, pos, 0x64, 0x61, 0x74, 0x61) {
@@ -348,6 +358,10 @@ pub fn WavFile::parse(bytes : Bytes) -> WavFile? {
           bytes_per_sample: bps,
           chunks,
           channel_mask: mask,
+          fmt_bytes: match fmt_raw {
+            Some(raw) => raw
+            None => b""
+          },
         })
       }
     }
@@ -617,6 +631,53 @@ fn validate_format(
 }
 
 ///|
+/// 判断 `to_bytes` 带回来的原始 fmt 负载能否原样写回。
+///
+/// 只信任与语义字段一致的原始布局：fmt 头里的声道 / 采样率 / 块对齐 /
+/// 容器位深必须和解析结果一致，Extensible 的掩码也必须一致；
+/// 任何不一致都回退到按语义重新生成，避免公开结构体被手工填坏时写出坏文件。
+fn fmt_payload_matches(
+  raw : Bytes,
+  format : WavFormat,
+  bytes_per_sample : Int32,
+  channel_mask : Int32,
+) -> Bool {
+  let len = raw.length()
+  if len < 16 || len % 2 != 0 {
+    return false
+  }
+  let tag = rd_u16(raw, 0)
+  if tag != 1 && tag != 3 && tag != 0xFFFE {
+    return false
+  }
+  if rd_u16(raw, 2) != format.channels {
+    return false
+  }
+  if rd_u32(raw, 4) != format.sample_rate.to_int64() {
+    return false
+  }
+  let channels = format.channels
+  let block_align = channels * bytes_per_sample
+  if rd_u16(raw, 12) != block_align {
+    return false
+  }
+  if rd_u16(raw, 14) != bytes_per_sample * 8 {
+    return false
+  }
+  if tag == 0xFFFE {
+    if len < 40 || rd_u16(raw, 16) != 22 {
+      return false
+    }
+    if rd_u32(raw, 20).to_int() != channel_mask {
+      return false
+    }
+  } else if len != 16 && len != 18 {
+    return false
+  }
+  true
+}
+
+///|
 /// 按「指定容器宽度 + 扩展块」编码 WAV。
 ///
 /// 25 位这类参数不合法组合会返回 Err；`chunks` 按 `after_data` 分两段插入，
@@ -628,6 +689,7 @@ fn encode_wav_layout(
   bytes_per_sample : Int32,
   channel_mask : Int32,
   chunks : Array[WavChunk],
+  fmt_payload : Bytes?,
 ) -> Result[Bytes, String] {
   match validate_format(format, sample_format, bytes_per_sample) {
     Err(msg) => return Err(msg)
@@ -655,7 +717,21 @@ fn encode_wav_layout(
     Int => channels <= 2 && bits <= 16 && bytes_per_sample * 8 == bits
     Float => false
   }
-  let fmt_size = if simple { 16 } else { 40 }
+  // 解析回来的原始 fmt 布局优先（tag1+24bit、18 字节 fmt、Extensible 等）；
+  // 与语义字段不一致时回退到按语义生成的布局。
+  let raw_fmt : Bytes? = match fmt_payload {
+    Some(raw) =>
+      if fmt_payload_matches(raw, format, bytes_per_sample, channel_mask) {
+        Some(raw)
+      } else {
+        None
+      }
+    None => None
+  }
+  let fmt_size = match raw_fmt {
+    Some(raw) => raw.length()
+    None => if simple { 16 } else { 40 }
+  }
   let pad = data.length() % 2
   // 文件总长 = RIFF 头(8) + "WAVE"(4) + fmt 块 + 扩展块 + data 块 + padding
   let total = 12 + (8 + fmt_size) + chunks_size + 8 + data.length() + pad
@@ -676,43 +752,47 @@ fn encode_wav_layout(
   buf.write_byte((0x74 : Byte))
   buf.write_byte((0x20 : Byte))
   buf.write_uint_le(fmt_size.reinterpret_as_uint())
-  if simple {
-    buf.write_uint16_le((1 : UInt16))
-    buf.write_uint16_le(channels.to_uint16())
-    buf.write_uint_le(sample_rate.reinterpret_as_uint())
-    buf.write_uint_le((sample_rate * block_align).reinterpret_as_uint())
-    buf.write_uint16_le(block_align.to_uint16())
-    buf.write_uint16_le(bits.to_uint16())
-  } else {
-    buf.write_uint16_le((0xFFFE : UInt16))
-    buf.write_uint16_le(channels.to_uint16())
-    buf.write_uint_le(sample_rate.reinterpret_as_uint())
-    buf.write_uint_le((sample_rate * block_align).reinterpret_as_uint())
-    buf.write_uint16_le(block_align.to_uint16())
-    buf.write_uint16_le((bytes_per_sample * 8).to_uint16())
-    buf.write_uint16_le((22 : UInt16))
-    buf.write_uint16_le(bits.to_uint16())
-    buf.write_uint_le(channel_mask.reinterpret_as_uint())
-    let sub = match sample_format {
-      Int => 1
-      Float => 3
-    }
-    buf.write_byte(sub.to_byte())
-    buf.write_byte((0 : Byte))
-    buf.write_byte((0 : Byte))
-    buf.write_byte((0 : Byte))
-    buf.write_byte((0 : Byte))
-    buf.write_byte((0 : Byte))
-    buf.write_byte((0x10 : Byte))
-    buf.write_byte((0 : Byte))
-    buf.write_byte((0x80 : Byte))
-    buf.write_byte((0 : Byte))
-    buf.write_byte((0 : Byte))
-    buf.write_byte((0xAA : Byte))
-    buf.write_byte((0 : Byte))
-    buf.write_byte((0x38 : Byte))
-    buf.write_byte((0x9B : Byte))
-    buf.write_byte((0x71 : Byte))
+  match raw_fmt {
+    Some(raw) => buf.write_bytes(raw.exact_view())
+    None =>
+      if simple {
+        buf.write_uint16_le((1 : UInt16))
+        buf.write_uint16_le(channels.to_uint16())
+        buf.write_uint_le(sample_rate.reinterpret_as_uint())
+        buf.write_uint_le((sample_rate * block_align).reinterpret_as_uint())
+        buf.write_uint16_le(block_align.to_uint16())
+        buf.write_uint16_le(bits.to_uint16())
+      } else {
+        buf.write_uint16_le((0xFFFE : UInt16))
+        buf.write_uint16_le(channels.to_uint16())
+        buf.write_uint_le(sample_rate.reinterpret_as_uint())
+        buf.write_uint_le((sample_rate * block_align).reinterpret_as_uint())
+        buf.write_uint16_le(block_align.to_uint16())
+        buf.write_uint16_le((bytes_per_sample * 8).to_uint16())
+        buf.write_uint16_le((22 : UInt16))
+        buf.write_uint16_le(bits.to_uint16())
+        buf.write_uint_le(channel_mask.reinterpret_as_uint())
+        let sub = match sample_format {
+          Int => 1
+          Float => 3
+        }
+        buf.write_byte(sub.to_byte())
+        buf.write_byte((0 : Byte))
+        buf.write_byte((0 : Byte))
+        buf.write_byte((0 : Byte))
+        buf.write_byte((0 : Byte))
+        buf.write_byte((0 : Byte))
+        buf.write_byte((0x10 : Byte))
+        buf.write_byte((0 : Byte))
+        buf.write_byte((0x80 : Byte))
+        buf.write_byte((0 : Byte))
+        buf.write_byte((0 : Byte))
+        buf.write_byte((0xAA : Byte))
+        buf.write_byte((0 : Byte))
+        buf.write_byte((0x38 : Byte))
+        buf.write_byte((0x9B : Byte))
+        buf.write_byte((0x71 : Byte))
+      }
   }
   // data 之前的扩展块
   for c in chunks {
@@ -744,6 +824,11 @@ pub fn WavFile::to_bytes(self : WavFile) -> Result[Bytes, String] {
     self.bytes_per_sample,
     self.channel_mask,
     self.chunks,
+    if self.fmt_bytes.length() == 0 {
+      None
+    } else {
+      Some(self.fmt_bytes)
+    },
   )
 }
 
@@ -825,5 +910,6 @@ pub fn WavWriter::finish(self : WavWriter) -> Result[Bytes, String] {
     self.format.bits_per_sample / 8,
     0,
     chunks,
+    None,
   )
 }

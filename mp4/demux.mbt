@@ -37,6 +37,8 @@ priv struct OpusConfig {
   input_rate : Int32
   gain : Int32
   family : Int32
+  stream_count : Int32
+  coupled_count : Int32
   mapping : Array[Int32]
 }
 
@@ -104,6 +106,13 @@ fn read_stsz(data : Bytes, b : BoxRef) -> Result[Array[Int32], String] {
   }
   let sizes : Array[Int32] = []
   if fixed > 0 {
+    // 定长样本同样必须装得进文件：count × fixed 是 mdat 至少占用的字节数。
+    // 只校验 count >= 0 的话，一个 12 字节字段就能声明 0x7FFFFFFF 个样本，
+    // 分配数 GiB 数组后才会被后面的 stts 一致性检查拒绝（内存耗尽 DoS）。
+    if fixed > 0 &&
+      count.to_int64() > data.length().to_int64() / fixed.to_int64() {
+      return Err("stsz 定长样本总数超出文件大小")
+    }
     let mut i = 0
     while i < count {
       sizes.push(fixed)
@@ -229,23 +238,38 @@ fn parse_dops(data : Bytes, dops : BoxRef) -> Result[OpusConfig, String] {
   let gain = if gain_u >= 0x8000 { gain_u - 0x10000 } else { gain_u }
   let family = rd_u8(data, b + 10)
   let mapping : Array[Int32] = []
+  let mut stream_count = 0
+  let mut coupled_count = 0
   if family != 0 {
     if b + 13 + channels > dops.next {
       return Err("dOps 声道映射表越界")
     }
+    stream_count = rd_u8(data, b + 11)
+    coupled_count = rd_u8(data, b + 12)
     let mut i = 0
     while i < channels {
       mapping.push(rd_u8(data, b + 13 + i))
       i = i + 1
     }
   }
-  Ok({ channels, pre_skip, input_rate, gain, family, mapping, })
+  Ok({
+    channels,
+    pre_skip,
+    input_rate,
+    gain,
+    family,
+    stream_count,
+    coupled_count,
+    mapping,
+  })
 }
 
 ///|
 /// 按 dOps 还原 OpusHead（RFC 7845 §5.1）。
 fn encode_opus_head(config : OpusConfig) -> Bytes {
-  let buf = Buffer(size_hint=19 + config.mapping.length())
+  // family=0：19 字节固定头；family≠0：再加 StreamCount/CoupledCount/Mapping(C)，
+  // 即 21+C 字节（RFC 7845 §5.1.1）。少写这两个字节会让映射表整体前移。
+  let buf = Buffer(size_hint=21 + config.mapping.length())
   buf.write_bytes(b"OpusHead".exact_view())
   push_u8(buf, 1) // 版本
   push_u8(buf, config.channels)
@@ -253,8 +277,12 @@ fn encode_opus_head(config : OpusConfig) -> Bytes {
   push_u32_le(buf, config.input_rate)
   push_u16_le(buf, config.gain)
   push_u8(buf, config.family)
-  for m in config.mapping {
-    push_u8(buf, m)
+  if config.family != 0 {
+    push_u8(buf, config.stream_count)
+    push_u8(buf, config.coupled_count)
+    for m in config.mapping {
+      push_u8(buf, m)
+    }
   }
   buf.to_bytes()
 }
@@ -320,7 +348,10 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
     Some(m) => m
     None => return Err("音频轨缺少 mdhd")
   }
-  let (timescale, _) = read_time_header(data, mdhd)
+  let (timescale, _) = match read_time_header(data, mdhd) {
+    Some(pair) => pair
+    None => return Err("mdhd 被截断，无法解析时长字段")
+  }
   if timescale != 48000 {
     return Err(
       "不是 Opus-in-MP4（mdhd timescale = " +
@@ -447,10 +478,13 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
     let mut k = 0
     while k < spc && sample_i < sample_count {
       let size = sizes[sample_i]
-      let end = pos + size
-      if pos < mdat.body || end > mdat.next {
+      // 用 Int64 计算 pos+size：size 是 u32 读出的 32 位字段，直接相加会溢出成负数，
+      // 从而绕过 mdat 边界检查，产出 0 字节音频包却不报错。
+      let end64 = pos.to_int64() + size.to_int64()
+      if size <= 0 || pos < mdat.body || end64 > mdat.next.to_int64() {
         return Err("样本偏移越界（chunk " + chunk_no.to_string() + "）")
       }
+      let end = end64.to_int()
       samples.push({ offset: pos, size, duration: durations[sample_i], })
       pos = end
       sample_i = sample_i + 1
@@ -477,7 +511,9 @@ pub fn demux_mp4_opus(data : Bytes) -> Result[Bytes, String] {
     cumulative = cumulative + sample.duration.to_int64()
     packets.push({
       data: demux_slice(data, sample.offset, sample.offset + sample.size),
-      granule_position: config.pre_skip.to_int64() + cumulative,
+      // RFC 7845 §4：granule = 已解码样本总数（PCM position = granule − pre-skip），
+      // 不能在这里再加一次 pre-skip，否则 ogg 端会多算一个 pre-skip 的时长。
+      granule_position: cumulative,
       serial,
     })
   }

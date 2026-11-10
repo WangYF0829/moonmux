@@ -89,12 +89,14 @@ pub fn replace_packet(
   // 向前扩展到该页的起点：页首若是续包，说明目标包可能从上一页开始。
   // 0 段页对包边界透明，回溯时跳过，不能把它当作包开头。
   let mut start_page = end_page
-  while start_page > 0 &&
-        !has_completion(stream[start_page]) &&
-        (stream[start_page].header_type.to_int() & flag_continued().to_int()) !=
-        0 {
+  while start_page > 0 {
     let prev = previous_with_segments(stream, start_page)
     if prev < 0 {
+      break
+    }
+    // 上一页最后一个段是 255，说明包还没结束、继续到下一页；
+    // 只有这种情况目标包才可能从上一页开始（跨页包）。
+    if last_segment(stream[prev]) != 255 {
       break
     }
     start_page = prev

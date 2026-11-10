@@ -179,3 +179,61 @@ test "duration never goes negative" {
   assert_true(duration_seconds(info, 100L, 50L) == 0.0)
   assert_true(duration_seconds(info, 0L, 100L) == 0.0)
 }
+
+///|
+
+///|
+/// 按 RFC 7845 §5.1.1 拼 OpusHead（family=0 为 19 字节，否则 21+C）。
+fn mk_opus_head(
+  ch : Int32,
+  family : Int32,
+  stream : Int32,
+  coupled : Int32,
+  mapping : Array[Int32],
+) -> Bytes {
+  let b = Buffer()
+  b.write_bytes(b"OpusHead".exact_view())
+  b.write_byte((1 : Byte))
+  b.write_byte(ch.to_byte())
+  b.write_byte((0x38 : Byte))
+  b.write_byte((0x01 : Byte))
+  b.write_byte((0x80 : Byte))
+  b.write_byte((0xBB : Byte))
+  b.write_byte((0 : Byte))
+  b.write_byte((0 : Byte))
+  b.write_byte((0 : Byte))
+  b.write_byte((0 : Byte))
+  b.write_byte(family.to_byte())
+  if family != 0 {
+    b.write_byte(stream.to_byte())
+    b.write_byte(coupled.to_byte())
+    for m in mapping {
+      b.write_byte(m.to_byte())
+    }
+  }
+  b.to_bytes()
+}
+
+///|
+test "parse_opus_head validates mapping family" {
+  // 合法：family=0 单声道 / 立体声
+  match parse_opus_head(mk_opus_head(1, 0, 0, 0, [])) {
+    Some(info) => assert_eq(info.channels, 1)
+    None => assert_true(false)
+  }
+  match parse_opus_head(mk_opus_head(2, 0, 0, 0, [])) {
+    Some(info) => assert_eq(info.channels, 2)
+    None => assert_true(false)
+  }
+  // family=0 且 3 声道：非法
+  assert_true(parse_opus_head(mk_opus_head(3, 0, 0, 0, [])) is None)
+  // family=1 但缺少映射表
+  assert_true(parse_opus_head(mk_opus_head(1, 1, 1, 0, [])) is None)
+  // family=1、stream_count=0：非法
+  assert_true(parse_opus_head(mk_opus_head(1, 1, 0, 0, [0])) is None)
+  // family=1 合法：21+C = 22 字节
+  match parse_opus_head(mk_opus_head(1, 1, 1, 0, [0])) {
+    Some(info) => assert_eq(info.channels, 1)
+    None => assert_true(false)
+  }
+}
