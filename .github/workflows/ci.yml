@@ -31,7 +31,7 @@ env:
   # Linux 侧计数比 Windows 高约 27 行（≈671），阈值 660→670（上限 685）。
   # v0.5.0：新增 MP4 → Ogg 解封装（demux.mbt，含大量坏表防御分支），Windows 实测 683；
   # Linux 侧 ≈710，阈值 670→700（上限 715）。
-  # v0.9.0：第二轮修复新增 elst/roll、WAV fact、CLI 契约、重同步预筛、2 GiB 闸门
+  # v0.9.0：修复新增 elst/roll、WAV fact、CLI 契约、重同步预筛、2 GiB 闸门
   # 等防御性分支与测试，Windows 实测 710；Linux 侧比 Windows 高约 27 行（≈737）。
   # 阈值 700→730，配合 20 行容差，上限 750。
   MAX_UNCOVERED_LINES: 730
