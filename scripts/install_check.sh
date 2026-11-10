@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# install_check.sh —— 「可安装使用」的独立验证
+# install_check.sh —— 可安装性验证
 #
 # 在干净临时工程里走真实用户路径：
 #   moon new → moon add WangYF0829/moonmux@<version> → 调用公开 API → 运行
-# 这是 10 月终审反馈（核心库未发布/不可安装使用）的复验脚本，也用于
 # 每次发布后确认 mooncakes 上的版本确实可安装。
 #
 # 用法: bash scripts/install_check.sh [version]

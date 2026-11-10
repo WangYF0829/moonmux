@@ -22,18 +22,18 @@ concurrency:
 env:
   # 工具链跟随官方 latest（安装脚本的固定版本 URL 对旧版本返回 403，无法可靠 pin）；
   # 每个 job 都打印 `moon version --all`，发布记录附上本次使用的版本。
-  # 未覆盖行数基线（moon coverage analyze 的 Total）。
-  # 2026-10-25 全量审查后 Linux native 实测 662、Windows native 635；
-  # 新增约 2000 行防御性分支与 CLI 代码，未覆盖行数相应上升（上次实测 605、基线 600）。
-  # 基线设为 660，配合 15 行容差，上限 675；后续补测试应逐步调低。
+  # 未覆盖行数阈值（moon coverage analyze 的 Total）。
+  # 2026-10-25 全量统计：Linux native 实测 662、Windows native 635；
+  # 新增约 2000 行防御性分支与 CLI 代码，未覆盖行数相应上升（上次实测 605、阈值 600）。
+  # 阈值设为 660，配合 15 行容差，上限 675；后续补测试应逐步调低。
   # 调高需要在 PR/提交说明中给出实测值与原因。
   # v0.4.0：新增 WAV 全格式（hound 语义）与流式页读取实现行，Windows 实测 644；
-  # Linux 侧计数比 Windows 高约 27 行（≈671），基线 660→670（上限 685）。
+  # Linux 侧计数比 Windows 高约 27 行（≈671），阈值 660→670（上限 685）。
   # v0.5.0：新增 MP4 → Ogg 解封装（demux.mbt，含大量坏表防御分支），Windows 实测 683；
-  # Linux 侧 ≈710，基线 670→700（上限 715）。
-  # v0.9.0：第二轮修复新增 elst/roll、WAV fact、TIFF/CLI 契约、重同步预筛、2 GiB 闸门
+  # Linux 侧 ≈710，阈值 670→700（上限 715）。
+  # v0.9.0：第二轮修复新增 elst/roll、WAV fact、CLI 契约、重同步预筛、2 GiB 闸门
   # 等防御性分支与测试，Windows 实测 710；Linux 侧比 Windows 高约 27 行（≈737）。
-  # 基线 700→730，配合 20 行容差，上限 750。
+  # 阈值 700→730，配合 20 行容差，上限 750。
   MAX_UNCOVERED_LINES: 730
   # 跨平台/工具链 patch 版本可能让计数抖动几行，给一点余量。
   COVERAGE_TOLERANCE: 20
@@ -154,7 +154,7 @@ jobs:
       - name: Update package index
         run: moon update
 
-      # 覆盖率不用于评分，只用于防止劣化：未覆盖行数不得超过基线 + 容差。
+      # 覆盖率只用于防止劣化：未覆盖行数不得超过阈值 + 容差。
       - name: moon coverage analyze
         run: |
           set -o pipefail
@@ -172,7 +172,7 @@ jobs:
           hits=$(grep -c '^Total: ' /tmp/coverage.log || true)
           limit=$((MAX_UNCOVERED_LINES + COVERAGE_TOLERANCE))
           echo "uncovered=${total:-<missing>} total_lines_seen=$hits limit=$limit"
-          # 无论成败都把数字写进 summary，便于在本地无法插桩时校准基线
+          # 无论成败都把数字写进 summary，便于在本地无法插桩时校准阈值
           echo "### coverage: ${total:-?} uncovered (limit $limit)" >> "$GITHUB_STEP_SUMMARY"
           if [ -z "$total" ]; then
             echo "::error::coverage output did not contain a Total line"
@@ -180,7 +180,7 @@ jobs:
           fi
           if [ "$total" -gt "$limit" ]; then
             {
-              echo "### coverage regressed: $total > $limit (baseline $MAX_UNCOVERED_LINES)"
+              echo "### coverage regressed: $total > $limit (threshold $MAX_UNCOVERED_LINES)"
               echo '```'
               # head 提前关闭管道会让 grep 收到 SIGPIPE；pipefail 下必须吞掉，
               # 否则 -e 会把真正的“覆盖超限”变成 exit 141/2。

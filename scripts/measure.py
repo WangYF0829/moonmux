@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """measure.py -- run a command and report its peak working set.
 
-Windows-only helper used by the resource review. It starts the target with
-subprocess, polls GetProcessMemoryInfo while it runs, and always closes the
-process handle. Not part of the shipped tool.
+Windows-only helper for measuring the CLI's peak working set. It starts the
+target with subprocess, polls GetProcessMemoryInfo while it runs, and always
+closes the process handle. Not part of the shipped tool.
 
     python scripts/measure.py <exe> <args...>
 """
