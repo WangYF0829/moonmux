@@ -146,6 +146,7 @@ v0.4.0 新增库 API：`@ogg.PageReader` / `@ogg.for_each_page_chunked`（增量
 | 写侧公开 API | `serialize_pages_checked` / `validate_page` 可用 | CLI 写命令已全部走校验入口；库用户直接调用 `serialize_pages` 时仍需自行保证 `Page` 合法 |
 | WAV 块保真布局 | fmt 在 data 之前、扩展块在 fmt 之后的标准布局 | 原始 fmt 与扩展块逐字节写回；fmt 之前出现未知块或非零填充字节的极端布局会按语义规范化（扩展块保留、采样数据无损） |
 | `extract` 幂等重跑 | 需显式 `--force` | 输出与输入内容相同（单流文件抽自己）时默认按别名保护拒绝；`--force` 跳过内容比较（仍拒绝同一路径），可用于幂等重跑 |
+| 覆盖/别名检查的内存 | 无 `stat`/inode API | 覆盖已有输出时把旧文件整体读入内存做内容比较（峰值约旧文件 + 新输出）；不能流式比较或原子替换 |
 
 内存量级（实测，19 MB / 300 段输入）：`info` 约 2.5×、`verify` 约 2.6×、`cat`/`mux` 约 3.5×；
 `to-wav` 还要叠加解码器的 Double PCM（约 4–5× 输出）。所有命令整文件读入，没有流式写接口。
