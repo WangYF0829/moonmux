@@ -737,11 +737,11 @@ fn dwb_co64_box(offset : Int64) -> Bytes {
 }
 
 ///|
-/// 构造与 review/poc/wavmp4/gen_mp4.mjs 同构的最小 Opus-in-MP4：
+/// 构造一个最小的 Opus-in-MP4（与外部 PoC 语料同构）：
 /// ftyp + mdat + moov/trak/mdia（mdhd/hdlr/minf[smhd, stbl]）。
 ///
 /// `demux_mp4_opus` 不要求 mvhd/tkhd/edts/dinf，所以这里不写，文件可以小到
-/// 329 B（与 review/poc/verify/corpus/wm01_stts_wrap.m4a 一致）。
+/// 329 B 即可覆盖相关样本表路径。
 /// `chunk_table` 拿到 mdat body 偏移，返回 stco 或 co64 box。
 fn dwb_craft_mp4(
   stts_runs : Array[(Int32, Int32)],
@@ -774,7 +774,7 @@ fn dwb_craft_mp4(
 
 ///|
 test "demux mp4: stts sample count wrap is rejected before expansion" {
-  // 与 review/poc/verify/corpus/wm01_stts_wrap.m4a 同构（329 B）：
+  // 与外部 PoC 语料同构（329 B）：
   // 0x7FFFFFFF + 0x7FFFFFFF + 3 在 Int32 下回绕成 1，恰好等于 stsz 的 1 个
   // 样本；旧实现据此展开 ~4.29e9 个时长（约 17 GB）。修复后必须在此前 Err。
   let mp4 = dwb_craft_mp4(
@@ -869,7 +869,7 @@ test "demux mp4: fixed-size sample table decodes" {
 
 ///|
 test "demux mp4: co64 offsets are validated as 64-bit" {
-  // 与 review/poc/wavmp4/data/co64_high.m4a 同构：偏移 = 2^32 + 合法偏移，
+  // 构造 co64 高位偏移（2^32 + 合法偏移）：
   // 低 32 位截断后恰好落在 mdat 内 —— 旧实现静默接受并解出错误位置（M-01）。
   let high = dwb_craft_mp4([(1, 960)], dwb_stsz_fixed(1, 1), 1, b"A", fn(off) {
     dwb_co64_box(0x100000000L + off.to_int64())

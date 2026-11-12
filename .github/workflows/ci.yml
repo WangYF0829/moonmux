@@ -75,7 +75,7 @@ jobs:
       - name: Update package index
         run: moon update
 
-      # 验收口径的四个检查：警告即错误、格式、接口文档、测试。
+      # 四项检查：警告即错误、格式、接口文档、测试。
       # 失败时把输出写进 step summary，便于在没有日志权限时定位。
       - name: moon check --deny-warn
         shell: bash
@@ -115,16 +115,18 @@ jobs:
           moon build --target native
           bash scripts/check_version.sh
       # 发布包内容门禁：moon package 打包的是工作区文件（含未跟踪文件），
-      # 评审/临时目录一旦混入会被永久发布到 mooncakes，无法撤回。
+      # 本地临时/构建目录一旦混入会被永久发布到 mooncakes，无法撤回。
       - name: Package content gate
         shell: bash
         run: |
           set -euo pipefail
           # `moon package` 会先打印 "Package to .../_build/..." 日志行，先滤掉非清单行
-          moon package --list 2>&1 | grep -Ev '^(Package to|Check passed|Finished|Running|Building)' | tee /tmp/pkglist.log
-          if grep -Eq '(^|[\\/])(review|_build|out|tmp)([\\/]|$)' /tmp/pkglist.log; then
-            echo "package contains local scratch files:"
-            grep -E '(^|[\\/])(review|_build|out|tmp)([\\/]|$)' /tmp/pkglist.log
+          moon package --list 2>&1 | grep -Ev '^(Package to|Check passed|Finished|Running|Building)' | sed 's#\\#/#g' | tee /tmp/pkglist.log
+          # 白名单：只允许项目源码/文档/测试数据路径进包（新增目录需在此显式登记）
+          bad=$(grep -Ev '^(CHANGELOG\.md|LICENSE|README\.md|moon\.mod|moon\.pkg|moonmux\.mbt|moonmux_wbtest\.mbt|项目申报书\.md|docs/|scripts/|testdata/|examples/|cmd/|cli/|codec/|manifest/|mp4/|ogg/|pipeline/|wav/)' /tmp/pkglist.log || true)
+          if [ -n "$bad" ]; then
+            echo "package contains unexpected paths:"
+            echo "$bad"
             exit 1
           fi
           count=$(grep -c . /tmp/pkglist.log || true)
@@ -289,17 +291,17 @@ jobs:
 
       - name: Verify clean-project install
         env:
-          MOONMUX_INSTALL_VERSION: "0.9.2"
+          MOONMUX_INSTALL_VERSION: "0.9.3"
         run: |
           # 版本 bump 提交可能先于发布到达：轮询等待 mooncakes 出现该版本
           for i in $(seq 1 30); do
             if bash scripts/install_check.sh; then
               exit 0
             fi
-            echo "等待 mooncakes 上的 0.9.2（第 $i 次，最多 30 次）"
+            echo "等待 mooncakes 上的 0.9.3（第 $i 次，最多 30 次）"
             sleep 5
           done
-          echo "mooncakes 上仍未出现可安装的 0.9.2"
+          echo "mooncakes 上仍未出现可安装的 0.9.3"
           exit 1
   # 性能基准：release native + Node 脚本（无第三方依赖），表格写入 job summary。
   # 只记录、不设阈值 —— 共享 runner 的绝对耗时没有可比性，回归靠本地对比。

@@ -3,6 +3,19 @@
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 更早的历史见 `git log` 与 GitHub Releases。
 
+## [0.9.3] — 2026-11-12
+
+### 仓库整理（无行为变更）
+- 源码注释与文档中仅供内部使用的语料目录/编号引用改为中性描述（测试断言与行为不变）。
+- `.moonignore` / `.gitignore` 去掉内部目录名，保留通用临时产物规则；
+  `moon package --list` 发布门禁由黑名单改为**白名单**（只允许源码/文档/测试数据路径进包），
+  比黑名单更严格且不依赖本地目录命名。
+- 重新生成发布包；与 0.9.2 行为一致。
+
+### 验证
+- Windows native **369/369**、wasm-gc **344/344**、覆盖率未覆盖行 **757**（CI 上限 800）；
+  smoke、MP4 ffprobe 对账、干净工程安装检查与 CI 全部复跑通过。
+
 ## [0.9.2] — 2026-11-11
 
 ### 安全 / 资源边界修复
@@ -26,8 +39,8 @@
 - **CLI/契约**：`verify --json` 的“不是合法 Ogg”输出 JSON 错误对象；`info` 文本输出的
   MP4 brand/codec 与 WAV chunk id 做控制字符转义；非选项类子命令遇到 `--xxx` 按未知
   选项退出 2；manifest 未知头部字段报错；手工包目录按数字序排序（packet_2 在 packet_10 前）。
-- **发布/CI**：`.moonignore` 排除 `review/`、`out/`、`tmp/`、`*.zip`、`*.bak`；CI 增加
-  `moon package --list` 内容门禁（禁止评审/构建/临时目录进包），覆盖率阈值 730→780
+- **发布/CI**：`.moonignore` 排除 `out/`、`tmp/`、`*.zip`、`*.bak`；CI 增加
+  `moon package --list` 白名单门禁（只允许仓库内的源码/文档/测试数据进包），覆盖率阈值 730→780
   （容差 20，上限 800）；fuzz 增加 stderr panic 检测；修复 smoke 在 Windows Git Bash
   下使用 `/tmp` 导致原生 `@fs` 无法建目录的回归（优先进 `_build/smoke.*`）。
 - **隐私**：项目申报书移除个人手机号/邮箱，改为仓库 Issue 联系方式。

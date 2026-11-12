@@ -4,7 +4,7 @@
 /// 模块版本号：代码内唯一副本。
 ///
 /// 与 `moon.mod` 的一致性由 `scripts/check_version.sh` 在 CI 里断言。
-pub const MOONMUX_VERSION : String = "0.9.2"
+pub const MOONMUX_VERSION : String = "0.9.3"
 
 ///|
 /// 模块名称与版本，供命令行工具的输出使用。

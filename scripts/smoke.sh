@@ -52,8 +52,8 @@ if [ ! -x "$BIN" ]; then
 fi
 
 echo "== 0. 版本与输出类型防护 =="
-"$BIN" version | grep -q "moonmux 0.9.2"
-check $? "version 与模块版本一致（0.9.2）"
+"$BIN" version | grep -q "moonmux 0.9.3"
+check $? "version 与模块版本一致（0.9.3）"
 "$BIN" extract testdata/opus_sample.opus 1 "$TMP" >/dev/null 2>&1
 [ $? -eq 2 ]; check $? "目录作为输出路径被拒绝（2）"
 
