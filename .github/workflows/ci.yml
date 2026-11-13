@@ -498,8 +498,17 @@ jobs:
           moon publish --dry-run 2>&1 | tee /tmp/publish-dryrun.log
           status=${PIPESTATUS[0]}
           set -e
+          # CI 默认无 mooncakes 凭据（moon login 只在发布者本地配置）：无凭据时跳过 dry-run，由本地 preflight 覆盖
+          if ! moon whoami >/dev/null 2>&1; then
+            echo "::warning::publish --dry-run 跳过：CI 无 mooncakes 登录凭据；发布前请本地执行 scripts/preflight_release.sh 验证打包/解包"
+            exit 0
+          fi
           if [ "$status" -eq 0 ]; then
             echo "publish --dry-run: OK（打包/解包校验通过，版本仍可发布）"
+            exit 0
+          fi
+          if grep -qE 'Registry login is required' /tmp/publish-dryrun.log; then
+            echo "::warning::publish --dry-run 跳过：CI 无 mooncakes 登录凭据（Registry login is required）"
             exit 0
           fi
           if grep -qE '409 Conflict|duplicated with an existing version' /tmp/publish-dryrun.log; then

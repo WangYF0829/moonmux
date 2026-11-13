@@ -1,4 +1,4 @@
-# 更新日志
+﻿# 更新日志
 
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)（`Unreleased` + Added / Changed / Fixed / Deprecated / Removed / Security）。
@@ -7,7 +7,9 @@
 
 ## [Unreleased]
 
-（暂无）
+### Fixed
+
+- 发布后 CI/测试基础设施修复（**无库行为变更**）：① `cmd/main/main_wbtest.mbt` 的 `normalize_path` 用例按平台断言（POSIX 不复刻 Windows 大小写/反斜杠/尾随点折叠）；② `scripts/install_check.sh` 在干净工程中切换 `preferred_target = "native"` 并 `moon check --target native`（`moon new` 默认 wasm 与 `supported_targets` 不兼容）；③ CI `publish-dry-run` 在无 mooncakes 凭据时跳过并告警（`Registry login is required`）。
 
 ## [0.9.4] — 2026-11-13
 

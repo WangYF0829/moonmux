@@ -1226,13 +1226,20 @@ test "find_comment reports missing streams and comments" {
 }
 
 ///|
-/// 路径词法规范化：大小写、分隔符折叠、尾随点/空格、开头的 ./。
+/// 路径词法规范化：Windows 折叠大小写/分隔符/尾随点空格；POSIX 保留反斜杠与大小写。
 #cfg(target="native")
-test "normalize_path folds separators case and trailing dots" {
-  assert_eq(normalize_path("A\\\\B\\\\C.OGG."), "a/b/c.ogg")
+test "normalize_path normalizes per platform" {
+  if windows_paths() {
+    assert_eq(normalize_path("A\\\\B\\\\C.OGG."), "a/b/c.ogg")
+    assert_eq(normalize_path("C:\\\\Temp\\\\"), "c:/temp")
+    assert_eq(normalize_path("dir/ "), "dir")
+  } else {
+    // POSIX：反斜杠是普通文件名字符，大小写与尾随点/空格不折叠
+    assert_eq(normalize_path("A\\\\B\\\\C.OGG."), "A\\\\B\\\\C.OGG.")
+    assert_eq(normalize_path("C:\\\\Temp\\\\"), "C:\\\\Temp\\\\")
+    assert_eq(normalize_path("dir/ "), "dir/ ")
+  }
   assert_eq(normalize_path("./x//y/"), "x/y")
-  assert_eq(normalize_path("C:\\\\Temp\\\\"), "c:/temp")
-  assert_eq(normalize_path("dir/ "), "dir")
   assert_eq(normalize_path("a/./b"), "a/./b")
   assert_eq(normalize_path("."), ".")
 }

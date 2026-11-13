@@ -40,6 +40,13 @@ else
   fail "moon new 创建干净工程"
 fi
 cd qa_install || exit 1
+# moonmux 只支持 native / wasm-gc / js；moon new 默认 preferred_target=wasm，必须切到 native
+if grep -q 'preferred_target = "wasm"' moon.mod 2>/dev/null; then
+  sed -i 's/^preferred_target = "wasm"/preferred_target = "native"/' moon.mod
+fi
+if ! grep -q 'preferred_target = "native"' moon.mod 2>/dev/null; then
+  printf '\npreferred_target = "native"\n' >> moon.mod
+fi
 
 # 2) 从 mooncakes 安装（moon.mod 里会写入 import）
 moon add "WangYF0829/moonmux@$VERSION" >/dev/null 2>&1
@@ -85,7 +92,7 @@ if ! grep -q "WangYF0829/moonmux/wav" cmd/main/moon.pkg 2>/dev/null; then
 fi
 
 # 4) 类型检查 + 运行
-moon check >/dev/null 2>&1
+moon check --target native >/dev/null 2>&1
 if [ $? -eq 0 ]; then pass "moon check 通过"; else fail "moon check 通过"; fi
 OUT="$(moon run --target native cmd/main 2>&1)"
 echo "$OUT" | grep -q "wav ok"

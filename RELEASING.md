@@ -1,4 +1,4 @@
-﻿# 发布流程（RELEASING）
+# 发布流程（RELEASING）
 
 > 面向对象：moonmux 发布负责人 / 复核人。
 > 适用范围：mooncakes.io（`WangYF0829/moonmux`）与 GitHub Release。
