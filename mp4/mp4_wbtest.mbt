@@ -440,6 +440,27 @@ test "mp4 inspect rejects stsz sample count above Int32 range" {
 }
 
 ///|
+/// F-PAR-06：stsz 的**正的最大值** 0x7FFFFFFF 同样不可能装进 <2 GiB 的文件，
+/// 且与解封装样本上限（1,048,576）不一致；inspect 必须按不可解析拒绝，
+/// 而不是显示 21 亿样本。
+test "mp4 inspect rejects stsz sample count above demux cap" {
+  match remux_ogg_opus(synthetic_ogg_opus()) {
+    Err(_) => assert_true(false)
+    Ok(mp4) =>
+      match dwb_find(mp4, b"stsz") {
+        Some(p) => {
+          assert_true(
+            inspect(dwb_patch_u32_be(mp4, p + 12, 0x7FFFFFFF)) is None,
+          )
+          // 样本上限 + 1（1,048,577）也拒绝
+          assert_true(inspect(dwb_patch_u32_be(mp4, p + 12, 1048577)) is None)
+        }
+        None => assert_true(false)
+      }
+  }
+}
+
+///|
 test "mp4 inspect rejects moov without mvhd" {
   match remux_ogg_opus(synthetic_ogg_opus()) {
     Err(_) => assert_true(false)

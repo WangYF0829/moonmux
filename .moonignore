@@ -1,9 +1,21 @@
 # 发布归档时排除的内容（moon package / moon publish 使用）
+#
+# 注意：本文件存在时，moon 会用它替代同目录 .gitignore 参与打包判断；
+# 因此 .gitignore 中与“制品/临时产物”相关的规则必须在这里复刻一份，
+# 否则被 git 忽略的本地文件仍可能被打进发布包（不可撤回）。
+# 规则与 .gitignore 的制品部分保持对齐（2026-11-12 供应链修复：补 _*.ogg、_*.wav、_*.bin、target/、*.wasm、*.exe、*.dll）。
 _build/
 _*/
 smoke.*/
 .workbuddy/
 _mbuild/
+_*.ogg
+_*.wav
+_*.bin
+target/
+*.wasm
+*.exe
+*.dll
 *.log
 pkg.generated.mbti
 *.mbti

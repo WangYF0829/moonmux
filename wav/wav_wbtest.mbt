@@ -1389,6 +1389,21 @@ test "parse rejects duplicate fmt/data chunks" {
 }
 
 ///|
+/// F-PAR-04：荒谬采样率（会让下游按整数百分秒显示时在 Int32 溢出）在
+/// 解析阶段直接拒绝；合理上限内的边界值仍接受。
+test "parse rejects absurd sample rate before display arithmetic overflows" {
+  // 2e9 Hz：旧实现接受并在 info 里打印 "约 0.0-1 秒"（frames%rate*100 溢出）
+  let absurd = build_wav_simple(1, 1, 2000000000, 1, 8, b"\x00")
+  assert_true(WavFile::parse(absurd) is None)
+  // 上限 + 1 拒绝
+  let over = build_wav_simple(1, 1, 10000001, 1, 8, b"\x00")
+  assert_true(WavFile::parse(over) is None)
+  // 上限本身（10 MHz）仍接受：byte_rate 与 block_align 自洽
+  let boundary = build_wav_simple(1, 1, 10000000, 1, 8, b"\x00")
+  assert_true(WavFile::parse(boundary) is Some(_))
+}
+
+///|
 test "float encode writes fact chunk with frame count" {
   let fmt : WavFormat = { channels: 2, sample_rate: 8000, bits_per_sample: 32, }
   let data : Bytes = b"\x00\x00\x80\x3f\x00\x00\x00\x00"

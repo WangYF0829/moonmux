@@ -266,9 +266,9 @@ test "page reader strict mode stops at garbage and getters report state" {
 }
 
 ///|
-/// 带页头保留位（`Page::parse` 只校验 version，接受这种页）的数据：
-/// 流式读取的接受判据必须与 Page::parse + CRC 一致，不能因为
-/// `plausible_page_start` 预筛失败就把整段数据当垃圾（M-26 回归）。
+/// 带页头保留位（RFC 3533 §6 要求为 0）的数据：F-PAR-05 之后 `Page::parse`
+/// 拒绝它，流式读取器的接受判据必须与 `Page::parse` + CRC 一致 —— 整段
+/// 数据记为 skipped，不会交给上层。
 fn pr_reserved_bit_blob() -> Bytes {
   let pages : Array[Page] = [
     {
@@ -294,15 +294,20 @@ fn pr_reserved_bit_blob() -> Bytes {
 }
 
 ///|
-test "page reader: accepts reserved-bit pages whose crc is valid (M-26)" {
+test "page reader: rejects reserved-bit pages" {
   let blob = pr_reserved_bit_blob()
-  let strict = parse_pages(blob)
-  assert_eq(strict.length(), 2)
+  assert_eq(parse_pages(blob).length(), 0)
   let reader = PageReader::new()
   reader.feed(blob)
   reader.finish()
-  assert_eq(reader.take_pages().length(), strict.length())
-  assert_eq(reader.take_skipped().length(), 0)
+  assert_eq(reader.take_pages().length(), 0)
+  let gaps = reader.take_skipped()
+  let mut skipped = 0
+  for g in gaps {
+    assert_true(g.bytes > 0)
+    skipped = skipped + g.bytes
+  }
+  assert_eq(skipped, blob.length())
 }
 
 ///|

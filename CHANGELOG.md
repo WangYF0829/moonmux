@@ -1,7 +1,64 @@
 # 更新日志
 
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
+格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)（`Unreleased` + Added / Changed / Fixed / Deprecated / Removed / Security）。
 更早的历史见 `git log` 与 GitHub Releases。
+发布流程与回滚预案见 [`RELEASING.md`](RELEASING.md)；逐版本发布记录（含 zip sha256）见 [`docs/releases/`](docs/releases/)。
+
+## [Unreleased]
+
+（暂无）
+
+## [0.9.4] — 2026-11-13
+
+> 验收整改版：Vorbis gate v3（内存 + CPU 双预算）、CLI / 解析边界修复、发布治理与发布记录、CI 11 门禁、D2 覆盖率达标（82.87%）。发布记录见 [docs/releases/v0.9.4.md](docs/releases/v0.9.4.md)。
+
+### Added
+
+- 新增 [`RELEASING.md`](RELEASING.md)：发布前检查单、`moon publish --dry-run` 判定标准（以服务器返回文本为准；已发布版本 409、合成版本 202 但 CLI 非零退出为已知工具链行为）、双人复核的单人项目例外登记与补偿、回滚预案（修复版 + `moon deprecate WangYF0829/moonmux` 预览/演练）与发布后 24h / 7 天监控。
+- 新增 [`docs/releases/v0.9.3.md`](docs/releases/v0.9.3.md)：v0.9.3 发布记录（commit / tag / 工具链 / **zip sha256** / CI run / 各 gate 结果 / 可复现性裁决 / deprecate 预览演练）。
+- 新增 [`NOTICE`](NOTICE) / [`THIRD_PARTY.md`](THIRD_PARTY.md)：许可声明与第三方依赖清单（`LL728/moonopus` Apache-2.0 + BSD-3-Clause 表数据组件、`LL728/moonvorbis`、`moonbitlang/x`），并登记 `moonbitlang/x` 包内无 LICENSE 文本的上游缺口。
+- 新增发布前制品 / 依赖校验与归档脚本：`scripts/check_package.sh`（包清单 / 体积 / worktree / 密钥门禁）、`scripts/check_pii.sh`（PII 扫描）、`scripts/gen_sbom.sh`（SBOM 归档）、`scripts/check_api_diff.sh`（`.mbti` diff 门禁，CI 已调用 `--target-all`）、**`scripts/check_api_docs.sh`**（公开 API 文档注释覆盖门禁，阈值 ≥95% / 未文档 0）、**`scripts/check_coverage.sh`**（库层 / 总覆盖率门限，≥88% / **≥80%**）、**`scripts/preflight_release.sh`**（发布前一键预检：worktree/版本/格式/check/test all/api-diff/api-docs/覆盖率/PII/包内容/SBOM/bench/fuzz/smoke 串跑，支持 `--allow-dirty` / `--skip-*`）、`scripts/bench-baseline.json`（bench 基线）。
+- 新增评估 / 证据 / 风险文档：[`docs/releases/v0.9.3-install-sampling.md`](docs/releases/v0.9.3-install-sampling.md)（G1-01 冷装抽样：30/30 = 100%、合计 33/33、中位 1980 ms）、[`docs/dependency-assessment.md`](docs/dependency-assessment.md)（G1-B2 依赖维护性 = DEGRADED、退出预案、工具链 pin 结论）、[`docs/known-issues.md`](docs/known-issues.md)（KI-01..05，含 moonvorbis 上游 issue 草稿）、[`docs/security/pii-advisory.md`](docs/security/pii-advisory.md)（历史 PII 风险接受）。
+- **新增 3 个公开 API（`codec` 包）**：`parse_vorbis_setup_info(packet, channels) -> Result[VorbisSetupInfo, String]`（Vorbis setup 完整有界校验，安全路径入口）、`VorbisSetupInfo`（第 2 轮引入、**尚未发布**；第 3/4 轮扩展为 codebooks / floors / residues / mappings / modes / channels / modes_mapping / floor_symbols / residue_type·begin·end·partition_size / **`residue_vq_codewords`** / mappings_submaps·floor·residue·mux / `max_huffman_scan` / `decoder_setup_bytes`，并提供 **`huffman_work_upper`**（第 4 轮由 `huffman_symbols_upper` 重命名，含 VQ 码字数））、`vorbis_block_sizes(id_packet) -> (Int32, Int32)?`（短 / 长块大小，供解码工作量推导）；旧 `validate_vorbis_setup` 签名与语义保留（仅 codebook 段，文档注明非完整安全路径）。
+- 新增黑盒测试：`codec` / `manifest` / `mp4` / `ogg` / `pipeline` / `wav` 各新增 `*_public_test.mbt`（`for "test"` 导入，只使用公开 API）。
+- CLI 支持 `--help` / `-h` / `--version` 别名（等价 `help` / `version`，均 exit 0），未知选项给出对应子命令用法提示。
+- 新增回归测试与契约断言：CLI 契约（无参 / 未知子命令 / 未知选项 / 多余参数 / 别名）、Vorbis gate v3（sparse 位预算 / 交叉引用 / lookup / ordered / 内存分配上界 / Huffman 成本）、Ogg 保留位、MP4 `stsz` 高位、WAV 时长溢出等边界用例；`scripts/smoke.sh` 断言从 54 项扩到 66 项（stdout/stderr 归属、别名、`PIPESTATUS`）。
+- CI 门禁增强至 **11 个 job**：新增 `api-diff`（对上一发布 tag 做 `.mbti` diff，破坏性变更 fail）、`examples`（native 实跑三个示例）、`publish-dry-run`（不真实发布，按 409/202 语义判定）；`check` job 增加 `moon check/test --target all --frozen` 与包清单 / worktree 校验；`bench` 接入基线阈值。
+
+### Changed
+
+- README：新增「5 分钟上手」（含 CLI 二进制实际路径 `_build\native\debug\build\cmd\main\main.exe`，与 `moonmux` 命令名的关系）与「支持矩阵」（native / wasm-gc / js；`supported_targets` 为唯一事实源）；「能力边界」补 `to-wav` 不可信输入信任边界（gate v3 + 残余风险）、`to-wav` 内存 / CPU 预算模型、`demux` 输出文件对象 / `split` 段数上限、Windows MAX_PATH / `\\?\` 说明；`PageReader` 重同步描述修正为 `8 × 缓冲长度 + 64 KiB` 确定性预算；退出码表补充判定标准（1 = 数据 / 校验错误；2 = 用法 / 参数引用 / I/O / 能力边界 / 输入形态不支持）；bench 小节改为基线 / 阈值 / 平台守卫 / 小操作噪声下限 / `--batches` 用法；项目结构、脚本清单、链接与许可证小节同步。
+- 测试与覆盖率（Windows x64 本地 `moon test --deny-warn --target all`）：native **475/475**、wasm-gc **425/425**、js **425/425**；`wasm` 后端 **0 个测试（未验证）**。**D2 覆盖率缺口已关闭**：工具口径总 **82.87%**（5210/6287，CI 门禁 ≥80%、达标）、库层行覆盖率 **91.79%**（3779/4117，门限 ≥88%）、`coverage analyze` 未覆盖行 **635**（Linux 估算 ~662 < 800）；新增覆盖来自 `cmd/main/main_wbtest.mbt`（+810 行 / +14 用例，**库源码零改动**）。公开 API 文档覆盖 **132/132 = 100%**（门限 ≥95%、未文档 0）。G1-01 冷装抽样 **30/30 = 100%**（合计 33/33，中位 1980 ms，见 `docs/releases/v0.9.3-install-sampling.md`）。
+- CHANGELOG 改为 Keep a Changelog 结构（`Unreleased` + 六类）；**已发布条目保持原样**。
+- `docs/architecture.md`：版本行、gate v3 不变量（内存分配上界 / CPU 双预算：IMDCT + Huffman / dims 语义裁决）、能力上限、公开 API、测试 / 覆盖率数字、退出码、发布记录 / 流程同步。
+- `.moonignore` / `.gitignore` 对齐：补充 `_*.ogg` / `_*.wav` / `_*.bin`、`target/`、`*.wasm` / `*.exe` / `*.dll` 等制品排除。
+- CI：依赖冻结（`--frozen`）、工具链版本记录、`check_version.sh` 扩至 11 项、bench 基线与阈值（含平台守卫 / 噪声下限）接入；`check` job 新增 **API 文档覆盖门禁** `check_api_docs.sh`（132/132 = 100%，≥95%、未文档 0），`coverage` job 新增 **库层/总覆盖率门限** `check_coverage.sh`（91.79% ≥88% / **82.87% ≥80%**，总覆盖阈值由 75 提升到 **80**，actionlint 0 error/0 warning）；`api-diff` job 调用 `check_api_diff.sh --target-all`（校验 native/wasm/wasm-gc/js 各后端接口一致）。
+- **bench 门禁稳健化**：`bench.mjs` 增加 `--batches` 多批次采样与**小操作噪声下限 4 ms**（基线 < 50 ms 时允许 `max(比例阈值, 4 ms)`）；基线改为多轮 min 的上界（每项 30 样本）；`demux` 因 I/O 抖动（同机 6 次 66.2–84.6 ms）取上界 **80.0 ms** 并写入 `threshold_policy` / `notes`；`--runs 5 --batches 2` 复测 6/6 PASS。
+- `moon.mod` 增加 `supported_targets = [ "native", "wasm-gc", "js" ]`（与本地 `--target all` 实测一致）。
+
+### Fixed
+
+- **第 1 轮（CLI / 解析边界）**：F-PAR-01 Vorbis setup gate 升级为全 codebook 有界校验（详见 Security）；F-PAR-02 `dims` / `entries` 的 `+1` 语义修正并交叉断言；F-PAR-03 `demux` 写盘前按 `页数 × 255` 粗估包数，超 `MAX_DEMUX_PACKETS`（999999）立即拒绝（exit 2）；F-PAR-04 WAV `info` 百分秒 / 时长 Int64 化；F-PAR-05 Ogg 保留头类型位（0xF8）在 `parse` / `verify` / 重同步统一校验；F-PAR-06 MP4 `inspect` 拒绝 `stsz` sample_count 高位（0x7FFFFFFF）；F-PAR-08 `total_bits` 位预算改 Int64。
+- **第 2 轮（红队 RT-A 8 项）**：**RT-A-01** sparse 码长表位预算按解码器真实读取量逐条核算（消除最坏 6 倍越界窗口）；**RT-A-02** floor / residue / mapping / mode 段的跨段交叉引用与声道 / 时间下标全部上界校验；**RT-A-03** lookup type 1 维度 1..16 与 type 2 元素数上限（消除除零 / 溢出）；**RT-A-04** 内存上界改为按逐包 mode / block_size 推导，不信任页 granule；**RT-A-05** 新增 CPU 工作量预算（IMDCT O(n²) 放大拒绝）；**RT-A-06** `split` 输出段数上限 `MAX_SPLIT_PARTS=999999`（超限 exit 2、不建输出目录）；**RT-A-07** ordered codebook 游程扫完后继续校验后续字段（不再提前 Ok）；**RT-A-08** `demux` 上限统计口径改为文件对象数（包数 + 2 × 流数 ≤ 999999）。
+- **第 3 轮（红队 RT3 预算模型）**：**RT3-01** `lookup_type=1` 展开内存未计入内存预算 —— codec 增加 `VorbisCodebook::alloc_bytes` 按 moonvorbis 真实分配上界（type0/1/2 + Huffman 表 + 码长数组）统计 `decoder_setup_bytes`，pipeline 内存预算使用（4cb/8cb PoC 由 exit 0 + 峰值 331.6/674.1 MiB 变为 exit 1）；**RT3-02** CPU 预算只算 IMDCT 漏掉 Huffman 线性查表 —— 新增 `max_huffman_scan`（最长码长 × 有效码字数）与 `VorbisSetupInfo::huffman_symbols_upper`（**第 4 轮已重命名为 `huffman_work_upper` 并改双预算，见下条**），CPU 工作量 = IMDCT + Huffman 扫描（1p/2p/4p PoC 由 4.9/7.5/26.8 s 变为 exit 1、≤52 ms）；**RT3-03** 系数收紧：`MAX_VORBIS_WORK_PER_INPUT_BYTE` 120,000 → **65,000**、`VORBIS_WORK_FLOOR` 32M → **8M**（**第 4 轮重标定为双预算 34,000 / 650,000**；426 B PoC 由 7.3 s 变为 exit 1、47 ms，真实样本仍放行）；**RT3-04** `dimensions` 语义裁决：线格式为 raw 值（无 +1，与 libvorbis / moonvorbis 一致），标量书（classbook / floor1 master/subclass）dims=0 合法、VQ 书（floor0 / residue book）dims=0 仍 fail-closed 拒绝。
+- **第 4 轮（红队 RT4-01 / CPU 双预算重标定）**：**RT4-01** Huffman 符号数上界漏乘 residue VQ 码字数（每 partition `ceil(partition_size / dimensions)`，旧实现漏 ×128）—— codec 新增 `VorbisSetupInfo.residue_vq_codewords`，`huffman_symbols_upper` 重写并重命名为 **`huffman_work_upper`**（每包符号数上界 × `max_huffman_scan`）；pipeline CPU 预算拆为**双预算（单位不同、分别限额、不相加）**：**IMDCT 34,000 cos/字节**（下限 6M）与 **Huffman 650,000 比较/字节**（下限 32M）。6,511 B PoC 由「放行后 15–25 s 超时（外推 7–8 min CPU）」变为 **exit 1 / 0.87 s**（`Huffman 43,012,587,520 > 4,232,150,000`）；真实样本限额为 IMDCT 263.2M（×1.43）、Huffman 5.032G（×1.49），真实样本仍放行。
+- CLI：写失败「回滚」告警仅在确有半成品时输出并调整输出顺序；输入形态不支持 / 能力边界类判定统一归入退出码 2（与数据损坏的 1 区分）；`\\?\` 前缀与 ADS 误判、Windows 长路径（MAX_PATH）错误提示；文件不存在等错误补 errno 语义（不再出现「No error」）；`cat` 的输出尺寸预检前移到备份之前。
+
+### Deprecated
+
+- 无。
+
+### Removed
+
+- 无。
+
+### Security
+
+- **Vorbis gate v3**：pipeline 解码前改用 `@codec.parse_vorbis_setup_info` 做完整有界校验（codebook 段 + floor / residue / mapping / mode 段 + 跨段交叉引用 + lookup 表 + ordered / framing 位，逐段位预算），并按 moonvorbis **真实分配上界**计算内存、按 **IMDCT + Huffman 线性扫表（含 residue VQ 码字数）双预算**计算 CPU。RT3 相关 19 组 PoC 回归仍全部 exit=1、0 崩溃、0 残留；**RT4-01 已修复**：6,511 B PoC 由「放行后 15–25 s 超时（外推 7–8 min CPU）」变为 **exit 1 / 0.87 s**（`Huffman 43,012,587,520 > 4,232,150,000`）。真实 `testdata` to-wav 产物字节数不变（Vorbis 176444 / Opus 576044，Vorbis debug 92.6 s）。
+- `to-wav` 残余风险已登记（README 能力边界）：① Huffman 码长表有效性仍由解码器判定；② floor1 `x` 序等语义细节不在 gate 覆盖；③ 内存模型是上界估算；④ **CPU 双预算 debug 上限约 18 ms/字节**（真实样本 92.6 s 已接近硬约束；余量 IMDCT ×1.43 / Huffman ×1.49），高码长 + 多符号的合法流仍可能被误拒；⑤ release/Linux 未实测；⑥ 依赖 `moonvorbis` 的 `unsafe_get` 仍是残余风险 —— `to-wav` 仍不建议直接处理不可信输入。
+- CLI 对能力边界输入（`demux` 文件对象 / `split` 段数上限等）在资源分配 / 写盘前拒绝，避免资源放大。
+- 发布前 PII / 凭据扫描纳入发布检查单（历史发布包 0.2.0–0.9.1 的 PII 风险按 [`docs/security/pii-advisory.md`](docs/security/pii-advisory.md) 与 [`docs/known-issues.md`](docs/known-issues.md) KI-03 记录为已接受风险）。
 
 ## [0.9.3] — 2026-11-12
 
@@ -270,3 +327,7 @@ v0.2.0（GitHub Release；mooncakes.io 0.2.0 于 2026-11-06 发布）。
 
 首个可用版本：Ogg 容器读写（页/段/包、CRC-32、多逻辑流交织、链接/拆分、结构体检）、
 WAV 读写、Ogg（Opus/Vorbis）→ WAV 转码管线、CLI 基础命令与测试基础。
+
+
+
+

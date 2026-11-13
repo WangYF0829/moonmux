@@ -3,7 +3,7 @@
 
 name = "WangYF0829/moonmux"
 
-version = "0.9.3"
+version = "0.9.4"
 
 readme = "README.md"
 
@@ -16,6 +16,8 @@ keywords = [ "ogg", "container", "mux", "demux", "audio", "codec" ]
 description = "Audio container toolkit in pure MoonBit: Ogg read/write and CRC verification, WAV full-format read/write, Opus-in-MP4 muxing and demuxing, transcoding pipeline, and a 15-command CLI"
 
 preferred_target = "native"
+
+supported_targets = [ "native", "wasm-gc", "js" ]
 
 import {
   "moonbitlang/x@0.5.5",

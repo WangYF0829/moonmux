@@ -198,6 +198,100 @@ fn checked_decoder_bytes(
 }
 
 ///|
+/// Vorbis 的两类解码工作量**分别**设预算（单位不同、不能加成一个系数）。
+///
+/// **IMDCT 预算**：`inverse_mdct` 每声道做 `n × n/2` 次 `cosf`。
+/// 标定（debug native 实测）：
+/// - 真实 `testdata/vorbis_sample.ogg`：184.6M 次 / 7742 B ≈ **2.38 万/字节**
+///   （cos 单次约 0.25 µs，约 46 s；该样本整体解码 97.2 s，属依赖解码器
+///   O(n²) 的真实慢，不得因预算误拒）；
+/// - RT3-03 PoC（426 B、1×8192 长块，8.65 s）：33.56M / 426 B ≈ **7.88 万/字节**；
+/// - RT-A-05（239 B、2×8192）：67.1M / 239 B ≈ **28 万/字节**。
+/// 取 3.4 万/字节（真实样本 ×1.43），下限 600 万（覆盖一个 2048 长块、
+/// 立体声单包的 ~420 万 cos）。
+const MAX_VORBIS_IMDCT_WORK_PER_BYTE : Int64 = 34000L
+
+///|
+/// **IMDCT 预算**对小文件的下限：一个 2048 长块、双声道单包约 420 万次 cos。
+const VORBIS_IMDCT_WORK_FLOOR : Int64 = 6000000L
+
+///|
+/// **Huffman 预算**：`HuffmanTable::decode` 是逐 bit 线性扫全表，单符号成本
+/// 上界 = 最长码长 × 有效码字数（`max_huffman_scan`）；`huffman_work_upper`
+/// 给出每包**符号数**上界（含 RT4-01 修正的 VQ 码字数）。
+///
+/// 标定（debug native 实测）：
+/// - 真实 `testdata/vorbis_sample.ogg`（修正 VQ 符号数后）：3.384G 次比较 /
+///   7742 B ≈ **43.7 万/字节**；比较单次约 0.0145 µs（合计约 49 s，与
+///   「97.2 s − IMDCT 46 s」吻合）；
+/// - RT3-02 PoC（677 B、100 万码字）：2.85G / 677 B ≈ **421 万/字节**；
+/// - RT4-01 g9 PoC（6,511 B、8 pass × 4096/16 VQ 符号）：43.0G / 6511 B
+///   ≈ **661 万/字节**。
+/// 取 65 万/字节（真实样本 ×1.49），下限 3200 万（覆盖极短正常流的少量符号）。
+const MAX_VORBIS_HUFFMAN_WORK_PER_BYTE : Int64 = 650000L
+
+///|
+/// **Huffman 预算**对小文件的下限。
+const VORBIS_HUFFMAN_WORK_FLOOR : Int64 = 32000000L
+
+///|
+/// `v > 0` 时返回表示 `v` 所需的位数（与解码器 `ilog` 一致）。
+fn ilog32(v : Int32) -> Int32 {
+  let mut x = v
+  let mut n = 0
+  while x > 0 {
+    n = n + 1
+    x = x >> 1
+  }
+  n
+}
+
+///|
+/// 读取一个 Vorbis 音频包声明的 mode 号与 block size（样本数）。
+///
+/// 解码器格式：bit0 = packet type（音频包必须为 0），随后
+/// `ilog(mode_count - 1)` 位 mode 号；mode 的 blockflag 决定使用短块还是
+/// 长块。这里只做与解码器一致的「位是否够读、mode 号是否越界」检查，
+/// 不解释音频负载 —— 非法/截断返回 `None`（fail closed，不进入解码）。
+fn vorbis_packet_block_size(
+  data : Bytes,
+  modes : Array[Int32],
+  blocksize0 : Int32,
+  blocksize1 : Int32,
+) -> (Int32, Int32)? {
+  let mode_count = modes.length()
+  if mode_count <= 0 || data.length() < 1 {
+    return None
+  }
+  // 音频包类型位必须为 0（1 表示 header 包，出现在音频位置就是损坏流）。
+  if (data[0].to_int() & 1) != 0 {
+    return None
+  }
+  let mode_bits = ilog32(mode_count - 1)
+  if data.length().to_int64() * 8L < (1 + mode_bits).to_int64() {
+    return None
+  }
+  let mut mode = 0
+  let mut i = 0
+  while i < mode_bits {
+    let bit_pos = 1 + i
+    let byte_index = bit_pos / 8
+    let bit_in_byte = bit_pos % 8
+    let bit = (data[byte_index].to_int() >> bit_in_byte) & 1
+    mode = mode | (bit << i)
+    i = i + 1
+  }
+  if mode >= mode_count {
+    return None
+  }
+  if modes[mode] == 1 {
+    Some((mode, blocksize1))
+  } else {
+    Some((mode, blocksize0))
+  }
+}
+
+///|
 /// 解码前的统一预检（H-03 / H-04 / C-02 的兜底闸门）。
 ///
 /// 步骤与理由：
@@ -207,10 +301,15 @@ fn checked_decoder_bytes(
 /// 3. 预先用本项目自己的 `@codec.parse_comment` 解析注释包 —— 第三方解码器
 ///    在 vendor/条目长度字段上出过越界读与 panic，而本项目解析器对同样的
 ///    数据安全返回 Err（C-02 的 97 B PoC 在此被挡）；
-/// 4. Vorbis 额外校验 setup 头的最小结构（221 B 的恶意 setup 在此被挡）；
-/// 5. 按**解码工作量**估算内存：Opus 逐包读 TOC 累加样本数，完全不信任
-///    页 granule（H-03）；Vorbis 没有逐包时长，只能按 granule 估算并拒绝
-///    不可用的 granule。
+/// 4. Vorbis 额外做 setup 头的**完整有界校验（gate v3）**：逐个 codebook 检查
+///    同步码、dimensions/entries 上限、码长表与 lookup 表位预算，并校验 floor /
+///    residue / mapping / mode 段及其交叉引用（book/floor/residue/mapping/
+///    声道下标）；221 B 恶意 setup、354 B「第 2 个 codebook 巨型 lookup」、
+///    213–217 B 交叉引用越界 PoC 都在此被挡（见 `@codec.parse_vorbis_setup_info`）；
+/// 5. 按**解码工作量**估算内存与 CPU：Opus 逐包读 TOC 累加样本数，完全不
+///    信任页 granule（H-03）；Vorbis 逐包读 mode/block_size 推导输出样本上界、
+///    IMDCT 成本与 Huffman 线性查表成本（符号数上界 × 最长码长 × 有效码字数），
+///    granule 只用于健全性检查（H-03 / RT-A-04 / RT-A-05 / RT3-01/02/03）。
 ///
 /// 返回的计划同时供估算与解码使用，避免两者选到不同的流。
 fn plan_segment(
@@ -313,16 +412,29 @@ fn plan_segment(
       if packets.length() < 3 {
         return Err("Vorbis 流缺少 setup 头")
       }
-      match @codec.validate_vorbis_setup(packets[2].data) {
-        Ok(_) => ()
+      // gate v2：完整校验 setup 头（codebook + floor/residue/mapping/mode
+      // 交叉引用）。返回的 modes/lookup_values 供下面推导解码工作量与内存。
+      let setup = match
+        @codec.parse_vorbis_setup_info(packets[2].data, info.channels) {
+        Ok(s) => s
         Err(msg) =>
           return Err(
             "Vorbis setup 头预检失败（已拒绝交给解码器）：" +
             msg,
           )
       }
-      // Vorbis 没有逐包时长字段，只能按页 granule 估算（近似：末值减首值）。
-      // granule 不可用时必须拒绝，而不是当作 0 放行 —— 否则预算闸门失效。
+      // 块大小来自 identification header；解码器每个包用 mode.blockflag
+      // 选短/长块。识别头已经由 parse_vorbis_id 校验过，这里再取一次值。
+      let (blocksize0, blocksize1) = match
+        @codec.vorbis_block_sizes(packets[0].data) {
+        Some(v) => v
+        None =>
+          return Err(
+            "不支持的 Vorbis 识别头（块大小非法，已拒绝交给解码器）",
+          )
+      }
+      // granule 健全性：缺 granule 或 granule 极端到无法表示时拒绝（沿用
+      // 第 1 轮语义）。注意 granule 只用来做健全性/时长，不能再当内存上界。
       let mut first : Int64 = -1L
       let mut last : Int64 = -1L
       for p in part {
@@ -338,18 +450,134 @@ fn plan_segment(
           "Vorbis 输出大小无法估算：音频页 granule 缺失或非正（文件可能已损坏，已拒绝）",
         )
       }
-      let samples = last - first
-      let estimated = match
+      let granule_samples = last - first
+      match
         checked_decoder_bytes(
-          samples,
+          granule_samples,
           info.channels.to_int64(),
           per_sample_unit,
         ) {
-        Some(v) => v
+        Some(_) => ()
         None =>
           return Err(
             "无法估算 Vorbis 解码内存：granule 超出可表示范围（文件可能已损坏）",
           )
+      }
+      // 逐音频包读 mode → 严格上界与工作量：
+      // - 输出样本/声道 ≤ block_size（解码器实际输出 ≤ n/2，这里取 2 倍上界）；
+      // - IMDCT 成本 = 声道数 × n²/2 次 cos；
+      // - Huffman 成本 = 每包符号数上界 × 单符号线性扫描上界（RT3-02）。
+      let mut samples_bound : Int64 = 0L
+      let mut imdct_work : Int64 = 0L
+      let mut huffman_work : Int64 = 0L
+      let mut pi = 3
+      while pi < packets.length() {
+        let (mode_index, n) = match
+          vorbis_packet_block_size(
+            packets[pi].data,
+            setup.modes,
+            blocksize0,
+            blocksize1,
+          ) {
+          Some(v) => v
+          None =>
+            return Err(
+              "第 " +
+              (pi + 1).to_string() +
+              " 个 Vorbis 音频包的 mode 字段无法解析（位流截断或 mode 号越界，已拒绝解码）",
+            )
+        }
+        let n64 = n.to_int64()
+        samples_bound = samples_bound + n64
+        imdct_work = imdct_work + n64 * n64 / 2L
+        // 每包 Huffman 查表成本上界：符号数 × 单符号扫描成本。符号数已按
+        // RT4-01 修正（residue 每 pass 的 VQ 码字数 = ceil(ps / VQ dims)）。
+        let cost = setup.huffman_work_upper(n / 2, mode_index)
+        if huffman_work > 9223372036854775807L - cost {
+          return Err(
+            "Vorbis Huffman 解码工作量超出可表示范围（文件可能已损坏）",
+          )
+        }
+        huffman_work = huffman_work + cost
+        pi = pi + 1
+      }
+      // 内存上界 = 输出样本上界 × 声道 × 每样本（输出 + 解码器缓冲）
+      //          + 解码器固定分配（window、每声道 previous_window）
+      //          + setup 解析期 codebook 分配上界（RT3-01：type1 的
+      //            entries×dimensions Float 展开、Huffman 表、lengths 等）
+      //          + 输入字节本身（解码期间输入与已解析页仍在内存中）。
+      // 这是**上界**而不是 granule 估算：恶意构造无法再用「granule 很小、
+      // 但每包 block 很大/包很多」绕过预算（RT-A-04）；也不再用
+      // 「lookup 只算原始值」低估 codebook 构造分配（RT3-01）。
+      let mut input_bytes : Int64 = 0L
+      for p in part {
+        input_bytes = input_bytes +
+          (27 + p.segments.length() + p.payload.length()).to_int64()
+      }
+      let channel_buffers = checked_decoder_bytes(
+        samples_bound,
+        info.channels.to_int64(),
+        per_sample_unit,
+      )
+      let variable = match channel_buffers {
+        Some(v) => v
+        None =>
+          return Err(
+            "无法估算 Vorbis 解码内存：输出样本上界超出可表示范围（文件可能已损坏）",
+          )
+      }
+      let fixed_windows = (
+          blocksize0.to_int64() / 2L +
+          blocksize1.to_int64() / 2L +
+          info.channels.to_int64() * blocksize1.to_int64() / 2L
+        ) *
+        4L
+      let fixed_setup = setup.decoder_setup_bytes
+      let fixed = fixed_windows + fixed_setup + input_bytes
+      if variable > 9223372036854775807L - fixed {
+        return Err(
+          "无法估算 Vorbis 解码内存：上界超出可表示范围（文件可能已损坏）",
+        )
+      }
+      let estimated = variable + fixed
+      // CPU 预算：IMDCT（cos 调用）与 Huffman（查表比较）单位不同，
+      // 分别限额；两者都随输入字节数放大，并各有小文件下限（RT3-02/03、RT4-01）。
+      let imdct_limit = if input_bytes * MAX_VORBIS_IMDCT_WORK_PER_BYTE >
+        VORBIS_IMDCT_WORK_FLOOR {
+        input_bytes * MAX_VORBIS_IMDCT_WORK_PER_BYTE
+      } else {
+        VORBIS_IMDCT_WORK_FLOOR
+      }
+      let huffman_limit = if input_bytes * MAX_VORBIS_HUFFMAN_WORK_PER_BYTE >
+        VORBIS_HUFFMAN_WORK_FLOOR {
+        input_bytes * MAX_VORBIS_HUFFMAN_WORK_PER_BYTE
+      } else {
+        VORBIS_HUFFMAN_WORK_FLOOR
+      }
+      let channels64 = info.channels.to_int64()
+      if imdct_work > 9223372036854775807L / channels64 {
+        return Err(
+          "Vorbis 解码工作量超出可表示范围（文件可能已损坏）",
+        )
+      }
+      let imdct_total = imdct_work * channels64
+      if imdct_total > imdct_limit {
+        return Err(
+          "Vorbis IMDCT 解码工作量约 " +
+          imdct_total.to_string() +
+          " 次 cos 运算（block_size² 总和 × 声道数），超过本文件大小允许的预算 " +
+          imdct_limit.to_string() +
+          "：疑似利用 O(n²) IMDCT 做 CPU 放大（已拒绝解码）",
+        )
+      }
+      if huffman_work > huffman_limit {
+        return Err(
+          "Vorbis Huffman 解码工作量约 " +
+          huffman_work.to_string() +
+          " 次查表比较（符号数上界 × 最长码长 × 有效码字数，已含 residue VQ 码字数），超过本文件大小允许的预算 " +
+          huffman_limit.to_string() +
+          "：疑似利用 Huffman 线性查表做 CPU 放大（已拒绝解码）",
+        )
       }
       Ok({
         serial,
@@ -395,9 +623,9 @@ pub fn detect(data : Bytes) -> Result[Codec, String] {
 /// 转码允许的解码期内存峰值预算（字节）。
 ///
 /// 整条链路没有流式写接口（`@fs` 只有整文件写），所以 PCM 必须在内存里
-/// 攒齐再一次性写盘。预算按**解码工作量**估算：样本数 × 声道数 ×
-/// （输出字节/样本 + 解码器内部缓冲 8 B），样本数对 Opus 逐包读 TOC 得到、
-/// 完全不依赖页 granule。
+/// 攒齐再一次性写盘。预算按**解码工作量**估算：Opus 逐包读 TOC 得到样本数；
+/// Vorbis 逐包读 mode/block_size 得到输出样本上界（不再依赖 granule）。
+/// 此外对 Vorbis 还有独立的 CPU 工作量预算（O(n²) IMDCT，RT-A-05）。
 ///
 /// **能力边界**：外部解码器一次调用返回整段 PCM，无法在解码过程中施加
 /// 输出上限；本预算只能保证「估算不通过时绝不进入解码」，无法约束解码器
@@ -415,8 +643,8 @@ pub fn ogg_to_wav(data : Bytes) -> Result[Bytes, String] {
 ///
 /// 命令行通过 `MOONMUX_MAX_PCM_MB` 覆盖。预算按「样本数 × 声道数 ×
 /// （输出字节 + 解码器内部缓冲 8 B）」估算：对 Opus 由逐包 TOC 累加得到
-/// 样本数，对 Vorbis 由页 granule 近似（Vorbis 没有逐包时长字段）。
-/// 估算不通过时在解码之前就返回 Err。
+/// 样本数，对 Vorbis 由逐包 mode/block_size 推导严格上界（granule 只做
+/// 健全性检查）。估算不通过时在解码之前就返回 Err。
 pub fn ogg_to_wav_limited(data : Bytes, limit : Int64) -> Result[Bytes, String] {
   let pages = @ogg.parse_pages(data)
   if pages.length() == 0 {

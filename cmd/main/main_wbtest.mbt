@@ -609,3 +609,813 @@ test "packet numbers sort numerically, not lexicographically" {
   assert_true(packet_less("packet_2.bin", "packet_10.bin"))
   assert_false(packet_less("packet_10.bin", "packet_2.bin"))
 }
+
+///|
+/// demux 包数上界：小输入按「页数 × 255」粗估，不做逐段扫描（不做无谓的 O(n) 工作）。
+test "demux packet upper bound is coarse for small inputs" {
+  let pages = @ogg.paginate(
+    [
+      { data: b"aa", granule_position: 0L, serial: 1U, },
+      { data: b"bb", granule_position: 0L, serial: 1U, },
+    ],
+    1U,
+  )
+  let bound = demux_packet_upper_bound(pages)
+  assert_true(bound >= 2L)
+  assert_eq(bound, pages.length().to_int64() * 255L)
+  // 文件对象上界 = 包数 + 2×流数（每流一份清单 + 一个子目录）
+  assert_eq(
+    demux_output_object_upper_bound(pages),
+    bound + @ogg.serials_of(pages).length().to_int64() * 2L,
+  )
+  assert_true(demux_output_guard(pages) is None)
+}
+
+///|
+/// 造「每页 255 个零长段」的页序列：每段都结束一个包，5301 B 输入 ≈ 5100 个文件。
+///
+/// 只给估算函数用：不参与重组成包，也不要求 CRC 正确。
+fn test_zero_segment_pages(n_pages : Int32) -> Array[@ogg.Page] {
+  let segments : Array[Int32] = []
+  let mut i = 0
+  while i < 255 {
+    segments.push(0)
+    i = i + 1
+  }
+  let pages : Array[@ogg.Page] = []
+  let mut p = 0
+  while p < n_pages {
+    pages.push({
+      header_type: (0x00 : Byte),
+      granule_position: 0L,
+      serial: 1U,
+      sequence: 0U,
+      crc: 0U,
+      segments,
+      payload: b"",
+    })
+    p = p + 1
+  }
+  pages
+}
+
+///|
+/// 造「每页 254 段续包 + 1 段收尾」的页序列：每页只结束 1 个包（正常大文件形态）。
+fn test_continuation_pages(n_pages : Int32) -> Array[@ogg.Page] {
+  let segments : Array[Int32] = []
+  let mut i = 0
+  while i < 255 {
+    if i == 254 {
+      segments.push(0)
+    } else {
+      segments.push(255)
+    }
+    i = i + 1
+  }
+  let pages : Array[@ogg.Page] = []
+  let mut p = 0
+  while p < n_pages {
+    pages.push({
+      header_type: (0x00 : Byte),
+      granule_position: 0L,
+      serial: 1U,
+      sequence: 0U,
+      crc: 0U,
+      segments,
+      payload: b"",
+    })
+    p = p + 1
+  }
+  pages
+}
+
+///|
+/// F-PAR-03 回归：零长段构造的包数放大必须在重组/写盘之前被拒。
+///
+/// 3922 页 × 255 个零长段 = 1,000,110 个包；文件对象 1,000,112（含 1 流清单+目录）
+/// 超过 999999 上限。同时验证「粗估超限、精算不超限」的正常文件不会被误拒。
+test "demux output guard rejects segment-flood amplification before reassembly" {
+  let flood = test_zero_segment_pages(3922)
+  let bound = demux_packet_upper_bound(flood)
+  assert_true(bound > MAX_DEMUX_PACKETS.to_int64())
+  assert_true(demux_output_object_upper_bound(flood) > MAX_DEMUX_OUTPUT_OBJECTS)
+  match demux_output_guard(flood) {
+    Some(msg) => {
+      assert_true(msg.contains("999999"))
+      assert_true(msg.contains("split"))
+    }
+    None => assert_true(false)
+  }
+  let cont = test_continuation_pages(3922)
+  assert_eq(demux_packet_upper_bound(cont), 3922L)
+  assert_true(demux_output_guard(cont) is None)
+  // 上限内的零长段文件仍然放行（5100 个文件属于文档允许的能力范围）
+  assert_true(demux_output_guard(test_zero_segment_pages(20)) is None)
+}
+
+///|
+/// 造「N 条逻辑流、每流 1 个包」的页序列（每流一段 BOS 页）。
+///
+/// 只给估算函数用：一条流一个包时「包数」只有 N，但 demux 会写 N 个包文件 +
+/// N 份清单 + N 个子目录 → 文件对象 3N。用于 RT-A-08 的计数口径回归。
+fn test_many_stream_pages(streams : Int32) -> Array[@ogg.Page] {
+  let segments : Array[Int32] = [1]
+  let pages : Array[@ogg.Page] = []
+  let mut s = 0
+  let mut serial : UInt32 = 1U
+  while s < streams {
+    pages.push({
+      header_type: (0x02 : Byte),
+      granule_position: 0L,
+      serial,
+      sequence: 0U,
+      crc: 0U,
+      segments,
+      payload: b"x",
+    })
+    serial = serial + 1U
+    s = s + 1
+  }
+  pages
+}
+
+///|
+/// RT-A-08 回归：demux 上限必须按**文件对象**计，而不是只按包数。
+///
+/// 333,335 条流 × 1 包：包数只有 333,335（远低于 999999），
+/// 但文件对象 = 333,335 + 2×333,335 = 1,000,005 > 999999 → 必须拒绝。
+/// 小规模（255 流）仍放行：上限内按文档允许写文件。
+test "demux output guard counts manifests and directories, not just packets" {
+  let big = test_many_stream_pages(333335)
+  assert_eq(demux_packet_upper_bound(big), 333335L)
+  assert_eq(demux_output_object_upper_bound(big), 333335L + 333335L * 2L)
+  match demux_output_guard(big) {
+    Some(msg) => assert_true(msg.contains("999999"))
+    None => assert_true(false)
+  }
+  let small = test_many_stream_pages(255)
+  assert_true(demux_output_guard(small) is None)
+}
+
+///|
+/// RT-A-06 回归：`split` 的段数上限（162 KB PoC 可铺出 3,000 个文件）。
+test "split parts guard caps output file count" {
+  // 上限内的常见链接流（3,000 段）放行 —— 与 demux 同一口径
+  assert_true(split_parts_guard(3000) is None)
+  assert_true(split_parts_guard(MAX_SPLIT_PARTS) is None)
+  match split_parts_guard(MAX_SPLIT_PARTS + 1) {
+    Some(msg) => {
+      assert_true(msg.contains("999999"))
+      assert_true(msg.contains("partN.ogg"))
+    }
+    None => assert_true(false)
+  }
+  match split_parts_guard(1000000) {
+    Some(msg) => assert_true(msg.contains("partN.ogg"))
+    None => assert_true(false)
+  }
+}
+
+///|
+/// F-CLI-01 回归：回滚前先判存在 —— 写失败但没留下任何文件时不能报「清理失败」。
+#cfg(target="native")
+test "restore_output stays quiet when nothing was written" {
+  let dir = "_build/wbtest_restore_quiet"
+  reset_test_dir(dir)
+  @fs.create_dir(dir) catch {
+    IOError(msg) => abort("create_dir: " + msg)
+  }
+  let missing = dir + "/never-created.ogg"
+  let failures = restore_output(missing, NoOriginal)
+  assert_eq(failures.length(), 0)
+  // 确实存在半截文件时：删掉，且删除成功不需要任何清理告警
+  @fs.write_bytes_to_file(missing, b"half") catch {
+    IOError(msg) => abort("write half: " + msg)
+  }
+  let failures2 = restore_output(missing, NoOriginal)
+  assert_eq(failures2.length(), 0)
+  assert_false(@fs.path_exists(missing))
+  reset_test_dir(dir)
+}
+
+///|
+/// 有备份时的回滚：旧内容放回、备份删除、不产生清理失败。
+#cfg(target="native")
+test "restore_output puts the backup back and removes the bak file" {
+  let dir = "_build/wbtest_restore_saved"
+  reset_test_dir(dir)
+  @fs.create_dir(dir) catch {
+    IOError(msg) => abort("create_dir: " + msg)
+  }
+  let out = dir + "/out.ogg"
+  let bak = out + ".moonmux.bak.0"
+  @fs.write_bytes_to_file(bak, b"ORIGINAL") catch {
+    IOError(msg) => abort("write bak: " + msg)
+  }
+  @fs.write_bytes_to_file(out, b"BROKEN") catch {
+    IOError(msg) => abort("write out: " + msg)
+  }
+  let failures = restore_output(out, Saved(bak))
+  assert_eq(failures.length(), 0)
+  let restored = @fs.read_file_to_bytes(out) catch {
+    IOError(msg) => abort("read out: " + msg)
+  }
+  assert_true(bytes_same(restored, b"ORIGINAL"))
+  assert_false(@fs.path_exists(bak))
+  reset_test_dir(dir)
+}
+
+///|
+/// F-CLI-04 回归：`@fs` 的空错误串 / "No error" 不能原样透给用户；
+/// 真实 errno 文案（如 Permission denied）必须保留。
+test "io_reason replaces empty and No error messages" {
+  assert_true(io_reason("").contains("路径"))
+  assert_true(io_reason("No error").contains("路径"))
+  assert_eq(io_reason("Permission denied"), "Permission denied")
+  assert_eq(io_reason("No such file or directory"), "No such file or directory")
+}
+
+///|
+/// F-CLI-03 回归：`\\?\` / `\\.\` / `\\?\UNC\` 前缀要在路径归一化前剥掉
+/// （否则会被 ADS 判据误判成 NTFS 备用数据流）。
+#cfg(platform="windows")
+test "extended length prefixes are stripped on Windows" {
+  assert_eq(strip_extended_prefix("\\\\?\\C:\\tmp\\a.ogg"), "C:\\tmp\\a.ogg")
+  assert_eq(strip_extended_prefix("\\\\.\\C:\\tmp\\a.ogg"), "C:\\tmp\\a.ogg")
+  assert_eq(
+    strip_extended_prefix("\\\\?\\UNC\\srv\\share\\a.ogg"),
+    "\\\\srv\\share\\a.ogg",
+  )
+  // 普通路径原样返回
+  assert_eq(strip_extended_prefix("C:\\tmp\\a.ogg"), "C:\\tmp\\a.ogg")
+  assert_eq(strip_extended_prefix("a.ogg"), "a.ogg")
+  // 剥掉前缀后不再含第二个冒号，ADS 判据不会误杀
+  assert_false(
+    strip_extended_prefix("\\\\?\\C:\\tmp\\a.ogg").contains("\\\\?\\"),
+  )
+}
+
+///|
+/// POSIX 下 `\\?\` 只是普通文件名字符，不能被当成 Windows 前缀剥掉。
+#cfg(not(platform="windows"))
+test "extended length prefixes are not stripped on POSIX" {
+  assert_eq(
+    strip_extended_prefix("\\\\?\\C:\\tmp\\a.ogg"),
+    "\\\\?\\C:\\tmp\\a.ogg",
+  )
+}
+
+///|
+/// F-CLI-03 回归：超过 MAX_PATH 的路径要给出可操作提示，短路径保持安静。
+#cfg(platform="windows")
+test "long path hint fires above MAX_PATH and stays quiet below" {
+  let mut long : String = ""
+  let mut i = 0
+  while i < 300 {
+    long = long + "a"
+    i = i + 1
+  }
+  assert_true(long_path_hint(long).length() > 0)
+  assert_true(long_path_hint(long).contains("260"))
+  assert_eq(long_path_hint("a.ogg"), "")
+}
+
+///|
+/// POSIX 下没有 MAX_PATH 概念：任何长度都不该冒出 Windows 专属提示。
+#cfg(not(platform="windows"))
+test "long path hint is empty on POSIX" {
+  let mut long : String = ""
+  let mut i = 0
+  while i < 300 {
+    long = long + "a"
+    i = i + 1
+  }
+  assert_eq(long_path_hint(long), "")
+}
+
+///|
+/// 回滚清理：本轮创建的目录整棵删掉，且不产生「清理失败」。
+#cfg(target="native")
+test "rollback_demux removes a directory it created" {
+  let dir = "_build/wbtest_rollback_created"
+  reset_test_dir(dir)
+  @fs.create_dir(dir) catch {
+    IOError(msg) => abort("create_dir: " + msg)
+  }
+  @fs.create_dir(dir + "/s1") catch {
+    IOError(msg) => abort("create_dir s1: " + msg)
+  }
+  @fs.write_bytes_to_file(dir + "/s1/packet_000000.bin", b"x") catch {
+    IOError(msg) => abort("write packet: " + msg)
+  }
+  let failures = rollback_demux(dir, true, [], [])
+  assert_eq(failures.length(), 0)
+  assert_false(@fs.path_exists(dir))
+  reset_test_dir(dir)
+}
+
+///|
+/// 回滚清理：目录是用户原有的，只删本命令写出的文件，保留用户文件。
+#cfg(target="native")
+test "rollback_demux keeps files it did not create" {
+  let dir = "_build/wbtest_rollback_existing"
+  reset_test_dir(dir)
+  @fs.create_dir(dir) catch {
+    IOError(msg) => abort("create_dir: " + msg)
+  }
+  let keep = dir + "/keep.txt"
+  let mine = dir + "/packet_000000.bin"
+  @fs.write_string_to_file(keep, "keep") catch {
+    IOError(msg) => abort("write keep: " + msg)
+  }
+  @fs.write_bytes_to_file(mine, b"x") catch {
+    IOError(msg) => abort("write mine: " + msg)
+  }
+  let created : Array[String] = [mine]
+  let failures = rollback_demux(dir, false, [], created)
+  assert_eq(failures.length(), 0)
+  assert_true(@fs.path_exists(keep))
+  assert_false(@fs.path_exists(mine))
+  assert_true(@fs.path_exists(dir))
+  reset_test_dir(dir)
+}
+
+// ---- 第 4 轮：D2 覆盖率缺口（cmd/main 内部 I/O / 守卫 / 渲染路径） ----
+// 这些函数只在 native 可执行入口里被 main 调用，之前的测试只覆盖了其中一部分；
+// 这里直接调用同包私有函数，断言具体返回值/文本，不经过子进程。
+
+///|
+/// 造一张页：单段负载（< 255 字节），CRC 留给 serialize_pages 统一计算。
+fn wb_page(
+  ht : Byte,
+  serial : UInt32,
+  seq : UInt32,
+  granule : Int64,
+  payload : Bytes,
+) -> @ogg.Page {
+  {
+    header_type: ht,
+    granule_position: granule,
+    serial,
+    sequence: seq,
+    crc: 0U,
+    segments: [payload.length()],
+    payload,
+  }
+}
+
+///|
+/// 指定流号的单段 Opus 流：BOS 头页 + 注释页 + 两个音频页（末页 EOS）。
+fn wb_ogg_serial(serial : UInt32) -> Bytes {
+  let head : Bytes = b"OpusHead\x01\x01\x38\x01\x80\xbb\x00\x00\x00\x00\x00"
+  let tags : Bytes = b"OpusTags\x06\x00\x00\x00moonmu\x00\x00\x00\x00"
+  let pages : Array[@ogg.Page] = [
+    wb_page((0x02 : Byte), serial, 0U, 0L, head),
+    wb_page((0x00 : Byte), serial, 1U, 0L, tags),
+    wb_page((0x00 : Byte), serial, 2U, 960L, b"\xfc\x01\x02\x03"),
+    wb_page((0x04 : Byte), serial, 3U, 1920L, b"\xfc\x04\x05"),
+  ]
+  @ogg.serialize_pages(pages)
+}
+
+///|
+/// 两段链接流：第二段从新的 BOS 页重新开始（split / cat / info 的链接分支输入）。
+fn wb_linked_ogg() -> Bytes {
+  let buf = Buffer()
+  buf.write_bytes(wb_ogg_serial(1U).exact_view())
+  buf.write_bytes(wb_ogg_serial(2U).exact_view())
+  buf.to_bytes()
+}
+
+///|
+/// 准备一个干净的测试目录并返回路径。
+fn wb_fresh_dir(name : String) -> String {
+  let dir = "_build/wbtest_" + name
+  reset_test_dir(dir)
+  @fs.create_dir(dir) catch {
+    IOError(msg) => abort("create_dir " + dir + ": " + msg)
+  }
+  dir
+}
+
+///|
+/// 写文件失败直接让测试失败（避免后续断言读到空文件）。
+fn wb_write(path : String, data : Bytes) -> Unit {
+  @fs.write_bytes_to_file(path, data) catch {
+    IOError(msg) => abort("write " + path + ": " + msg)
+  }
+}
+
+///|
+/// 写文本文件失败直接让测试失败。
+fn wb_write_text(path : String, text : String) -> Unit {
+  @fs.write_string_to_file(path, text) catch {
+    IOError(msg) => abort("write " + path + ": " + msg)
+  }
+}
+
+///|
+/// verify 的成功路径（干净文件 + 只有 warning 的文件）都要能正常结束；
+/// 只有 error 才允许 exit。这里两个文件都跑文本与 JSON 两种渲染。
+#cfg(target="native")
+test "run_verify reports clean and warning files without exiting" {
+  let dir = wb_fresh_dir("verify")
+  let clean = dir + "/clean.ogg"
+  wb_write(clean, wb_ogg_serial(1U))
+  run_verify(clean, false)
+  run_verify(clean, true)
+  // 去掉末页 EOS：结构检查只给 warning，不应触发退出码 1
+  let pages = @ogg.parse_pages(wb_ogg_serial(1U))
+  let patched : Array[@ogg.Page] = []
+  let mut i = 0
+  for p in pages {
+    patched.push({
+      header_type: if i == pages.length() - 1 {
+        (0x00 : Byte)
+      } else {
+        p.header_type
+      },
+      granule_position: p.granule_position,
+      serial: p.serial,
+      sequence: p.sequence,
+      crc: 0U,
+      segments: p.segments,
+      payload: p.payload,
+    })
+    i = i + 1
+  }
+  let warn = dir + "/warn.ogg"
+  wb_write(warn, @ogg.serialize_pages(patched))
+  run_verify(warn, false)
+  run_verify(warn, true)
+  assert_eq(pages.length(), 4)
+  assert_eq(patched.length(), 4)
+  assert_eq(patched[3].header_type, (0x00 : Byte))
+  reset_test_dir(dir)
+}
+
+///|
+/// dump 的两种输出：纯 hex（可 xxd -r 还原）与页表。
+#cfg(target="native")
+test "run_dump prints hex and page table" {
+  let dir = wb_fresh_dir("dump")
+  let path = dir + "/a.ogg"
+  wb_write(path, wb_ogg_serial(1U))
+  run_dump(path, true)
+  run_dump(path, false)
+  let pages = @ogg.parse_pages(wb_ogg_serial(1U))
+  assert_eq(pages.length(), 4)
+  assert_eq(pages[1].granule_position, 0L)
+  assert_eq(pages[3].granule_position, 1920L)
+  reset_test_dir(dir)
+}
+
+///|
+/// tags 的成功路径：识别 Opus 注释并打印 vendor / 注释条数。
+#cfg(target="native")
+test "run_tags prints the Opus comment" {
+  let dir = wb_fresh_dir("tags")
+  let path = dir + "/a.ogg"
+  wb_write(path, wb_ogg_serial(1U))
+  run_tags(path)
+  match find_comment(@ogg.parse_pages(wb_ogg_serial(1U))) {
+    Err(msg) => abort("find_comment: " + msg)
+    Ok(found) => {
+      let (serial, kind, comment) = found
+      assert_eq(serial, 1U)
+      match kind {
+        @codec.CommentKind::Opus => assert_true(true)
+        @codec.CommentKind::Vorbis => assert_true(false)
+      }
+      assert_eq(comment.vendor, "moonmu")
+      assert_eq(comment.tags.length(), 0)
+    }
+  }
+  reset_test_dir(dir)
+}
+
+///|
+/// info 的链接流分支：两段物理流要分开统计；尾部多余字节要明说。
+test "show_ogg_info renders linked and trailing-data inputs" {
+  let linked = wb_linked_ogg()
+  show_ogg_info("linked.ogg", linked, false)
+  show_ogg_info("linked.ogg", linked, true)
+  let pages = @ogg.parse_pages(linked)
+  assert_eq(pages.length(), 8)
+  assert_eq(@ogg.split_chains(pages).length(), 2)
+  assert_eq(@ogg.serials_of(pages).length(), 2)
+  // 末尾多 3 个零字节：dump/info 只能解析到最后一页，必须提示剩余字节
+  let buf = Buffer()
+  buf.write_bytes(linked.exact_view())
+  buf.write_bytes(b"\x00\x00\x00".exact_view())
+  show_ogg_info("trailing.ogg", buf.to_bytes(), false)
+  show_ogg_info("trailing.ogg", buf.to_bytes(), true)
+}
+
+///|
+/// plan_mux / read_manifest 的 I/O 与数据错误分支（不触发进程退出）。
+#cfg(target="native")
+test "plan_mux and read_manifest surface io and data errors" {
+  // 目录不存在：subdirs_in 返回 Err → MuxIo
+  let missing = "_build/wbtest_plan_missing_dir"
+  reset_test_dir(missing)
+  match plan_mux(missing) {
+    Ok(_) => assert_true(false)
+    Err(m) => assert_true(mux_fail_text(m).contains("无法读取目录"))
+  }
+  // 空子目录：多流布局里出现空逻辑流 → MuxData
+  let dir = wb_fresh_dir("plan_empty_sub")
+  @fs.create_dir(dir + "/s1") catch {
+    IOError(msg) => abort("create_dir s1: " + msg)
+  }
+  match plan_mux(dir) {
+    Ok(_) => assert_true(false)
+    Err(m) => assert_true(mux_fail_text(m).contains("没有包文件"))
+  }
+  reset_test_dir(dir)
+  // 清单文本非法：read_manifest → MuxData
+  let dir2 = wb_fresh_dir("plan_bad_manifest")
+  wb_write_text(dir2 + "/manifest.txt", "这不是清单\n")
+  wb_write(dir2 + "/packet_000000.bin", b"aa")
+  match plan_mux(dir2) {
+    Ok(_) => assert_true(false)
+    Err(m) => assert_true(mux_fail_text(m).length() > 0)
+  }
+  reset_test_dir(dir2)
+  // 清单缺失：合法（手工目录），返回全 None
+  let dir3 = wb_fresh_dir("plan_no_manifest")
+  match read_manifest(dir3) {
+    Err(m) => abort("read_manifest missing: " + mux_fail_text(m))
+    Ok(m) => {
+      assert_true(m.serial is None)
+      assert_true(m.packets is None)
+      assert_true(m.chain is None)
+      assert_eq(m.granules.length(), 0)
+    }
+  }
+  // manifest.txt 是目录而不是普通文件：MuxIo（不是 MuxData）
+  @fs.create_dir(dir3 + "/manifest.txt") catch {
+    IOError(msg) => abort("create_dir manifest.txt: " + msg)
+  }
+  match read_manifest(dir3) {
+    Ok(_) => assert_true(false)
+    Err(m) => assert_true(mux_fail_text(m).contains("不是普通文件"))
+  }
+  reset_test_dir(dir3)
+}
+
+///|
+/// subdirs_in：只收目录、按 sN 数字排序（s10 不能排在 s2 前面）。
+#cfg(target="native")
+test "subdirs_in sorts sN numerically and skips files" {
+  let dir = wb_fresh_dir("subdirs")
+  @fs.create_dir(dir + "/s2") catch {
+    IOError(msg) => abort("create_dir s2: " + msg)
+  }
+  @fs.create_dir(dir + "/s10") catch {
+    IOError(msg) => abort("create_dir s10: " + msg)
+  }
+  @fs.create_dir(dir + "/s1") catch {
+    IOError(msg) => abort("create_dir s1: " + msg)
+  }
+  wb_write(dir + "/x.txt", b"x")
+  match subdirs_in(dir) {
+    Err(msg) => abort("subdirs_in: " + msg)
+    Ok(names) => {
+      assert_eq(names.length(), 3)
+      assert_eq(names[0], "s1")
+      assert_eq(names[1], "s2")
+      assert_eq(names[2], "s10")
+    }
+  }
+  match subdirs_in(dir + "/nope") {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("无法读取目录"))
+  }
+  reset_test_dir(dir)
+}
+
+///|
+/// find_comment 的失败形态：没有流、没有可识别音频流、音频流缺注释包。
+test "find_comment reports missing streams and comments" {
+  let empty : Array[@ogg.Page] = []
+  match find_comment(empty) {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("没有任何逻辑流"))
+  }
+  let skeleton : Array[@ogg.Page] = [
+    wb_page((0x02 : Byte), 9U, 0U, 0L, b"fishead"),
+  ]
+  match find_comment(skeleton) {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("没有可识别的音频流"))
+  }
+  let head_only : Array[@ogg.Page] = [
+    wb_page(
+      (0x02 : Byte),
+      3U,
+      0U,
+      0L,
+      b"OpusHead\x01\x01\x38\x01\x80\xbb\x00\x00\x00\x00\x00",
+    ),
+  ]
+  match find_comment(head_only) {
+    Ok(_) => assert_true(false)
+    Err(msg) => assert_true(msg.contains("没有注释包"))
+  }
+}
+
+///|
+/// 路径词法规范化：大小写、分隔符折叠、尾随点/空格、开头的 ./。
+#cfg(target="native")
+test "normalize_path folds separators case and trailing dots" {
+  assert_eq(normalize_path("A\\\\B\\\\C.OGG."), "a/b/c.ogg")
+  assert_eq(normalize_path("./x//y/"), "x/y")
+  assert_eq(normalize_path("C:\\\\Temp\\\\"), "c:/temp")
+  assert_eq(normalize_path("dir/ "), "dir")
+  assert_eq(normalize_path("a/./b"), "a/./b")
+  assert_eq(normalize_path("."), ".")
+}
+
+///|
+/// run_mux 的两种布局：单流（包直接放目录 + 清单）与多流（子目录 + 清单）。
+#cfg(target="native")
+test "run_mux writes single and multi stream plans" {
+  // 单流目录
+  let dir = wb_fresh_dir("mux_single")
+  wb_write_text(
+    dir + "/manifest.txt",
+    "# moonmux manifest v1\n# granulepos\n# serial=11\n# packets=2\n# chain=1\n0\n960\n",
+  )
+  wb_write(dir + "/packet_000000.bin", b"aa")
+  wb_write(dir + "/packet_000001.bin", b"bb")
+  let out = dir + "_out.ogg"
+  run_mux(dir, out)
+  let produced = @fs.read_file_to_bytes(out) catch { _ => b"" }
+  assert_true(produced.length() > 0)
+  let pages = @ogg.parse_pages(produced)
+  assert_true(pages.length() >= 1)
+  assert_eq(pages[0].serial, 11U)
+  reset_test_dir(dir)
+  // 多流目录：s1/s2 各有清单，链号 1/2（升序交织）
+  let mdir = wb_fresh_dir("mux_multi")
+  @fs.create_dir(mdir + "/s1") catch {
+    IOError(msg) => abort("create_dir s1: " + msg)
+  }
+  @fs.create_dir(mdir + "/s2") catch {
+    IOError(msg) => abort("create_dir s2: " + msg)
+  }
+  wb_write_text(
+    mdir + "/s1/manifest.txt",
+    "# moonmux manifest v1\n# granulepos\n# serial=21\n# packets=1\n# chain=1\n0\n",
+  )
+  wb_write_text(
+    mdir + "/s2/manifest.txt",
+    "# moonmux manifest v1\n# granulepos\n# serial=22\n# packets=1\n# chain=2\n0\n",
+  )
+  wb_write(mdir + "/s1/packet_000000.bin", b"aa")
+  wb_write(mdir + "/s2/packet_000000.bin", b"bb")
+  let mout = mdir + "_out.ogg"
+  run_mux(mdir, mout)
+  let mpages = @ogg.parse_pages(@fs.read_file_to_bytes(mout) catch { _ => b"" })
+  assert_true(mpages.length() >= 2)
+  let serials = @ogg.serials_of(mpages)
+  assert_true(serials.contains(21U))
+  assert_true(serials.contains(22U))
+  reset_test_dir(mdir)
+}
+
+///|
+/// split：链接流按段拆成多个 partN.ogg；单段流原样写出 part1.ogg。
+#cfg(target="native")
+test "run_split writes one part per physical stream" {
+  let dir = wb_fresh_dir("split_src")
+  let linked = dir + "/linked.ogg"
+  wb_write(linked, wb_linked_ogg())
+  let out_dir = "_build/wbtest_split_out"
+  reset_test_dir(out_dir)
+  run_split(linked, out_dir)
+  assert_true(@fs.path_exists(out_dir + "/part1.ogg"))
+  assert_true(@fs.path_exists(out_dir + "/part2.ogg"))
+  let p1 = @ogg.parse_pages(
+    @fs.read_file_to_bytes(out_dir + "/part1.ogg") catch {
+      _ => b""
+    },
+  )
+  let p2 = @ogg.parse_pages(
+    @fs.read_file_to_bytes(out_dir + "/part2.ogg") catch {
+      _ => b""
+    },
+  )
+  assert_eq(p1.length(), 4)
+  assert_eq(p2.length(), 4)
+  let sp1 = @ogg.serials_of(p1)
+  let sp2 = @ogg.serials_of(p2)
+  assert_eq(sp1.length(), 1)
+  assert_eq(sp1[0], 1U)
+  assert_eq(sp2.length(), 1)
+  assert_eq(sp2[0], 2U)
+  reset_test_dir(out_dir)
+  // 单段流：只写 part1 并提示不是链接流
+  let single = dir + "/single.ogg"
+  wb_write(single, wb_ogg_serial(1U))
+  run_split(single, out_dir)
+  assert_true(@fs.path_exists(out_dir + "/part1.ogg"))
+  assert_true(!@fs.path_exists(out_dir + "/part2.ogg"))
+  reset_test_dir(out_dir)
+  reset_test_dir(dir)
+}
+
+///|
+/// extract：按 1 起算的逻辑流序号抽出单条流，页级原样透传。
+#cfg(target="native")
+test "run_extract writes the selected stream" {
+  let dir = wb_fresh_dir("extract")
+  let linked = dir + "/linked.ogg"
+  let out = dir + "/s2.ogg"
+  wb_write(linked, wb_linked_ogg())
+  run_extract(linked, 2, out, false)
+  let produced = @ogg.parse_pages(
+    @fs.read_file_to_bytes(out) catch {
+      _ => b""
+    },
+  )
+  assert_eq(produced.length(), 4)
+  let sp = @ogg.serials_of(produced)
+  assert_eq(sp.length(), 1)
+  assert_eq(sp[0], 2U)
+  // 幂等重跑（--force 语义）：已有输出与待写内容相同，允许覆盖
+  run_extract(linked, 2, out, true)
+  let again = @fs.read_file_to_bytes(out) catch { _ => b"" }
+  assert_true(again.length() > 0)
+  reset_test_dir(dir)
+}
+
+///|
+/// cat：多个 Ogg 首尾链接成一条物理流。
+#cfg(target="native")
+test "run_cat links multiple ogg files" {
+  let dir = wb_fresh_dir("cat")
+  let a = dir + "/a.ogg"
+  let b = dir + "/b.ogg"
+  let out = dir + "/joined.ogg"
+  wb_write(a, wb_ogg_serial(1U))
+  wb_write(b, wb_ogg_serial(2U))
+  let inputs : Array[String] = [a, b]
+  run_cat(inputs, out)
+  let produced = @ogg.parse_pages(
+    @fs.read_file_to_bytes(out) catch {
+      _ => b""
+    },
+  )
+  assert_eq(produced.length(), 8)
+  assert_eq(@ogg.split_chains(produced).length(), 2)
+  let serials = @ogg.serials_of(produced)
+  assert_true(serials.contains(1U))
+  assert_true(serials.contains(2U))
+  reset_test_dir(dir)
+}
+
+///|
+/// demux：把包与清单写到 sN/ 目录（manifest 先写，是整条流的提交点）。
+#cfg(target="native")
+test "run_demux writes packets and manifests" {
+  let dir = wb_fresh_dir("demux")
+  let src = dir + "/in.ogg"
+  wb_write(src, wb_ogg_serial(1U))
+  let out_dir = "_build/wbtest_demux_out"
+  reset_test_dir(out_dir)
+  run_demux(src, out_dir)
+  assert_true(@fs.path_exists(out_dir + "/s1"))
+  assert_true(@fs.path_exists(out_dir + "/s1/manifest.txt"))
+  assert_true(@fs.path_exists(out_dir + "/s1/packet_000000.bin"))
+  assert_true(@fs.path_exists(out_dir + "/s1/packet_000003.bin"))
+  let manifest = @fs.read_file_to_string(out_dir + "/s1/manifest.txt") catch {
+    _ => ""
+  }
+  assert_true(manifest.contains("# serial=1"))
+  assert_true(manifest.contains("# packets=4"))
+  reset_test_dir(out_dir)
+  reset_test_dir(dir)
+}
+
+///|
+/// chop：单流按毫秒区间裁剪，写出后自检通过（页级精度）。
+#cfg(target="native")
+test "run_chop trims a single stream" {
+  let dir = wb_fresh_dir("chop")
+  let src = dir + "/in.ogg"
+  let out = dir + "/out.ogg"
+  wb_write(src, wb_ogg_serial(1U))
+  run_chop(src, out, 0, 30)
+  let produced = @ogg.parse_pages(
+    @fs.read_file_to_bytes(out) catch {
+      _ => b""
+    },
+  )
+  assert_true(produced.length() > 0)
+  let sp = @ogg.serials_of(produced)
+  assert_eq(sp.length(), 1)
+  assert_eq(sp[0], 1U)
+  reset_test_dir(dir)
+}

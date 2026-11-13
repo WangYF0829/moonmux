@@ -127,6 +127,109 @@ fn ensure_output_size(total : Int64, what : String) -> Unit {
 }
 
 ///|
+/// `demux` 单次最多写出的包文件数。
+///
+/// 包文件名固定为 `packet_%06d.bin`：超过 6 位后字典序错乱，`mux` 读回顺序就错了，
+/// 因此这个上限同时是「命名方案上限」与「单次写文件数的资源上限」。
+const MAX_DEMUX_PACKETS : Int32 = 999999
+
+///|
+/// `demux` 单次最多写出的**文件对象**数（包文件 + 每流 1 个清单 + 每流 1 个子目录）。
+///
+/// 只按包数计 999999 的口径偏小：多逻辑流输入每个流还要写清单、建子目录，
+/// 实际文件对象可达「包数 + 2×流数」（RT-A-08 实测 14 KB 输入可写出
+/// 255 个包文件 + 255 份清单 + 255 个子目录）。这里统一按文件对象数收敛，
+/// 数值与包数上限一致（单流时两者等价，多流时更严）。
+const MAX_DEMUX_OUTPUT_OBJECTS : Int64 = 999999L
+
+///|
+/// `split` 单次最多写出的分段文件数（`partN.ogg`）。
+///
+/// 与 demux 的上限同值：两者都是「一份输入铺成大量小文件」的命令，
+/// 用同一口径便于文档/脚本描述。分段最小 54 B/段，999999 段对应输入已超 50 MB；
+/// 正常的链接流（广播分片、转码切片）远小于此。
+const MAX_SPLIT_PARTS : Int32 = 999999
+
+///|
+/// 估算 `demux` 可能写出的包数上界（不重组、不复制负载）。
+///
+/// 每页最多 255 段、每段最多结束一个包，所以「页数 × 255」是硬上界；
+/// 上界没超限时直接放行 —— 正常大文件（每页几包）不会误拒。
+/// 只有上界超限时才逐段数「小于 255 的段」：每个这样的段恰好结束一个包，
+/// 得到更精确的上界（重组时丢弃的残包/孤儿只会让实际值更小）。
+fn demux_packet_upper_bound(pages : Array[@ogg.Page]) -> Int64 {
+  let coarse = pages.length().to_int64() * 255L
+  if coarse <= MAX_DEMUX_PACKETS.to_int64() {
+    return coarse
+  }
+  let mut n = 0L
+  for p in pages {
+    for seg in p.segments {
+      if seg < 255 {
+        n = n + 1L
+      }
+    }
+  }
+  n
+}
+
+///|
+/// 估算 `demux` 会写出的文件对象数上界：包文件 + 每流清单 + 每流子目录。
+///
+/// 每个逻辑流除了包文件，还会写 1 份 `manifest.txt`、建 1 个 `sN/` 目录，
+/// 因此对象数 = 包数上界 + 2×流数上界（流数由页里的流号直接给出，是精确值）。
+fn demux_output_object_upper_bound(pages : Array[@ogg.Page]) -> Int64 {
+  demux_packet_upper_bound(pages) +
+  @ogg.serials_of(pages).length().to_int64() * 2L
+}
+
+///|
+/// 超过 demux 输出上限时返回错误文案，由调用方在**重组与写盘之前**拒绝。
+///
+/// 典型放大攻击：每页 255 个零长段（282 字节/页）→ 约 90 万文件/1 MiB 输入；
+/// 或每流 1 个包、铺大量逻辑流。两种都按文件对象总数收敛，等到重组/写盘
+/// 阶段才发现超限，资源和 inode 已经付出去了。
+fn demux_output_guard(pages : Array[@ogg.Page]) -> String? {
+  let objects = demux_output_object_upper_bound(pages)
+  if objects <= MAX_DEMUX_OUTPUT_OBJECTS {
+    return None
+  }
+  let packets = demux_packet_upper_bound(pages)
+  let streams = @ogg.serials_of(pages).length().to_int64()
+  Some(
+    "错误: 该文件按页数/段表估算最多会写出 " +
+    objects.to_string() +
+    " 个文件对象（" +
+    packets.to_string() +
+    " 个包文件 + " +
+    streams.to_string() +
+    " 条逻辑流的清单与子目录），超过 demux 单次输出上限 " +
+    MAX_DEMUX_OUTPUT_OBJECTS.to_string() +
+    "——\n  拒绝写出数量放大的包目录；请先用 split 拆成多段再逐段 demux，或先 verify 确认文件是否被构造",
+  )
+}
+
+///|
+/// `split` 分段数超过上限时返回错误文案（建目录/写盘之前调用）。
+///
+/// 162 KB 的构造链接流就能铺出 3,000 个 `partN.ogg`；2 GiB 输入理论上可到
+/// 数千万个文件。上限与 demux 一致，超过即按能力边界（退出 2）拒绝，
+/// 且必须在创建输出目录之前拒绝，避免留下半套 `partN.ogg`。
+fn split_parts_guard(parts : Int32) -> String? {
+  if parts <= MAX_SPLIT_PARTS {
+    None
+  } else {
+    Some(
+      "错误: 该文件有 " +
+      parts.to_string() +
+      " 段物理流，split 会写出同等数量的 partN.ogg 文件，超过单次输出上限 " +
+      MAX_SPLIT_PARTS.to_string() +
+      "——\n  拒绝写出数量放大的目录；请先 verify 确认文件是否被构造，或改用 demux 按包处理",
+    )
+  }
+}
+
+///|
 /// 写出前的备份。`@fs` 没有 rename，做不到原子替换；退而求其次：
 /// 目标已存在时先复制一份，写坏/自检失败就恢复，绝不直接删除用户文件。
 enum OutputBackup {
@@ -182,50 +285,45 @@ fn commit_output(bak : OutputBackup) -> Unit {
 ///|
 /// 写失败：有备份就恢复，没有备份则删掉本次写出的半截文件。
 ///
-/// 只有恢复写成功后才删备份；恢复失败时备份是唯一副本，必须保留并报出路径。
-fn restore_output(path : String, bak : OutputBackup) -> Unit {
+/// 返回未能清理/恢复的说明，**由调用方在打印原错误之后**再打印（先报错、
+/// 后报清理状态；把「清理失败」排在错误前面只会让用户先看到一条没有上下文的警告）。
+///
+/// 目标原本不存在时（NoOriginal），只有路径**确实存在**才尝试删除并记录失败：
+/// 写失败可能根本没创建文件（父目录不存在、路径非法、权限不足），
+/// 此时报「无法删除半截输出」是假告警，会把用户引去清理一个不存在的文件。
+fn restore_output(path : String, bak : OutputBackup) -> Array[String] {
+  let failures : Array[String] = []
   match bak {
     NoOriginal =>
-      @fs.remove_file(path) catch {
-        IOError(msg) =>
-          eprintln(
-            "警告: 回滚时无法删除半截输出 " +
-            path +
-            "（" +
-            msg +
-            "），请手动清理",
-          )
+      if @fs.path_exists(path) {
+        @fs.remove_file(path) catch {
+          IOError(msg) =>
+            if @fs.path_exists(path) {
+              failures.push("半截输出 " + path + "（" + msg + "）")
+            }
+        }
       }
     Saved(b) => {
       let data = @fs.read_file_to_bytes(b) catch {
         IOError(msg) => {
-          eprintln(
-            "警告: 无法读取备份 " +
-            b +
-            "（" +
-            msg +
-            "），备份保留",
+          failures.push(
+            "无法读取备份 " + b + "（" + msg + "），备份保留",
           )
-          return
+          return failures
         }
       }
       @fs.write_bytes_to_file(path, data) catch {
         IOError(msg) => {
-          eprintln(
-            "警告: 恢复 " +
-            path +
-            " 失败（" +
-            msg +
-            "），备份保留在 " +
-            b,
+          failures.push(
+            "恢复 " + path + " 失败（" + msg + "），备份保留在 " + b,
           )
-          return
+          return failures
         }
       }
       @fs.remove_file(b) catch {
         IOError(msg) =>
-          eprintln(
-            "警告: 恢复成功，但无法删除备份 " +
+          failures.push(
+            "恢复成功，但无法删除备份 " +
             b +
             "（" +
             msg +
@@ -235,16 +333,35 @@ fn restore_output(path : String, bak : OutputBackup) -> Unit {
     }
     Unavailable => ()
   }
+  failures
+}
+
+///|
+/// 写失败的统一出口：先打印原错误，再打印回滚/清理状态，最后按 I/O/用法错误退出 2。
+fn fail_write(msg : String, cleanup : Array[String]) -> Unit {
+  eprintln(msg)
+  report_cleanup_failures(cleanup)
+  @sys.exit(2)
+}
+
+///|
+/// 写失败但属于数据/自检错误的统一出口：退出 1（同样先错误、后清理状态）。
+fn fail_write_data(msg : String, cleanup : Array[String]) -> Unit {
+  eprintln(msg)
+  report_cleanup_failures(cleanup)
+  @sys.exit(1)
 }
 
 ///|
 /// demux 失败时的回滚：整目录是本轮建的就连根删，否则只删本轮创建的子目录。
+///
+/// 返回未能清理的路径说明，由调用方在打印原错误之后打印（错误 → 清理状态）。
 fn rollback_demux(
   dir : String,
   created_dir : Bool,
   created_subs : Array[String],
   created_files : Array[String],
-) -> Unit {
+) -> Array[String] {
   let failures : Array[String] = []
   if created_dir {
     // 整个目录是本轮建的，归本命令所有
@@ -272,7 +389,7 @@ fn rollback_demux(
       }
     }
   }
-  report_cleanup_failures(failures)
+  failures
 }
 
 ///|
@@ -404,6 +521,54 @@ fn windows_paths() -> Bool {
 #cfg(not(platform="windows"))
 fn windows_paths() -> Bool {
   false
+}
+
+///|
+/// 去掉 Windows 扩展长度/设备前缀：`\\?\C:\…`、`\\.\C:\…`、`\\?\UNC\srv\share\…`。
+///
+/// `\\?\C:\…` 是合法的扩展长度路径写法。不做这层归一化时，
+/// `normalize_path` 会把它变成 `//?/c:/…`，「盘符之后又出现 `:`」的 ADS 判据
+/// 于是把它误判成 NTFS 备用数据流（错误文案完全指错方向）。
+/// 归一化后所有路径比较/写盘都按普通路径进行；超过 260 字符时由
+/// `long_path_hint` 给出可操作提示（`@fs` 走传统 Win32 API，不支持长路径）。
+fn strip_extended_prefix(p : String) -> String {
+  if !windows_paths() {
+    return p
+  }
+  if p.has_prefix("\\\\?\\UNC\\") {
+    // \\?\UNC\server\share → \\server\share
+    "\\\\" + p[8:].to_owned()
+  } else if p.has_prefix("\\\\?\\") || p.has_prefix("\\\\.\\") {
+    p[4:].to_owned()
+  } else {
+    p
+  }
+}
+
+///|
+/// `@fs` 在 Windows native 上对「文件不存在」等错误只给出空串或 `"No error"`。
+///
+/// 直接拼进消息会让用户看到「无法检查输入 xxx —— No error」这种毫无信息量的结尾；
+/// 这里补上可操作的语义（真实 errno 由 `@fs` 决定，拿不到时不假装拿到）。
+fn io_reason(msg : String) -> String {
+  if msg.length() == 0 || msg == "No error" {
+    "文件不存在、路径不可访问或路径过长"
+  } else {
+    msg
+  }
+}
+
+///|
+/// Windows 传统 Win32 API 的路径上限是 260 字符（MAX_PATH）。
+///
+/// 超长路径在 `@fs` 里表现为「No such file or directory」/「No error」这类
+/// 没有指向性的错误；命中时补一条可操作提示，避免用户反复重试同一路径。
+fn long_path_hint(path : String) -> String {
+  if windows_paths() && absolute_path(path).length() > 260 {
+    "\n  提示: Windows 传统 API 的路径上限是 260 字符（MAX_PATH）；请缩短路径，或把工作目录移到更靠近盘根的位置"
+  } else {
+    ""
+  }
 }
 
 ///|
@@ -564,7 +729,7 @@ fn collapse_path(p : String) -> String {
 ///|
 /// 绝对化：相对路径用 PWD / CD 环境变量补前缀；拿不到就退回词法结果。
 fn absolute_path(p : String) -> String {
-  let n = normalize_path(p)
+  let n = normalize_path(strip_extended_prefix(p))
   if is_absolute_path(n) {
     return collapse_path(n)
   }
@@ -584,7 +749,7 @@ fn is_reserved_device(path : String) -> Bool {
   if !windows_paths() {
     return false
   }
-  let n = normalize_path(path)
+  let n = normalize_path(strip_extended_prefix(path))
   let mut base = n
   let mut i = n.length() - 1
   while i >= 0 {
@@ -625,7 +790,7 @@ fn is_reserved_device(path : String) -> Bool {
 fn reject_special_output(out : String) -> Unit {
   if windows_paths() {
     // 盘符之后还出现 ':' 是 NTFS 备用数据流（ADS），不是普通文件
-    let n = normalize_path(out)
+    let n = normalize_path(strip_extended_prefix(out))
     let mut i = if n.length() >= 2 && n.get_char(1) == Some(':') {
       2
     } else {
@@ -650,7 +815,12 @@ fn reject_special_output(out : String) -> Unit {
   if @fs.path_exists(out) {
     let regular = @fs.is_file(out) catch {
       IOError(msg) => {
-        fail("错误: 无法检查输出路径 " + out + " —— " + msg)
+        fail(
+          "错误: 无法检查输出路径 " +
+          out +
+          " —— " +
+          io_reason(msg),
+        )
         false
       }
     }
@@ -885,20 +1055,33 @@ fn reject_mux_alias(plan : MuxPlan, out : String) -> Unit {
 fn read_all(path : String) -> Bytes? {
   let regular = @fs.is_file(path) catch {
     IOError(msg) => {
-      fail("错误: 无法检查输入 " + path + " —— " + msg)
+      fail(
+        "错误: 无法检查输入 " +
+        path +
+        " —— " +
+        io_reason(msg) +
+        long_path_hint(path),
+      )
       return None
     }
   }
   if !regular {
     fail(
       "错误: 输入不是普通文件（不存在、目录、管道或设备）—— " +
-      path,
+      path +
+      long_path_hint(path),
     )
     return None
   }
   let data = @fs.read_file_to_bytes(path) catch {
     IOError(msg) => {
-      fail("错误: 无法读取 " + path + " —— " + msg)
+      fail(
+        "错误: 无法读取 " +
+        path +
+        " —— " +
+        io_reason(msg) +
+        long_path_hint(path),
+      )
       return None
     }
   }
@@ -1298,6 +1481,21 @@ fn run_remux(src : String, out : String) -> Unit {
         return
       }
       require_fully_parsed(src, pages, data)
+      // 输入形态超出命令能力（链接流 / 多逻辑流）按「能力边界」退出 2 ——
+      // 与 chop 的同类判定、README 退出码表的「用法或 I/O 错误」保持一致；
+      // 库层仍保留同样的闸门（防御深度），但这里先给出可操作的拆分建议。
+      let chains = @ogg.split_chains(pages)
+      let serials = @ogg.serials_of(pages)
+      if chains.length() > 1 || serials.length() > 1 {
+        fail(
+          "错误: remux 只支持单段、单逻辑流的 Ogg —— 检测到 " +
+          chains.length().to_string() +
+          " 段物理流 / " +
+          serials.length().to_string() +
+          " 条逻辑流\n  链接流请先 split、多流请先 extract 再 remux",
+        )
+        return
+      }
       match @mp4.remux_ogg_opus(data) {
         Err(msg) => fail_data("错误: remux 失败 —— " + msg)
         Ok(bytes) => {
@@ -1313,18 +1511,25 @@ fn run_remux(src : String, out : String) -> Unit {
           }
           @fs.write_bytes_to_file(out, bytes) catch {
             IOError(msg) => {
-              restore_output(out, bak)
-              fail("错误: 无法写入 " + out + " —— " + msg)
+              fail_write(
+                "错误: 无法写入 " +
+                out +
+                " —— " +
+                io_reason(msg) +
+                long_path_hint(out),
+                restore_output(out, bak),
+              )
               return
             }
           }
           match @mp4.inspect(bytes) {
             None => {
-              restore_output(out, bak)
-              fail_data(
+              let cleanup = restore_output(out, bak)
+              fail_write_data(
                 "错误: 已写出 " +
                 out +
                 "，但回读校验未通过，已恢复原文件（若有）",
+                cleanup,
               )
             }
             Some(info) => {
@@ -1381,8 +1586,14 @@ fn run_to_ogg(src : String, out : String) -> Unit {
           }
           @fs.write_bytes_to_file(out, bytes) catch {
             IOError(msg) => {
-              restore_output(out, bak)
-              fail("错误: 无法写入 " + out + " —— " + msg)
+              fail_write(
+                "错误: 无法写入 " +
+                out +
+                " —— " +
+                io_reason(msg) +
+                long_path_hint(out),
+                restore_output(out, bak),
+              )
               return
             }
           }
@@ -1411,11 +1622,12 @@ fn run_to_ogg(src : String, out : String) -> Unit {
             }
           }
           if !ok {
-            restore_output(out, bak)
-            fail_data(
+            let cleanup = restore_output(out, bak)
+            fail_write_data(
               "错误: 已写出 " +
               out +
               "，但回读校验未通过，已恢复原文件（若有）",
+              cleanup,
             )
             return
           }
@@ -1455,6 +1667,16 @@ fn run_demux(src : String, dir : String) -> Unit {
         fail_data("错误: 不是合法的 Ogg 文件 —— " + src)
         return
       }
+      // 先在重组之前按页数/段表估算输出规模：零长段或大量小流构造可以把
+      // 十几 KB 输入放大成上千个文件，等到重组/写盘阶段才发现超限，资源和时间
+      // 已经付出去了。上限按「包文件 + 每流清单/子目录」的文件对象总数计。
+      match demux_output_guard(pages) {
+        Some(msg) => {
+          fail(msg)
+          return
+        }
+        None => ()
+      }
       let packets = @ogg.reassemble(pages)
       if packets.length() == 0 {
         fail_data(
@@ -1464,11 +1686,14 @@ fn run_demux(src : String, dir : String) -> Unit {
         return
       }
       // 包文件名是 packet_%06d.bin，超过 6 位后字典序会乱，mux 读回的顺序就错了。
-      if packets.length() > 999999 {
-        fail_data(
+      // 前置估算已经挡住放大型输入，这里是对重组结果的最终保险。
+      // 包数上限属于 README 退出码表的「能力边界」类（2）。
+      if packets.length() > MAX_DEMUX_PACKETS {
+        fail(
           "错误: 该文件有 " +
           packets.length().to_string() +
-          " 个包，超过当前命名方案的上限 999999",
+          " 个包，超过当前命名方案的上限 " +
+          MAX_DEMUX_PACKETS.to_string(),
         )
       }
       let streams = @ogg.group_by_stream(packets)
@@ -1498,7 +1723,10 @@ fn run_demux(src : String, dir : String) -> Unit {
         let existing = @fs.read_dir(dir) catch {
           IOError(msg) =>
             return fail(
-              "错误: 无法读取输出目录 " + dir + " —— " + msg,
+              "错误: 无法读取输出目录 " +
+              dir +
+              " —— " +
+              io_reason(msg),
             )
         }
         if existing.length() > 0 {
@@ -1518,7 +1746,9 @@ fn run_demux(src : String, dir : String) -> Unit {
       if created_dir {
         @fs.create_dir(dir) catch {
           IOError(msg) => {
-            fail("错误: 无法创建目录 " + dir + " —— " + msg)
+            fail(
+              "错误: 无法创建目录 " + dir + " —— " + io_reason(msg),
+            )
             return
           }
         }
@@ -1529,8 +1759,13 @@ fn run_demux(src : String, dir : String) -> Unit {
         if !@fs.path_exists(sub) {
           @fs.create_dir(sub) catch {
             IOError(msg) => {
-              rollback_demux(dir, created_dir, created_subs, created_files)
-              fail("错误: 无法创建目录 " + sub + " —— " + msg)
+              fail_write(
+                "错误: 无法创建目录 " +
+                sub +
+                " —— " +
+                io_reason(msg),
+                rollback_demux(dir, created_dir, created_subs, created_files),
+              )
               return
             }
           }
@@ -1555,12 +1790,12 @@ fn run_demux(src : String, dir : String) -> Unit {
         created_files.push(sub + "/manifest.txt")
         @fs.write_string_to_file(sub + "/manifest.txt", manifest) catch {
           IOError(msg) => {
-            rollback_demux(dir, created_dir, created_subs, created_files)
-            fail(
+            fail_write(
               "错误: 无法写入清单 " +
               sub +
               "/manifest.txt —— " +
-              msg,
+              io_reason(msg),
+              rollback_demux(dir, created_dir, created_subs, created_files),
             )
             return
           }
@@ -1572,8 +1807,10 @@ fn run_demux(src : String, dir : String) -> Unit {
           @fs.write_bytes_to_file(name, group[i].data) catch {
             IOError(msg) => {
               // 已写出的文件不能留在磁盘上，否则是一个「看起来成功、缺包」的目录
-              rollback_demux(dir, created_dir, created_subs, created_files)
-              fail("错误: 无法写入 " + name + " —— " + msg)
+              fail_write(
+                "错误: 无法写入 " + name + " —— " + io_reason(msg),
+                rollback_demux(dir, created_dir, created_subs, created_files),
+              )
               return
             }
           }
@@ -1622,7 +1859,8 @@ struct MuxPlan {
 /// 列出目录下的普通文件名，按名字典序。
 fn files_in(dir : String) -> Result[Array[String], String] {
   let entries = @fs.read_dir(dir) catch {
-    IOError(msg) => return Err("无法读取目录 " + dir + " —— " + msg)
+    IOError(msg) =>
+      return Err("无法读取目录 " + dir + " —— " + io_reason(msg))
   }
   let names : Array[String] = []
   for e in entries {
@@ -1702,7 +1940,8 @@ fn packet_less(a : String, b : String) -> Bool {
 /// 列出目录下的子目录名，按 s<N> 的数字序（s2 在 s10 之前）。
 fn subdirs_in(dir : String) -> Result[Array[String], String] {
   let entries = @fs.read_dir(dir) catch {
-    IOError(msg) => return Err("无法读取目录 " + dir + " —— " + msg)
+    IOError(msg) =>
+      return Err("无法读取目录 " + dir + " —— " + io_reason(msg))
   }
   let names : Array[String] = []
   for e in entries {
@@ -1805,7 +2044,9 @@ fn read_manifest(sub : String) -> Result[@manifest.Manifest, MuxFail] {
   // 否则 serial 与粒度会静默退化成 1 和 0。
   let regular = @fs.is_file(path) catch {
     IOError(msg) =>
-      return Err(MuxIo("无法检查清单 " + path + " —— " + msg))
+      return Err(
+        MuxIo("无法检查清单 " + path + " —— " + io_reason(msg)),
+      )
   }
   if !regular {
     // 特殊文件（目录/管道/设备）属于「读不到」而非「内容不合规」：退出 2
@@ -1818,7 +2059,9 @@ fn read_manifest(sub : String) -> Result[@manifest.Manifest, MuxFail] {
   }
   let text = @fs.read_file_to_string(path) catch {
     IOError(msg) =>
-      return Err(MuxIo("无法读取清单 " + path + " —— " + msg))
+      return Err(
+        MuxIo("无法读取清单 " + path + " —— " + io_reason(msg)),
+      )
   }
   match @manifest.parse(text) {
     Ok(m) => Ok(m)
@@ -1886,7 +2129,9 @@ fn plan_mux(dir : String) -> Result[MuxPlan, MuxFail] {
       let path = dir + "/" + n
       let data = @fs.read_file_to_bytes(path) catch {
         IOError(msg) =>
-          return Err(MuxIo("无法读取包文件 " + n + " —— " + msg))
+          return Err(
+            MuxIo("无法读取包文件 " + n + " —— " + io_reason(msg)),
+          )
       }
       sources.push({ path, data, })
       packets.push({
@@ -1949,7 +2194,9 @@ fn plan_mux(dir : String) -> Result[MuxPlan, MuxFail] {
         let path = sub + "/" + n
         let data = @fs.read_file_to_bytes(path) catch {
           IOError(msg) =>
-            return Err(MuxIo("无法读取包文件 " + n + " —— " + msg))
+            return Err(
+              MuxIo("无法读取包文件 " + n + " —— " + io_reason(msg)),
+            )
         }
         sources.push({ path, data, })
         packets.push({
@@ -2082,8 +2329,14 @@ fn run_mux(dir : String, out : String) -> Unit {
       }
       @fs.write_bytes_to_file(out, encoded) catch {
         IOError(msg) => {
-          restore_output(out, bak)
-          fail("错误: 无法写入 " + out + " —— " + msg)
+          fail_write(
+            "错误: 无法写入 " +
+            out +
+            " —— " +
+            io_reason(msg) +
+            long_path_hint(out),
+            restore_output(out, bak),
+          )
           return
         }
       }
@@ -2142,6 +2395,9 @@ fn run_cat(inputs : Array[String], out : String) -> Unit {
     i = i + 1
   }
   if ok {
+    // 先过 2 GiB 闸门再备份：超限直接退出 2 时不应留下一个没人管的 .moonmux.bak.N
+    // （其它写命令都是这个顺序，cat 在 v0.9.3 里是唯一例外）。
+    ensure_output_size(pages_byte_size(acc), "cat ")
     let bak = backup_output(out)
     match bak {
       Unavailable => {
@@ -2150,7 +2406,6 @@ fn run_cat(inputs : Array[String], out : String) -> Unit {
       }
       _ => ()
     }
-    ensure_output_size(pages_byte_size(acc), "cat ")
     let encoded = match @ogg.serialize_pages_checked(acc) {
       Err(msg) => {
         fail_data("错误: 链接结果的页不合法 —— " + msg)
@@ -2160,8 +2415,14 @@ fn run_cat(inputs : Array[String], out : String) -> Unit {
     }
     @fs.write_bytes_to_file(out, encoded) catch {
       IOError(msg) => {
-        restore_output(out, bak)
-        fail("错误: 无法写入 " + out + " —— " + msg)
+        fail_write(
+          "错误: 无法写入 " +
+          out +
+          " —— " +
+          io_reason(msg) +
+          long_path_hint(out),
+          restore_output(out, bak),
+        )
         return
       }
     }
@@ -2198,13 +2459,25 @@ fn run_split(src : String, dir : String) -> Unit {
       }
       require_fully_parsed(src, pages, data)
       let parts = @ogg.split_chains(pages)
+      // 先按段数过闸门：构造链接流可以在一百多 KB 输入里铺出数千个 partN.ogg，
+      // 必须建目录/写盘之前拒绝（能力边界类，退出 2），否则 inode 已经付出去了。
+      match split_parts_guard(parts.length()) {
+        Some(msg) => {
+          fail(msg)
+          return
+        }
+        None => ()
+      }
       // 与 demux 一致：复用非空目录会留下上一次的 partN.ogg，
       // 用户可能把它当成这次拆分的产物。
       if @fs.path_exists(dir) {
         let existing = @fs.read_dir(dir) catch {
           IOError(msg) =>
             return fail(
-              "错误: 无法读取输出目录 " + dir + " —— " + msg,
+              "错误: 无法读取输出目录 " +
+              dir +
+              " —— " +
+              io_reason(msg),
             )
         }
         if existing.length() > 0 {
@@ -2221,7 +2494,9 @@ fn run_split(src : String, dir : String) -> Unit {
       if created_dir {
         @fs.create_dir(dir) catch {
           IOError(msg) => {
-            fail("错误: 无法创建目录 " + dir + " —— " + msg)
+            fail(
+              "错误: 无法创建目录 " + dir + " —— " + io_reason(msg),
+            )
             return
           }
         }
@@ -2248,8 +2523,10 @@ fn run_split(src : String, dir : String) -> Unit {
               affected.push(p)
             }
             affected.push(name)
-            rollback_demux(dir, created_dir, [], affected)
-            fail("错误: 无法写入 " + name + " —— " + msg)
+            fail_write(
+              "错误: 无法写入 " + name + " —— " + io_reason(msg),
+              rollback_demux(dir, created_dir, [], affected),
+            )
             ok = false
           }
         }
@@ -2371,8 +2648,14 @@ fn run_extract(src : String, index : Int32, out : String, force : Bool) -> Unit 
       }
       @fs.write_bytes_to_file(out, encoded) catch {
         IOError(msg) => {
-          restore_output(out, bak)
-          fail("错误: 无法写入 " + out + " —— " + msg)
+          fail_write(
+            "错误: 无法写入 " +
+            out +
+            " —— " +
+            io_reason(msg) +
+            long_path_hint(out),
+            restore_output(out, bak),
+          )
           return
         }
       }
@@ -2665,8 +2948,14 @@ fn run_tag(src : String, out : String, assignments : Array[String]) -> Unit {
       }
       @fs.write_bytes_to_file(out, blob) catch {
         IOError(msg) => {
-          restore_output(out, bak)
-          fail("错误: 无法写入 " + out + " —— " + msg)
+          fail_write(
+            "错误: 无法写入 " +
+            out +
+            " —— " +
+            io_reason(msg) +
+            long_path_hint(out),
+            restore_output(out, bak),
+          )
           return
         }
       }
@@ -2692,10 +2981,11 @@ fn run_tag(src : String, out : String, assignments : Array[String]) -> Unit {
       // 自己写出的文件自己都通不过校验，必须让退出码体现出来。
       // 成功信息放到 commit 之后：自检失败时 stdout 不能宣称「已写出」。
       if written_errors > 0 || crc_bad > 0 {
-        restore_output(out, bak)
-        fail_data(
+        let cleanup = restore_output(out, bak)
+        fail_write_data(
           "错误: 写出的文件未通过自检，已恢复原文件（若有）—— " +
           out,
+          cleanup,
         )
       }
       commit_output(bak)
@@ -3143,7 +3433,9 @@ fn run_chop(
         }
       }
       let (serial, audio, _, _) = info
-      // 结构性限制按「用法/能力边界」退出 2，和数据损坏（1）区分开
+      // 输入形态超出命令能力（链接流 / 多逻辑流）属于「能力边界」：与
+      // 「拒绝覆盖非空目录」同类，按用法/能力错误退出 2。数据/校验错误（坏页、
+      // 截断、CRC、区间越界等）才是退出 1 —— 两类不能混。
       if @ogg.split_chains(pages).length() > 1 {
         fail(
           "错误: chop 只处理单段文件；链接流请先 split 再逐段裁剪",
@@ -3189,8 +3481,14 @@ fn run_chop(
       }
       @fs.write_bytes_to_file(out, bytes) catch {
         IOError(msg) => {
-          restore_output(out, bak)
-          fail("错误: 无法写入 " + out + " —— " + msg)
+          fail_write(
+            "错误: 无法写入 " +
+            out +
+            " —— " +
+            io_reason(msg) +
+            long_path_hint(out),
+            restore_output(out, bak),
+          )
           return
         }
       }
@@ -3210,10 +3508,11 @@ fn run_chop(
         }
       }
       if back.length() != chopped.length() || bad > 0 || errors > 0 {
-        restore_output(out, bak)
-        fail_data(
+        let cleanup = restore_output(out, bak)
+        fail_write_data(
           "错误: 写出后自检失败，已恢复原文件（若有）—— " +
           out,
+          cleanup,
         )
         return
       }
@@ -3284,19 +3583,26 @@ fn run_towav(src : String, out : String, bits : Int32) -> Unit {
           }
           @fs.write_bytes_to_file(out, wav) catch {
             IOError(msg) => {
-              restore_output(out, bak)
-              fail("错误: 无法写入 " + out + " —— " + msg)
+              fail_write(
+                "错误: 无法写入 " +
+                out +
+                " —— " +
+                io_reason(msg) +
+                long_path_hint(out),
+                restore_output(out, bak),
+              )
               return
             }
           }
           // 回读一遍，确认产出的 WAV 能被子模块自己解析回来
           match @wav.WavFile::parse(wav) {
             None => {
-              restore_output(out, bak)
-              fail_data(
+              let cleanup = restore_output(out, bak)
+              fail_write_data(
                 "错误: 已写出 " +
                 out +
                 "，但回读校验未通过，已恢复原文件（若有）",
+                cleanup,
               )
             }
             Some(f) => {
@@ -3576,7 +3882,9 @@ fn main {
   let rest : Array[String] = []
   let mut i = 1
   while i < argv.length() {
-    rest.push(argv[i])
+    // 统一去掉 `\\?\` / `\\.\` 前缀：让后续比较/ADS 判据/写盘都看到普通路径。
+    // 不做这层归一化时，`\\?\C:\…` 会被 ADS 判据误杀。
+    rest.push(strip_extended_prefix(argv[i]))
     i = i + 1
   }
   match @cli.parse(rest) {

@@ -6,14 +6,14 @@
 # 每次发布后确认 mooncakes 上的版本确实可安装。
 #
 # 用法: bash scripts/install_check.sh [version]
-#   默认版本：$MOONMUX_INSTALL_VERSION，未设置时 0.9.3
+#   默认版本：$MOONMUX_INSTALL_VERSION，未设置时 0.9.4
 # 退出码: 0 通过；1 失败；2 前提不满足（moon 不可用）
 
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
-VERSION="${1:-${MOONMUX_INSTALL_VERSION:-0.9.3}}"
+VERSION="${1:-${MOONMUX_INSTALL_VERSION:-0.9.4}}"
 
 if ! command -v moon >/dev/null 2>&1; then
   echo "找不到 moon（先安装 MoonBit 工具链）"

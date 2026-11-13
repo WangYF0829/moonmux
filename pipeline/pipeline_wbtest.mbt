@@ -76,10 +76,87 @@ fn vorbis_comment_packet() -> Bytes {
 }
 
 ///|
-/// 能通过最小 setup 预检的 Vorbis setup 头（第 1 个 codebook 为 ordered，
-/// 预检对 ordered 码本只做前缀/边界检查，不解析变长游程）。
+/// 完整合法的 Vorbis setup 头（1 codebook / floor1 / residue / mapping / mode）。
+///
+/// pipeline 的 gate v2 会解析到 mode 段，所以必须给完整 setup 而不能只有
+/// codebook 前缀；`mode_blockflag` 控制该 mode 使用短块(0)/长块(1)。
+fn vorbis_setup_full(mode_blockflag : Int32) -> Bytes {
+  let bits : Array[Int32] = []
+  // 1 个 codebook：dims=1、entries=1、非 sparse、码长 1、无 lookup。
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0x564342, 24)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 1, 24)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 5)
+  pv_push_bits(bits, 0, 4)
+  // 时间变换：1 个类型 0
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  // floor：1 个无 partition 的 floor1
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 0, 5)
+  pv_push_bits(bits, 0, 2)
+  pv_push_bits(bits, 0, 4)
+  // residue：1 个 type 1
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 0, 24)
+  pv_push_bits(bits, 0, 24)
+  pv_push_bits(bits, 0, 24)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 3)
+  pv_push_bits(bits, 0, 1)
+  // mapping：1 个（单 submap、无 coupling）
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 2)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 8)
+  // mode：1 个
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, mode_blockflag, 1)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 8)
+  // framing 位
+  pv_push_bits(bits, 1, 1)
+  let buf = Buffer()
+  buf.write_bytes(b"\x05vorbis".exact_view())
+  buf.write_bytes(pv_bits_to_bytes(bits).exact_view())
+  buf.to_bytes()
+}
+
+///|
 fn vorbis_setup_ordered() -> Bytes {
-  b"\x05vorbis\x00\x42\x43\x56\x00\x00\x00\x00\x00\x01"
+  vorbis_setup_full(0)
+}
+
+///|
+/// 按参数拼 30 字节 Vorbis 识别头（用于声道数/块大小相关的预算测试）。
+fn vorbis_ident_packet_ex(
+  channels : Int32,
+  block0 : Int32,
+  block1 : Int32,
+) -> Bytes {
+  let buf = Buffer()
+  buf.write_byte((0x01 : Byte))
+  buf.write_bytes(b"vorbis".exact_view())
+  buf.write_bytes(b"\x00\x00\x00\x00".exact_view())
+  buf.write_byte(channels.to_byte())
+  buf.write_bytes(b"\x44\xAC\x00\x00".exact_view())
+  buf.write_bytes(
+    b"\x00\x00\x00\x00\x00\xF4\x01\x00\x00\x00\x00\x00".exact_view(),
+  )
+  buf.write_byte((block0 | (block1 << 4) : Int32).to_byte())
+  buf.write_byte((1 : Byte))
+  buf.to_bytes()
 }
 
 ///|
@@ -494,5 +571,623 @@ test "pipeline rejects bad page lists and budgets" {
   match ogg_to_wav_pages(@ogg.parse_pages(stream), 0L) {
     Err(_) => assert_true(true)
     Ok(_) => assert_true(false)
+  }
+}
+
+// ---------- F-PAR-01 回归：setup gate 覆盖第 2+ 个 codebook ----------
+
+///|
+/// 把 `value` 的低 `n` 位按 LSB-first 追加到 `bits`。
+fn pv_push_bits(bits : Array[Int32], value : Int32, n : Int32) -> Unit {
+  let mut i = 0
+  while i < n {
+    bits.push((value >> i) & 1)
+    i = i + 1
+  }
+}
+
+///|
+fn pv_bits_to_bytes(bits : Array[Int32]) -> Bytes {
+  let buf = Buffer()
+  let mut cur = 0
+  let mut cnt = 0
+  for b in bits {
+    if b != 0 {
+      cur = cur | (1 << cnt)
+    }
+    cnt = cnt + 1
+    if cnt == 8 {
+      buf.write_byte(cur.to_byte())
+      cur = 0
+      cnt = 0
+    }
+  }
+  if cnt > 0 {
+    buf.write_byte(cur.to_byte())
+  }
+  buf.to_bytes()
+}
+
+///|
+/// 354 B PoC 同构的恶意 setup：第 1 个 codebook 合法，第 2 个声明
+/// dimensions=40000 / entries=256 / lookup_type=2（没有任何 lookup 位数据）。
+fn vorbis_setup_second_codebook_oom() -> Bytes {
+  let bits : Array[Int32] = []
+  pv_push_bits(bits, 1, 8) // codebook 计数 - 1 = 1
+  pv_push_bits(bits, 0x564342, 24)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 1, 24)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 5)
+  pv_push_bits(bits, 0, 4)
+  pv_push_bits(bits, 0x564342, 24)
+  pv_push_bits(bits, 40000, 16)
+  pv_push_bits(bits, 256, 24)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 1)
+  let mut i = 0
+  while i < 256 {
+    pv_push_bits(bits, 0, 5)
+    i = i + 1
+  }
+  pv_push_bits(bits, 2, 4)
+  pv_push_bits(bits, 0, 32)
+  pv_push_bits(bits, 0, 32)
+  pv_push_bits(bits, 15, 4)
+  pv_push_bits(bits, 0, 1)
+  let buf = Buffer()
+  buf.write_bytes(b"\x05vorbis".exact_view())
+  buf.write_bytes(pv_bits_to_bytes(bits).exact_view())
+  buf.to_bytes()
+}
+
+///|
+/// F-PAR-01 回归：第 2 个 codebook 的巨型 lookup 声明必须在解码前被拒绝，
+/// 不能交给 moonvorbis（其 BitReader 越界读会造成 0xC0000005 崩溃）。
+test "malicious vorbis setup in second codebook is rejected before decoding" {
+  let packets : Array[@ogg.Packet] = [
+    { data: vorbis_ident_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    {
+      data: vorbis_setup_second_codebook_oom(),
+      granule_position: 0L,
+      serial: 1U,
+    },
+    { data: b"\x00", granule_position: 1024L, serial: 1U, },
+  ]
+  let data = @ogg.serialize_pages(@ogg.paginate(packets, 1U))
+  match ogg_to_wav_pages(@ogg.parse_pages(data), 1048576L) {
+    Err(msg) => assert_true(msg.contains("setup"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+// ---------- 第 2 轮（RT-A）：Vorbis 内存与 CPU 预算 ----------
+
+///|
+/// RT-A-04：granule 估算不是内存上界。构造「granule 很小、但 255 个音频包
+/// ×200 声道」的流：旧实现按 granule 估算几百字节而放行（实测峰值 14.17 MiB）；
+/// 新实现按逐包 block_size 推导输出样本上界（255×64×200×10 B ≈ 32.6 MiB），
+/// 预算 1 MiB 时在解码前拒绝。
+test "vorbis memory bound uses packet work, not granule (RT-A-04)" {
+  let packets : Array[@ogg.Packet] = [
+    {
+      data: vorbis_ident_packet_ex(200, 6, 6),
+      granule_position: 0L,
+      serial: 1U,
+    },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_full(0), granule_position: 0L, serial: 1U, },
+  ]
+  let mut i = 0
+  while i < 255 {
+    packets.push({
+      data: b"\x00",
+      granule_position: 64L * (i + 1).to_int64(),
+      serial: 1U,
+    })
+    i = i + 1
+  }
+  let pages = pages_of(packets)
+  match ogg_to_wav_pages(pages, 1048576L) {
+    Err(msg) => {
+      assert_true(msg.contains("预算"))
+      assert_true(msg.contains("MiB"))
+    }
+    Ok(_) => assert_true(false)
+  }
+  // 同样的流用默认预算时，plan 给出的估算必须是逐包工作量的上界，
+  // 而不是 granule（64 帧）级别的几百字节。
+  match plan_segment(pages, 16) {
+    Ok(plan) => assert_true(plan.estimated_bytes >= 255L * 64L * 200L * 10L)
+    Err(msg) => abort("内存上界在合法 Vorbis 流上误拒: " + msg)
+  }
+}
+
+///|
+/// RT-A-05：Vorbis IMDCT 是 O(block_size²) 的 cos 调用。239 B 级输入声明
+/// 2 个 8192 长块，旧实现要跑 ~28.9 s；新实现按
+/// 「工作量 ≤ max(输入字节×12 万, 3200 万)」在解码前拒绝。
+test "vorbis cpu work budget rejects tiny input with huge imdct (RT-A-05)" {
+  let packets : Array[@ogg.Packet] = [
+    {
+      data: vorbis_ident_packet_ex(1, 6, 13),
+      granule_position: 0L,
+      serial: 1U,
+    },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_full(1), granule_position: 0L, serial: 1U, },
+    { data: b"\x00", granule_position: 0L, serial: 1U, },
+    { data: b"\x00", granule_position: 8000L, serial: 1U, },
+  ]
+  let pages = pages_of(packets)
+  // 内存上界（16 KiB）远小于 256 MiB：必须在 CPU 预算处失败，而不是内存处。
+  match ogg_to_wav_pages(pages, 268435456L) {
+    Err(msg) => assert_true(msg.contains("工作量"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// 正向对照：真实形态的 45 个长块（2048）立体声包，工作量约 1.89 亿次，
+/// 输入约 1.9 KB —— 放大比低于 12 万/字节，预算必须放行（不误伤正常流）。
+test "vorbis cpu work budget accepts a realistic long-block stream" {
+  let packets : Array[@ogg.Packet] = [
+    { data: vorbis_ident_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_full(1), granule_position: 0L, serial: 1U, },
+  ]
+  let payload_buf = Buffer()
+  let mut k = 0
+  while k < 128 {
+    payload_buf.write_byte((0 : Byte))
+    k = k + 1
+  }
+  let payload = payload_buf.to_bytes()
+  let mut i = 0
+  while i < 45 {
+    packets.push({
+      data: payload,
+      granule_position: 1024L * (i + 1).to_int64(),
+      serial: 1U,
+    })
+    i = i + 1
+  }
+  let pages = pages_of(packets)
+  match plan_segment(pages, 16) {
+    Ok(plan) => {
+      assert_eq(plan.channels, 2)
+      // 上界 = 45 包 × 2048 样本 × 2 声道 × 10 B，远大于 granule 推算值。
+      assert_true(plan.estimated_bytes >= 45L * 2048L * 2L * 10L)
+    }
+    Err(msg) => abort("真实形态的长块流被 CPU 预算误拒: " + msg)
+  }
+}
+
+///|
+/// 音频包必须是「packet type=0 + 合法 mode 号」；截断或 header 包出现在
+/// 音频位置时在解码前拒绝（不能把不确定的包交给 moonvorbis）。
+test "vorbis audio packet mode field is validated before decoding" {
+  // 音频位置放一个 header 包（bit0 = 1）
+  let packets : Array[@ogg.Packet] = [
+    { data: vorbis_ident_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_full(0), granule_position: 0L, serial: 1U, },
+    { data: b"\x01", granule_position: 8000L, serial: 1U, },
+  ]
+  match plan_segment(pages_of(packets), 16) {
+    Err(msg) => assert_true(msg.contains("mode 字段"))
+    Ok(_) => assert_true(false)
+  }
+  // 空音频包
+  let packets2 : Array[@ogg.Packet] = [
+    { data: vorbis_ident_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_full(0), granule_position: 0L, serial: 1U, },
+    { data: b"", granule_position: 8000L, serial: 1U, },
+  ]
+  match plan_segment(pages_of(packets2), 16) {
+    Err(msg) => assert_true(msg.contains("mode 字段"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+// ---------- 第 3 轮（RT3）：lookup 展开内存与 Huffman CPU 预算 ----------
+
+///|
+/// 2 个 `lookup_type=1, dimensions=16, entries=65536` 的 ordered codebook
+/// （setup 只有 ~90 字节，但解码器会为每个展开 65536×16 个 Float，两个约 11 MB）。
+fn vorbis_setup_big_lookup() -> Bytes {
+  let bits : Array[Int32] = []
+  pv_push_bits(bits, 1, 8) // 2 个 codebook
+  let mut cb = 0
+  while cb < 2 {
+    pv_push_bits(bits, 0x564342, 24)
+    pv_push_bits(bits, 16, 16) // dimensions = 16（raw）
+    pv_push_bits(bits, 65536, 24)
+    pv_push_bits(bits, 1, 1) // ordered
+    pv_push_bits(bits, 0, 5) // 起始码长 1
+    pv_push_bits(bits, 65535, 17) // 65535 个 length=1
+    pv_push_bits(bits, 1, 1) // 1 个 length=2
+    pv_push_bits(bits, 1, 4) // lookup_type = 1
+    pv_push_bits(bits, 0, 32)
+    pv_push_bits(bits, 0, 32)
+    pv_push_bits(bits, 0, 4) // value_bits = 1
+    pv_push_bits(bits, 0, 1)
+    pv_push_bits(bits, 0, 2) // raw = lookup1_values(65536,16) = 2
+    cb = cb + 1
+  }
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 0, 5)
+  pv_push_bits(bits, 0, 2)
+  pv_push_bits(bits, 0, 4)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 0, 24)
+  pv_push_bits(bits, 0, 24)
+  pv_push_bits(bits, 0, 24)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 3)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 2)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 1, 1)
+  let buf = Buffer()
+  buf.write_bytes(b"\x05vorbis".exact_view())
+  buf.write_bytes(pv_bits_to_bytes(bits).exact_view())
+  buf.to_bytes()
+}
+
+///|
+/// 一个 1M 码字、最长码长 21 的 ordered codebook（bits 只有几百），
+/// 模拟 RT3-02 的「Huffman 线性查表 CPU 放大」setup。
+fn vorbis_setup_huffman_scan() -> Bytes {
+  let bits : Array[Int32] = []
+  pv_push_bits(bits, 0, 8) // 1 个 codebook
+  pv_push_bits(bits, 0x564342, 24)
+  pv_push_bits(bits, 1, 16) // dimensions = 1
+  pv_push_bits(bits, 1048576, 24)
+  pv_push_bits(bits, 1, 1) // ordered
+  pv_push_bits(bits, 0, 5) // 起始码长 1
+  let mut z = 1
+  while z < 20 {
+    pv_push_bits(bits, 0, 21) // 空游程，码长 +1
+    z = z + 1
+  }
+  pv_push_bits(bits, 1048575, 21) // 1048575 个 length=20
+  pv_push_bits(bits, 1, 1) // 1 个 length=21
+  pv_push_bits(bits, 0, 4) // lookup_type = 0
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 0, 5)
+  pv_push_bits(bits, 0, 2)
+  pv_push_bits(bits, 0, 4)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16) // residue type 0
+  pv_push_bits(bits, 0, 24) // begin 0
+  pv_push_bits(bits, 32, 24) // end 32
+  pv_push_bits(bits, 0, 24) // partition_size 1
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 8) // classbook 0
+  pv_push_bits(bits, 0, 3)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 2)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 1, 1)
+  let buf = Buffer()
+  buf.write_bytes(b"\x05vorbis".exact_view())
+  buf.write_bytes(pv_bits_to_bytes(bits).exact_view())
+  buf.to_bytes()
+}
+
+///|
+/// RT3-01：lookup_type=1 的 entries×dimensions 展开内存必须计入内存预算。
+/// 该 setup 的 codebook 展开约 11 MB，而输入只有几十字节。
+test "vorbis memory budget includes lookup type1 expansion (RT3-01)" {
+  let packets : Array[@ogg.Packet] = [
+    {
+      data: vorbis_ident_packet_ex(1, 8, 11),
+      granule_position: 0L,
+      serial: 1U,
+    },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_big_lookup(), granule_position: 0L, serial: 1U, },
+    { data: b"\x00", granule_position: 8000L, serial: 1U, },
+  ]
+  let pages = pages_of(packets)
+  // 预算 1 MiB：仅 codebook 展开就约 11 MB → 必须在解码前拒绝
+  match ogg_to_wav_pages(pages, 1048576L) {
+    Err(msg) => assert_true(msg.contains("预算"))
+    Ok(_) => assert_true(false)
+  }
+  // plan 的估算必须包含 setup 分配上界（否则就是 RT3-01 的绕过）
+  match plan_segment(pages, 16) {
+    Ok(plan) => assert_true(plan.estimated_bytes >= 11010176L)
+    Err(msg) => abort("合法的 lookup type1 setup 被误拒: " + msg)
+  }
+}
+
+///|
+/// RT3-02：CPU 预算必须包含 Huffman 线性查表成本（符号数 × 最长码长 ×
+/// 有效码字数），否则 677 B 输入可跑 26 s。该 setup 单符号成本 ≈ 2200 万。
+test "vorbis cpu budget includes huffman linear scan (RT3-02)" {
+  let packets : Array[@ogg.Packet] = [
+    { data: vorbis_ident_packet_ex(1, 6, 6), granule_position: 0L, serial: 1U, },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_huffman_scan(), granule_position: 0L, serial: 1U, },
+    { data: b"\x00", granule_position: 64L, serial: 1U, },
+    { data: b"\x00", granule_position: 128L, serial: 1U, },
+  ]
+  match plan_segment(pages_of(packets), 16) {
+    Err(msg) => assert_true(msg.contains("工作量"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// RT3-03：426 B / 1×8192 长块（≈8.65 s CPU）必须被收紧后的预算拒绝；
+/// 真实样本（约 5.4 万 work/字节）仍放行由 CLI 端到端验证。
+test "vorbis cpu budget rejects the single 8192-block boundary (RT3-03)" {
+  let packets : Array[@ogg.Packet] = [
+    {
+      data: vorbis_ident_packet_ex(1, 6, 13),
+      granule_position: 0L,
+      serial: 1U,
+    },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_full(1), granule_position: 0L, serial: 1U, },
+    { data: b"\x00", granule_position: 8192L, serial: 1U, },
+  ]
+  match plan_segment(pages_of(packets), 16) {
+    Err(msg) => assert_true(msg.contains("工作量"))
+    Ok(_) => assert_true(false)
+  }
+}
+
+// ---------- 第 5 轮（RT4）：residue VQ 符号数与双预算标定 ----------
+
+///|
+/// RT4-01 g9 同构构造：residue type0、ps=4096、VQ 书 dims=16、cascade 8 pass。
+/// 每包实际 VQ 符号数 = 8 × (4096/16) = 2048；旧公式只算 8 个。
+fn vorbis_setup_rt4_vq() -> Bytes {
+  let bits : Array[Int32] = []
+  pv_push_bits(bits, 1, 8) // 2 个 codebook
+  // cb0：标量 classbook d1/e1
+  pv_push_bits(bits, 0x564342, 24)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 1, 24)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 5)
+  pv_push_bits(bits, 0, 4)
+  // cb1：ordered d16/e1048576，前 1048575 条码长 20、最后 1 条 21
+  pv_push_bits(bits, 0x564342, 24)
+  pv_push_bits(bits, 16, 16)
+  pv_push_bits(bits, 1048576, 24)
+  pv_push_bits(bits, 1, 1) // ordered
+  pv_push_bits(bits, 0, 5) // 起始码长 1
+  let mut z = 1
+  while z < 20 {
+    pv_push_bits(bits, 0, 21)
+    z = z + 1
+  }
+  pv_push_bits(bits, 1048575, 21)
+  pv_push_bits(bits, 1, 1) // 第 1048576 条（码长 21）
+  pv_push_bits(bits, 1, 4) // lookup_type 1
+  pv_push_bits(bits, 0, 32)
+  pv_push_bits(bits, 0, 32)
+  pv_push_bits(bits, 0, 4) // value_bits 1
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 2) // raw = lookup1_values(1048576,16) = 2
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 0, 5)
+  pv_push_bits(bits, 0, 2)
+  pv_push_bits(bits, 0, 4)
+  // residue type0：begin 0、end 4096、ps 4096、cascade 8 pass 全引用 book1
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 24)
+  pv_push_bits(bits, 4096, 24)
+  pv_push_bits(bits, 4095, 24)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 7, 3)
+  pv_push_bits(bits, 1, 1)
+  pv_push_bits(bits, 31, 5)
+  let mut k = 0
+  while k < 8 {
+    pv_push_bits(bits, 1, 8)
+    k = k + 1
+  }
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 2)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 1, 1) // blockflag = 1 → 8192
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 1, 1)
+  let buf = Buffer()
+  buf.write_bytes(b"\x05vorbis".exact_view())
+  buf.write_bytes(pv_bits_to_bytes(bits).exact_view())
+  buf.to_bytes()
+}
+
+///|
+/// 真实样本量级的合法构建：45 个 2048 长块、residue type2/ps32/VQ dims2，
+/// 字符数上界 ≈ 639K、输入 ≈ 8 KB —— 用来断言 CPU 双预算放行（避免 97 s 解码）。
+fn vorbis_setup_real_shaped() -> Bytes {
+  let bits : Array[Int32] = []
+  pv_push_bits(bits, 1, 8)
+  // cb0：标量 classbook d1/e1
+  pv_push_bits(bits, 0x564342, 24)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 1, 24)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 5)
+  pv_push_bits(bits, 0, 4)
+  // cb1：ordered d2/e255、码长全 21（active=255、maxlen=21 → scan 5355）
+  pv_push_bits(bits, 0x564342, 24)
+  pv_push_bits(bits, 2, 16)
+  pv_push_bits(bits, 255, 24)
+  pv_push_bits(bits, 1, 1)
+  pv_push_bits(bits, 0, 5)
+  let mut z = 1
+  while z < 21 {
+    pv_push_bits(bits, 0, 8)
+    z = z + 1
+  }
+  pv_push_bits(bits, 255, 8)
+  pv_push_bits(bits, 0, 4)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 1, 16)
+  pv_push_bits(bits, 0, 5)
+  pv_push_bits(bits, 0, 2)
+  pv_push_bits(bits, 0, 4)
+  // residue type2：begin 0、end 1760、ps 32、cascade 8 pass 全引用 book1
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 2, 16)
+  pv_push_bits(bits, 0, 24)
+  pv_push_bits(bits, 1760, 24)
+  pv_push_bits(bits, 31, 24)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 7, 3)
+  pv_push_bits(bits, 1, 1)
+  pv_push_bits(bits, 31, 5)
+  let mut k = 0
+  while k < 8 {
+    pv_push_bits(bits, 1, 8)
+    k = k + 1
+  }
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 1)
+  pv_push_bits(bits, 0, 2)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 0, 6)
+  pv_push_bits(bits, 1, 1) // blockflag = 1 → 2048
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 16)
+  pv_push_bits(bits, 0, 8)
+  pv_push_bits(bits, 1, 1)
+  let buf = Buffer()
+  buf.write_bytes(b"\x05vorbis".exact_view())
+  buf.write_bytes(pv_bits_to_bytes(bits).exact_view())
+  buf.to_bytes()
+}
+
+///|
+/// RT4-01：6.5 KB 构造（8 pass × ps4096/dims16）必须被 Huffman 预算拒绝，
+/// 不能像 gate v3 那样放行后跑数分钟。
+test "vorbis cpu budget rejects residue VQ symbol undercount (RT4-01)" {
+  // 给音频包足够体积（2 KB），让 IMDCT 预算（按输入字节）先放行，
+  // 从而真正命中 Huffman/VQ 符号数分支；真实 g9 PoC 亦为此量级。
+  let audio_buf = Buffer()
+  let mut ai = 0
+  while ai < 2048 {
+    audio_buf.write_byte((0 : Byte))
+    ai = ai + 1
+  }
+  let audio = audio_buf.to_bytes()
+  let packets : Array[@ogg.Packet] = [
+    {
+      data: vorbis_ident_packet_ex(1, 13, 13),
+      granule_position: 0L,
+      serial: 1U,
+    },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_rt4_vq(), granule_position: 0L, serial: 1U, },
+    { data: audio, granule_position: 8192L, serial: 1U, },
+  ]
+  match plan_segment(pages_of(packets), 16) {
+    Err(msg) => {
+      assert_true(msg.contains("Huffman"))
+      assert_true(msg.contains("工作量"))
+    }
+    Ok(_) => assert_true(false)
+  }
+}
+
+///|
+/// 与真实样本同量级的合法构建：双预算（IMDCT 1.43×、Huffman 1.49×）必须放行，
+/// 避免把 97 s 的真实 benchmark 用例塞进单测。
+test "vorbis cpu budgets accept a realistic-magnitude stream" {
+  let packets : Array[@ogg.Packet] = [
+    {
+      data: vorbis_ident_packet_ex(2, 8, 11),
+      granule_position: 0L,
+      serial: 1U,
+    },
+    { data: vorbis_comment_packet(), granule_position: 0L, serial: 1U, },
+    { data: vorbis_setup_real_shaped(), granule_position: 0L, serial: 1U, },
+  ]
+  let payload_buf = Buffer()
+  let mut k = 0
+  while k < 150 {
+    payload_buf.write_byte((0 : Byte))
+    k = k + 1
+  }
+  let payload = payload_buf.to_bytes()
+  let mut i = 0
+  while i < 45 {
+    packets.push({
+      data: payload,
+      granule_position: 1024L * (i + 1).to_int64(),
+      serial: 1U,
+    })
+    i = i + 1
+  }
+  match plan_segment(pages_of(packets), 16) {
+    Ok(plan) => {
+      assert_eq(plan.channels, 2)
+      assert_true(plan.estimated_bytes > 0L)
+    }
+    Err(msg) =>
+      abort("真实量级的合法 Vorbis 流被 CPU 预算误拒: " + msg)
   }
 }

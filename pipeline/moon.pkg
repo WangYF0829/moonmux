@@ -17,3 +17,8 @@ import {
   "LL728/moonopus",
   "LL728/moonvorbis",
 }
+
+import {
+  "WangYF0829/moonmux/ogg",
+  "WangYF0829/moonmux/wav",
+} for "test"

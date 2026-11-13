@@ -41,6 +41,28 @@ test "validate_page and serialize_pages_checked reject malformed pages" {
 }
 
 ///|
+/// F-PAR-05：RFC 3533 §6 规定头类型位 0x08–0x80 为保留位、必须为 0。
+/// 解析、写前校验、重同步预筛必须用同一套判据。
+test "reserved header-type bits are rejected by parse and validate_page" {
+  // 合法页先序列化，再把 header_type 的保留位打开
+  let patched : Page = {
+    header_type: (0x0A : Byte), // BOS + 保留位 0x08
+    granule_position: 0L,
+    serial: 1U,
+    sequence: 0U,
+    crc: 0U,
+    segments: [1],
+    payload: b"x",
+  }
+  let bad_bytes = serialize_pages([patched])
+  // 解析侧：Page::parse 拒绝
+  assert_eq(parse_pages(bad_bytes).length(), 0)
+  // 写侧：validate_page 也拒绝，避免写出的字节自己读不回来
+  assert_true(validate_page(patched) is Err(_))
+  assert_true(serialize_pages_checked([patched]) is Err(_))
+}
+
+///|
 test "validate_page rejects payload over 65025 bytes" {
   let segs = Array::make(255, 255)
   let buf = Buffer()

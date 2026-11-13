@@ -22,6 +22,7 @@ concurrency:
 env:
   # 工具链跟随官方 latest（安装脚本的固定版本 URL 对旧版本返回 403，无法可靠 pin）；
   # 每个 job 都打印 `moon version --all`，发布记录附上本次使用的版本。
+  #
   # 未覆盖行数阈值（moon coverage analyze 的 Total）。
   # 2026-10-25 全量统计：Linux native 实测 662、Windows native 635；
   # 新增约 2000 行防御性分支与 CLI 代码，未覆盖行数相应上升（上次实测 605、阈值 600）。
@@ -34,9 +35,18 @@ env:
   # v0.9.2：安全/资源边界修复新增大量 Int64 上界、解码前 gate 与回归测试，
   # Windows 实测 757；Linux 侧比 Windows 高约 27 行（≈784）。
   # 阈值 730→780，配合 20 行容差，上限 800。
+  # 2026-11-13 第 7 轮补测后裁决：Windows uncovered=635（干净副本实测，native 475 测试），
+  # 注释估算 Linux ≈662 < 800（余量 ~138）；qa-gate 补测目标 ≤745 已达成（635）。
+  # **阈值不放宽**（MAX_UNCOVERED_LINES=780 + TOLERANCE=20 保持不变；库层/总覆盖率门禁：库层 ≥88%、总 ≥80%，第 7 轮整改后实测总 ≈82.7%）；
+  # 若 Linux 实测仍超限，仅在本注释记录实测值与余量风险，不在本修复轮调阈值。
   MAX_UNCOVERED_LINES: 780
   # 跨平台/工具链 patch 版本可能让计数抖动几行，给一点余量。
   COVERAGE_TOLERANCE: 20
+  # bench 阈值：基线 scripts/bench-baseline.json（Windows release native 实测）。
+  # 小操作（基线 <50 ms）允许波动 = max(10%×基线, 4 ms 绝对噪声下限)；
+  # 大操作严格 10%。CI 在 ubuntu 运行、基线为 Windows 实测：跨平台时脚本自动降级为
+  # "只记录 + WARN"（严格门禁需同平台基线），见 _review/fix/ci.md 第 3 轮章节。
+  BENCH_FAIL_OVER: "0.10"
 
 jobs:
   check:
@@ -48,7 +58,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
+      # check_version.sh 会校验 `git describe --tags`，需要完整 tag 历史。
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
 
       - name: Install MoonBit (Unix)
         if: runner.os != 'Windows'
@@ -70,13 +83,22 @@ jobs:
           $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Toolchain version
-        run: moon version --all
+        shell: bash
+        run: |
+          moon version --all
+          {
+            echo '### toolchain'
+            echo '```'
+            moon version --all
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Update package index
         run: moon update
 
-      # 四项检查：警告即错误、格式、接口文档、测试。
-      # 失败时把输出写进 step summary，便于在没有日志权限时定位。
+      # 首次 check 不冻结：从索引解析并同步依赖（moon 0.1.x 使用全局 registry 缓存，
+      # legacy 工程才写 .mooncakes）；此后所有 build/test/info/package 都加 --frozen，
+      # 避免隐式依赖漂移（同 commit 两次构建依赖一致）。
       - name: moon check --deny-warn
         shell: bash
         run: |
@@ -95,25 +117,41 @@ jobs:
         run: moon fmt --check
 
       - name: moon info
-        run: moon info
+        run: moon info --frozen
 
-      # 全量 native 由 ubuntu job 覆盖；Windows 主测试走 wasm-gc 控制耗时，
-      # 另加一个只编译 cmd/main 的 Windows native 步骤覆盖路径/设备名分支。
+      # 公开 API 文档注释覆盖门禁（D6）：从 .mbti 解析 pub 符号，核对源码 `///` 覆盖。
+      # 阈值 >=95%，且默认要求未文档符号为 0（D6 登记例外时用 --max-gap 1）。
+      - name: API doc coverage (D6 >=95%)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/check_api_docs.sh --threshold 95 --max-gap 0
+
+      # target 矩阵全量：check/test 覆盖声明支持的全部后端（native/wasm-gc/js，成本低）。
+      # native 由 ubuntu job 覆盖；Windows 主测试走 wasm-gc 控制耗时。
+      - name: moon check --target all (declared backends)
+        if: runner.os == 'Linux'
+        run: moon check --deny-warn --target all --frozen
+
+      - name: moon test --target all (declared backends)
+        if: runner.os == 'Linux'
+        run: moon test --deny-warn --target all --frozen
+
       - name: moon test --deny-warn
-        run: moon test --deny-warn --target ${{ runner.os == 'Windows' && 'wasm-gc' || 'native' }}
+        run: moon test --deny-warn --frozen --target ${{ runner.os == 'Windows' && 'wasm-gc' || 'native' }}
 
       # Windows 专属的路径/设备名分支只在 native 的 cmd/main 里编译；
       # 上面的 wasm-gc 不会执行它们，因此额外跑这一包的 Windows native 测试。
       - name: Windows native CLI tests
         if: runner.os == 'Windows'
         shell: bash
-        run: moon test --deny-warn --target native -j 1 cmd/main
+        run: moon test --deny-warn --frozen --target native -j 1 cmd/main
 
       - name: Version consistency
         shell: bash
         run: |
-          moon build --target native
+          moon build --target native --frozen
           bash scripts/check_version.sh
+
       # 发布包内容门禁：moon package 打包的是工作区文件（含未跟踪文件），
       # 本地临时/构建目录一旦混入会被永久发布到 mooncakes，无法撤回。
       - name: Package content gate
@@ -121,19 +159,37 @@ jobs:
         run: |
           set -euo pipefail
           # `moon package` 会先打印 "Package to .../_build/..." 日志行，先滤掉非清单行
-          moon package --list 2>&1 | grep -Ev '^(Package to|Check passed|Finished|Running|Building)' | sed 's#\\#/#g' | tee /tmp/pkglist.log
+          moon package --list --frozen 2>&1 | grep -Ev '^(Package to|Check passed|Finished|Running|Building)' | sed 's#\\#/#g' | tee /tmp/pkglist.log
           # 白名单：只允许项目源码/文档/测试数据路径进包（新增目录需在此显式登记）
-          bad=$(grep -Ev '^(CHANGELOG\.md|LICENSE|README\.md|moon\.mod|moon\.pkg|moonmux\.mbt|moonmux_wbtest\.mbt|项目申报书\.md|docs/|scripts/|testdata/|examples/|cmd/|cli/|codec/|manifest/|mp4/|ogg/|pipeline/|wav/)' /tmp/pkglist.log || true)
+          bad=$(grep -Ev '^(CHANGELOG\.md|LICENSE|NOTICE|README\.md|RELEASING\.md|THIRD_PARTY\.md|moon\.mod|moon\.pkg|moonmux\.mbt|moonmux_wbtest\.mbt|项目申报书\.md|docs/|scripts/|testdata/|examples/|cmd/|cli/|codec/|manifest/|mp4/|ogg/|pipeline/|wav/)' /tmp/pkglist.log || true)
           if [ -n "$bad" ]; then
             echo "package contains unexpected paths:"
             echo "$bad"
             exit 1
           fi
           count=$(grep -c . /tmp/pkglist.log || true)
-          if [ "$count" -lt 50 ]; then
+          if [ "$count" -lt 80 ]; then
             echo "package file list unexpectedly small: $count"
             exit 1
           fi
+
+      # 发布前 worktree 必须干净：moon package 会把未跟踪文件一起打包。
+      - name: Assert clean worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "::error::worktree 不干净：moon package 会把未跟踪文件一起打包（发布前必须提交/清理）"
+            printf '%s\n' "$dirty" | sed -n '1,40p'
+            exit 1
+          fi
+          echo "worktree clean: git status --porcelain 为空"
+
+      # 包清单与 git 跟踪文件的差集、禁止路径、密钥、体积基线（供应链组维护的脚本）。
+      - name: Package audit (scripts/check_package.sh)
+        shell: bash
+        run: bash scripts/check_package.sh
 
       # 生成物不能进版本库：_build、*.mi/*.core/*.mbti、pkg.generated.mbti。
       - name: Verify no generated artifacts are tracked
@@ -155,6 +211,69 @@ jobs:
             echo "Possible credential committed"
             exit 1
           fi
+
+  # 公开 API 契约门禁：对上一发布 tag 逐包 diff .mbti（删除/改签名必须升 minor）。
+  api-diff:
+    name: api-diff · previous release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0 # 需要完整 tag 历史才能定位上一发布 tag 并导出基线树
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain version
+        shell: bash
+        run: |
+          moon version --all
+          {
+            echo '### toolchain'
+            echo '```'
+            moon version --all
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update package index
+        run: moon update
+
+      # 解析并同步依赖（moon 0.1.x 使用全局 registry 缓存；legacy .mooncakes 存在时脚本会复制进基线树）。
+      # 随后 check_api_diff.sh 对「当前工作树」与「上一发布 tag」各跑 moon info --frozen，
+      # 逐包 diff pkg.generated.mbti；--target-all 额外校验 native/wasm/wasm-gc/js 各后端接口一致。
+      - name: Resolve dependencies
+        run: moon check --deny-warn
+
+      - name: Public API diff against previous release tag (--target-all)
+        shell: bash
+        run: |
+          set -o pipefail
+          BASE_REF="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
+          echo "base-ref: ${BASE_REF:-<none>}" | tee -a "$GITHUB_STEP_SUMMARY"
+          set +e
+          bash scripts/check_api_diff.sh --target-all 2>&1 | tee /tmp/api-diff.log
+          status=${PIPESTATUS[0]}
+          set -e
+          {
+            echo '### api-diff'
+            echo '```'
+            tail -20 /tmp/api-diff.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 退出码语义：0=仅新增/白名单；1=破坏性 API 变化；2=工具错误。
+          if [ "$status" -eq 0 ]; then
+            echo "api-diff: PASS（exit 0）"
+            exit 0
+          fi
+          if [ "$status" -eq 1 ]; then
+            echo "::error::api-diff: 检测到破坏性公开 API 变化（exit 1），0.x 下需升 minor 并附迁移说明"
+            exit 1
+          fi
+          echo "::error::api-diff: 工具错误（exit $status），检查 moon/tar/git 与基线 tag 是否可用"
+          exit "$status"
 
   coverage:
     name: coverage (non-regression)
@@ -211,6 +330,12 @@ jobs:
             exit 1
           fi
 
+      # 库层/总覆盖率门禁（行覆盖率口径）：复用上一步 `moon coverage analyze` 生成的 trace
+      # （--no-run 不重复跑测试，约 +1s）：库层 >=88%、总覆盖率 >=75%。
+      - name: Library / total coverage gate
+        shell: bash
+        run: bash scripts/check_coverage.sh --no-run --target-dir _build --lib-threshold 88 --total-threshold 80
+
   native:
     name: native · smoke
     runs-on: ubuntu-latest
@@ -226,10 +351,13 @@ jobs:
       - name: Update package index
         run: moon update
 
+      - name: Resolve dependencies
+        run: moon check --deny-warn
+
       - name: Build native CLI
         run: |
           set -o pipefail
-          if ! moon build --target native 2>&1 | tee /tmp/build.log; then
+          if ! moon build --target native --frozen 2>&1 | tee /tmp/build.log; then
             {
               echo '### moon build failed'
               echo '```'
@@ -242,6 +370,37 @@ jobs:
       # 端到端：往返逐字节、退出码、截断、清单异常、转码输出。
       - name: Smoke tests
         run: bash scripts/smoke.sh
+
+  # 三个 examples 工程在 native 下实跑（README 上手路径的可执行保证）。
+  examples:
+    name: examples · native run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain version
+        run: moon version --all
+
+      - name: Update package index
+        run: moon update
+
+      - name: Resolve dependencies
+        run: moon check --deny-warn
+
+      - name: Run all examples (native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pkg in examples/wav_roundtrip examples/ogg_info examples/remux_ogg_to_mp4; do
+            echo "== moon run --target native $pkg =="
+            moon run --target native --frozen "$pkg"
+          done
 
   # v0.3.x：MP4 写侧的独立验证。ubuntu-latest 自带 ffmpeg/ffprobe，
   # 用外部工具证明 remux 产物是标准 MP4（不依赖自家读侧）。
@@ -265,8 +424,11 @@ jobs:
       - name: Update package index
         run: moon update
 
+      - name: Resolve dependencies
+        run: moon check --deny-warn
+
       - name: Build native CLI
-        run: moon build --target native
+        run: moon build --target native --frozen
 
       - name: Verify MP4 with ffprobe
         env:
@@ -291,20 +453,71 @@ jobs:
 
       - name: Verify clean-project install
         env:
-          MOONMUX_INSTALL_VERSION: "0.9.3"
+          MOONMUX_INSTALL_VERSION: "0.9.4"
         run: |
           # 版本 bump 提交可能先于发布到达：轮询等待 mooncakes 出现该版本
           for i in $(seq 1 30); do
             if bash scripts/install_check.sh; then
               exit 0
             fi
-            echo "等待 mooncakes 上的 0.9.3（第 $i 次，最多 30 次）"
+            echo "等待 mooncakes 上的 0.9.4（第 $i 次，最多 30 次）"
             sleep 5
           done
-          echo "mooncakes 上仍未出现可安装的 0.9.3"
+          echo "mooncakes 上仍未出现可安装的 0.9.4"
           exit 1
+
+  # 发布预检：只在"打包 + 解包 + 干净工程 check"层面验证，不会真实上传。
+  # 语义：exit 0 = 校验通过且版本尚可发布；服务器 409 Conflict（版本已存在）
+  # 说明发布包本身已通过本地校验，按已发布放行；其余失败一律红。
+  publish-dry-run:
+    name: publish · dry-run precheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain version
+        run: moon version --all
+
+      - name: Update package index
+        run: moon update
+
+      - name: Resolve dependencies
+        run: moon check --deny-warn
+
+      - name: moon publish --dry-run (no real publish)
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          moon publish --dry-run 2>&1 | tee /tmp/publish-dryrun.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "publish --dry-run: OK（打包/解包校验通过，版本仍可发布）"
+            exit 0
+          fi
+          if grep -qE '409 Conflict|duplicated with an existing version' /tmp/publish-dryrun.log; then
+            echo "::warning::publish --dry-run: 版本已在 mooncakes 发布（409），本地打包/解包校验已通过——跳过真实上传校验"
+            echo "publish --dry-run: 409（版本已存在）→ 按预期跳过，不阻断 CI"
+            exit 0
+          fi
+          if grep -qE 'Server status: 202|Accepted' /tmp/publish-dryrun.log; then
+            echo "publish --dry-run: 服务端返回 202 Accepted（已知工具链语义），本地校验通过——放行并记录"
+            exit 0
+          fi
+          echo "::error::publish --dry-run 失败（非 409/202 预期语义），见上方日志"
+          exit 1
+
   # 性能基准：release native + Node 脚本（无第三方依赖），表格写入 job summary。
-  # 只记录、不设阈值 —— 共享 runner 的绝对耗时没有可比性，回归靠本地对比。
+  # 有基线时按 min_ms 比较，单操作劣化超过 BENCH_FAIL_OVER（CI 固定 10%）则失败；
+  # 基线为 Windows release 实测、CI 在 ubuntu 运行：脚本按平台守卫降级为"只记录 + WARN"，
+  # 严格同平台门禁需生成 Linux 基线（详见 _review/fix/ci.md 第 3 轮章节）。
   bench:
     name: bench · native
     runs-on: ubuntu-latest
@@ -317,18 +530,35 @@ jobs:
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
+      - name: Toolchain version
+        shell: bash
+        run: |
+          moon version --all
+          {
+            echo '### toolchain'
+            echo '```'
+            moon version --all
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Update package index
         run: moon update
 
-      - name: Build native CLI (release)
-        run: moon build --release --target native
+      - name: Resolve dependencies
+        run: moon check --deny-warn
 
-      - name: Run benchmark
+      - name: Build native CLI (release)
+        run: moon build --release --target native --frozen
+
+      - name: Run benchmark (baseline threshold)
+        shell: bash
         run: |
           set -o pipefail
-          node scripts/bench.mjs --runs 5 | tee bench.txt
+          node scripts/bench.mjs --runs 5 \
+            --baseline scripts/bench-baseline.json \
+            --fail-over "$BENCH_FAIL_OVER" | tee bench.txt
           {
-            echo "### bench (native release, ubuntu-latest)"
+            echo "### bench (native release, ubuntu-latest, fail-over $BENCH_FAIL_OVER)"
             echo '```'
             cat bench.txt
             echo '```'
@@ -350,11 +580,15 @@ jobs:
       - name: Update package index
         run: moon update
 
+      - name: Resolve dependencies
+        run: moon check --deny-warn
+
       - name: Build native CLI
-        run: moon build --target native
+        run: moon build --target native --frozen
 
       - name: Run deterministic mutation fuzz
         run: node scripts/fuzz.mjs --iterations 400 --seed 20261109
+
   # Windows 上的端到端 smoke：Git Bash 提供 bash/POSIX 工具；
   # FIFO 相关项在缺少 mkfifo/timeout 时会自行 SKIP。
   smoke-windows:
@@ -383,8 +617,13 @@ jobs:
       - name: Update package index
         run: moon update
 
+      - name: Resolve dependencies
+        run: moon check --deny-warn
+
       - name: Build native CLI
-        run: moon build --target native
+        run: moon build --target native --frozen
 
       - name: Run smoke.sh
         run: bash scripts/smoke.sh
+
+

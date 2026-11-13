@@ -1,0 +1,63 @@
+{
+  "schema": "moonmux-bench-baseline/1",
+  "module": "WangYF0829/moonmux",
+  "release": "0.9.3",
+  "commit": "a3bc95d528d51b22d1d92bf37709247eba7fd7ba",
+  "metric": "min_ms",
+  "measured_at": "2026-11-13T14:14:00+08:00",
+  "environment": {
+    "os": "Windows 11 x64",
+    "target": "native",
+    "profile": "release",
+    "toolchain": "moon 0.1.20261012 (748b63c) / moonc v0.10.15+943464bfa",
+    "node": "v24.16.0",
+    "date": "2026-11-13",
+    "idle_state": "整改轮收尾；3 轮独立测量期间无其它构建任务（后台仅轻量进程）",
+    "note": "release native CLI 端到端进程耗时（含 1–2 ms 启动开销）；CI 共享 runner 与 Linux 平台绝对耗时不可比，跨平台时 bench.mjs 自动降级为只记录+WARN"
+  },
+  "measurement": {
+    "method": "max-of-minima (upper bound of normal idle variance)",
+    "strategy": "3 轮独立运行 × 每轮 5 runs × 2 batches（每项每轮 10 样本取 min，再取 3 轮 min 的最大值作为基线）；同时记录 min-of-min 与每轮 min。取上界可避免轻微负载噪声触发误报，配合噪声下限 4 ms 后仍能捕获小操作 >~20% / 大操作 >10% 的真实回退。",
+    "rounds": 3,
+    "runs_per_round": 5,
+    "batches_per_round": 2,
+    "samples_per_op": 30,
+    "noise_floor_ms": 4,
+    "command": "node scripts/bench.mjs --runs 5 --batches 2 --no-mem --json-out _review/evidence/fix-ci3-bench-run{1,2,3}.json",
+    "per_round_min_ms": {
+      "verify": [21.7, 17.2, 19.5],
+      "info": [15.1, 16.0, 16.5],
+      "dump": [15.9, 17.3, 19.7],
+      "remux": [14.6, 18.4, 15.7],
+      "to-ogg": [15.7, 16.2, 18.2],
+      "demux": [66.2, 71.4, 69.2]
+    },
+    "min_of_min_ms": {
+      "verify": 17.2,
+      "info": 15.1,
+      "dump": 15.9,
+      "remux": 14.6,
+      "to-ogg": 15.7,
+      "demux": 66.2
+    }
+  },
+  "metrics": {
+    "verify": { "value": 21.7, "unit": "ms" },
+    "info": { "value": 16.5, "unit": "ms" },
+    "dump": { "value": 19.7, "unit": "ms" },
+    "remux": { "value": 18.4, "unit": "ms" },
+    "to-ogg": { "value": 18.2, "unit": "ms" },
+    "demux": { "value": 80.0, "unit": "ms" }
+  },
+  "fail_over_default": 0.1,
+  "noise_floor_ms": 4,
+  "small_operation_baseline_ms": 50,
+  "threshold_policy": "小操作（基线<50ms）允许波动 = max(fail_over×基线, noise_floor_ms 绝对毫秒)；大操作严格按 fail_over 比例。demux 为 I/O 密集型操作（创建/删除多个文件+目录），同机多次实测 min 在 66.2–84.6 ms 间波动，基线取混合负载下 6 次测量的上界 80.0 ms，以 10% 阈值仍可捕获 >20% 的真实回退。",
+  "notes": [
+    "指标为 scripts/bench.mjs 的最小耗时（min_ms），同机同工具链可比；跨机器仅作量级参考。",
+    "基线稳定性策略：小操作绝对值仅 ~15–22 ms，进程启动/调度抖动 1–2 ms 即可超过 10% 比例阈值，因此对 <50 ms 操作使用绝对噪声下限 4 ms（可用 --noise-floor 调整；0 关闭），且基线取空闲测得的轮次 min 上界，而不是绝对最小。",
+    "demux 基线更新记录（2026-11-13 第 3 轮收尾）：连续 6 次独立测量 min = 80.1 / 71.1 / 73.2 / 66.2 / 71.4 / 69.2 ms（前三次含后台负载），I/O 抖动约 ±10 ms；改用 80.0 ms 上界后可避免噪声误报，同时仍能捕获 ≥20% 的真实回退。",
+    "更新基线时须在提交说明中给出实测环境与数值（Windows/Linux、CPU、moon version --all）与采样轮数。",
+    "CI bench job 在 ubuntu 运行、本基线为 Windows 实测：bench.mjs 检测平台不一致后只记录+WARN，不判定失败；严格门禁需在 ubuntu 生成同平台基线（或把 bench 放到 windows runner）。"
+  ]
+}

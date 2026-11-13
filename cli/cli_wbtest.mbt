@@ -505,3 +505,64 @@ test "non-flag subcommands reject unknown options" {
     _ => assert_true(false)
   }
 }
+
+///|
+/// 常用别名：`--help` / `-h` / `--version` 与 help / version 等价。
+///
+/// 同类 CLI 的用户习惯敲 `--help`/`--version`；把它们当「未知子命令」拒绝
+/// 会让 `moonmux --help` 以退出码 2 失败。别名只改变子命令名，
+/// 参数个数仍按 0 个校验（`--help extra` 依旧是用法错误）。
+test "common flag aliases map to help and version" {
+  match parse(["--help"]) {
+    Command::Help => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["-h"]) {
+    Command::Help => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["--version"]) {
+    Command::Version => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["help"]) {
+    Command::Help => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["version"]) {
+    Command::Version => assert_true(true)
+    _ => assert_true(false)
+  }
+  // 别名之后多给参数仍然是用法错误，不静默忽略
+  match parse(["--help", "extra"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+  match parse(["--version", "extra"]) {
+    Command::Bad(_, _) => assert_true(true)
+    _ => assert_true(false)
+  }
+}
+
+///|
+/// 未知选项的用法提示要落到**该子命令**的用法，而不是一律回落到总用法。
+///
+/// 反例是 v0.9.3：`demux x --json` 打印整页总用法，`info x --bogus` 却打印
+/// 子命令用法 —— 同一个错误两种提示。
+test "unknown option prints the subcommand usage" {
+  match parse(["demux", "x.ogg", "--json"]) {
+    Command::Bad(_, usage) =>
+      assert_true(usage.contains("用法: moonmux demux"))
+    _ => assert_true(false)
+  }
+  match parse(["tags", "x.ogg", "--json"]) {
+    Command::Bad(_, usage) =>
+      assert_true(usage.contains("用法: moonmux tags"))
+    _ => assert_true(false)
+  }
+  match parse(["info", "x.ogg", "--bogus"]) {
+    Command::Bad(_, usage) =>
+      assert_true(usage.contains("用法: moonmux info"))
+    _ => assert_true(false)
+  }
+}

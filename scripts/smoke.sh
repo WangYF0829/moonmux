@@ -46,14 +46,56 @@ pass() { printf "  \033[32mPASS\033[0m  %s\n" "$1"; }
 fail() { printf "  \033[31mFAIL\033[0m  %s\n" "$1"; FAIL=$((FAIL + 1)); }
 check() { if [ "$1" -eq 0 ]; then pass "$2"; else fail "$2"; fi; }
 
+# 断言「命令按预期退出码结束，且 stdout 含指定子串」。
+# 不用 `cmd | grep -q`：管道末段只看 grep 自己的状态 —— CLI 先打印、后崩溃
+# （或提前以错误码退出）时断言会假绿。也不直读多段管道的 PIPESTATUS：
+# `head -1` 提前关闭管道会让 CLI 收到 SIGPIPE，把正常输出误判成失败。
+# 统一成「重定向到文件 → 分别断言退出码与内容」。
+check_stdout() { # <期望退出码> <stdout 子串> <描述> <命令...>
+  local want="$1" pattern="$2" desc="$3"
+  shift 3
+  "$@" >"$TMP/expect.out" 2>"$TMP/expect.err"
+  local st=$?
+  if [ "$st" -eq "$want" ] && grep -q -- "$pattern" "$TMP/expect.out"; then
+    pass "$desc"
+  else
+    fail "$desc"
+  fi
+}
+
+# 断言「命令按预期退出码失败，且 stdout 为空、stderr 非空」—— 退出码与流归属契约的核心。
+check_error_streams() { # <期望退出码> <描述> <命令...>
+  local want="$1" desc="$2"
+  shift 2
+  "$@" >"$TMP/expect.out" 2>"$TMP/expect.err"
+  local st=$?
+  if [ "$st" -eq "$want" ] && [ ! -s "$TMP/expect.out" ] && [ -s "$TMP/expect.err" ]; then
+    pass "$desc"
+  else
+    fail "$desc"
+  fi
+}
+
+# 同上，另断 stderr 含指定子串（用法提示要落到该子命令）。
+check_error_has() { # <期望退出码> <stderr 子串> <描述> <命令...>
+  local want="$1" pattern="$2" desc="$3"
+  shift 3
+  "$@" >"$TMP/expect.out" 2>"$TMP/expect.err"
+  local st=$?
+  if [ "$st" -eq "$want" ] && [ ! -s "$TMP/expect.out" ] && grep -q -- "$pattern" "$TMP/expect.err"; then
+    pass "$desc"
+  else
+    fail "$desc"
+  fi
+}
+
 if [ ! -x "$BIN" ]; then
   echo "找不到可执行文件：$BIN（先运行 moon build --target native）"
   exit 1
 fi
 
 echo "== 0. 版本与输出类型防护 =="
-"$BIN" version | grep -q "moonmux 0.9.3"
-check $? "version 与模块版本一致（0.9.3）"
+check_stdout 0 "moonmux 0.9.4" "version 与模块版本一致（0.9.4）" "$BIN" version
 "$BIN" extract testdata/opus_sample.opus 1 "$TMP" >/dev/null 2>&1
 [ $? -eq 2 ]; check $? "目录作为输出路径被拒绝（2）"
 
@@ -75,6 +117,20 @@ if [ "$RUN_POSIX_FIFO" -eq 1 ] && command -v mkfifo >/dev/null 2>&1 && command -
 else
   echo "  SKIP  FIFO 防护（仅 POSIX 或本机缺少 mkfifo/timeout）"
 fi
+
+echo "== 0b. CLI 契约（退出码、stdout/stderr 归属、别名）=="
+"$BIN" >"$TMP/expect.out" 2>"$TMP/expect.err"
+[ $? -eq 2 ] && [ ! -s "$TMP/expect.out" ] && [ -s "$TMP/expect.err" ]
+check $? "无参数 → 2，stdout 空、stderr 有用法"
+check_error_streams 2 "未知子命令 → 2" "$BIN" frobnicate
+check_error_streams 2 "未知选项 → 2" "$BIN" info testdata/opus_sample.opus --bogus
+check_error_streams 2 "多余参数 → 2（不被静默忽略）" "$BIN" info testdata/opus_sample.opus extra
+check_error_streams 2 "缺必需参数 → 2" "$BIN" demux testdata/opus_sample.opus
+check_error_has 2 "用法: moonmux demux" "未知选项的用法提示落到子命令" "$BIN" demux --json a.ogg b
+check_stdout 0 "用法:" "help 成功并把用法写到 stdout" "$BIN" help
+check_stdout 0 "moonmux 0.9.4" "version 输出到 stdout" "$BIN" version
+check_stdout 0 "用法:" "--help 别名等同 help" "$BIN" --help
+check_stdout 0 "moonmux 0.9.4" "--version 别名等同 version" "$BIN" --version
 
 echo "== 1. 单流往返（逐字节） =="
 "$BIN" demux testdata/opus_sample.opus "$TMP/rt1" >/dev/null 2>&1
@@ -110,8 +166,7 @@ check $? "chained 往返后仍是 2 段物理流"
 
 echo "== 4. 注释读写 =="
 "$BIN" tag testdata/vorbis_sample.ogg "$TMP/t.ogg" TITLE=Smoke >/dev/null 2>&1
-"$BIN" tags "$TMP/t.ogg" | grep -q "TITLE=Smoke"
-check $? "写入的标签能读回"
+check_stdout 0 "TITLE=Smoke" "写入的标签能读回" "$BIN" tags "$TMP/t.ogg"
 "$BIN" verify "$TMP/t.ogg" >/dev/null 2>&1
 check $? "改过标签的文件结构体检通过"
 ORIG=$(wc -c < testdata/vorbis_sample.ogg)
@@ -136,29 +191,22 @@ echo "== 4c. 裁剪 =="
 "$BIN" chop testdata/opus_sample.opus "$TMP/chop.ogg" 1000 3000 >/dev/null 2>&1
 [ $? -eq 0 ] && [ -s "$TMP/chop.ogg" ]
 check $? "chop 输出非空"
-"$BIN" info "$TMP/chop.ogg" | grep -q "时长=1.99 秒"
-check $? "chop 1000→3000 ms 输出约 2.00 秒（扣 pre-skip 后 1.99）"
-"$BIN" verify "$TMP/chop.ogg" 2>/dev/null | grep -q "结构完好"
-check $? "chop 结果通过 verify"
+check_stdout 0 "时长=1.99 秒" "chop 1000→3000 ms 输出约 2.00 秒（扣 pre-skip 后 1.99）" "$BIN" info "$TMP/chop.ogg"
+check_stdout 0 "结构完好" "chop 结果通过 verify" "$BIN" verify "$TMP/chop.ogg"
 "$BIN" chop testdata/opus_sample.opus "$TMP/chop2.ogg" 7000 8000 >/dev/null 2>&1
 [ $? -eq 1 ]
 check $? "chop 越界区间报数据错误（1）"
 
-"$BIN" dump testdata/opus_sample.opus --hex | head -1 | grep -q '^00000000: 4f67 6753'
-check $? "dump --hex 首行与 xxd 兼容"
-"$BIN" info testdata/opus_sample.opus --json | grep -q '"format":"ogg"'
-check $? "info --json 输出 Ogg 结构"
-"$BIN" verify testdata/opus_sample.opus --json | grep -q '"crc_ok":9'
-check $? "verify --json 输出 CRC 统计"
+check_stdout 0 '^00000000: 4f67 6753' "dump --hex 首行与 xxd 兼容" "$BIN" dump testdata/opus_sample.opus --hex
+check_stdout 0 '"format":"ogg"' "info --json 输出 Ogg 结构" "$BIN" info testdata/opus_sample.opus --json
+check_stdout 0 '"crc_ok":9' "verify --json 输出 CRC 统计" "$BIN" verify testdata/opus_sample.opus --json
 
 echo "== 4d. remux（Ogg → MP4）=="
 "$BIN" remux testdata/opus_sample.opus "$TMP/out.m4a" >/dev/null 2>&1
 [ $? -eq 0 ] && [ -s "$TMP/out.m4a" ]
 check $? "Ogg Opus → MP4 输出非空"
-"$BIN" info "$TMP/out.m4a" | grep -q "格式:   MP4"
-check $? "info 识别 MP4"
-"$BIN" info "$TMP/out.m4a" | grep -q "Opus"
-check $? "MP4 信息含 Opus 音轨"
+check_stdout 0 "格式:   MP4" "info 识别 MP4" "$BIN" info "$TMP/out.m4a"
+check_stdout 0 "Opus" "MP4 信息含 Opus 音轨" "$BIN" info "$TMP/out.m4a"
 # 前 8 字节应为 size + "ftyp"（不硬编码 size，只断言 fourcc）
 head -c 8 "$TMP/out.m4a" | od -An -tx1 | tr -d ' \n' | grep -q "66747970"
 check $? "MP4 文件以 ftyp 开头"
@@ -180,8 +228,7 @@ echo "== 4e. to-ogg（MP4 → Ogg 回读）=="
 "$BIN" to-ogg "$TMP/out.m4a" "$TMP/back.ogg" >/dev/null 2>&1
 [[ $? -eq 0 ]] && [ -s "$TMP/back.ogg" ]
 check $? "MP4 → Ogg 输出非空"
-"$BIN" info "$TMP/back.ogg" | grep -q "Opus  声道=1  采样率=48000"
-check $? "回读 Ogg 信息含 Opus 1 声道 / 48000 Hz"
+check_stdout 0 "Opus  声道=1  采样率=48000" "回读 Ogg 信息含 Opus 1 声道 / 48000 Hz" "$BIN" info "$TMP/back.ogg"
 "$BIN" verify "$TMP/back.ogg" >/dev/null 2>&1
 check $? "回读 Ogg 结构完好（verify → 0）"
 # 音频包逐字节还原：与原 Ogg 的 demux 结果对比（跳过 OpusHead/OpusTags）
@@ -197,14 +244,18 @@ check $? "非 MP4 输入被拒绝（退出 1）"
 echo "== 5. 定位 =="
 "$BIN" seek testdata/opus_sample.opus 2500 >/dev/null 2>&1
 check $? "seek 正常工作"
-"$BIN" seek testdata/opus_sample.opus 0 | grep -q "起始时间: 0.00 秒"
-check $? "seek 0 落在首个音频页（起始 0.00 秒）"
-"$BIN" seek "$TMP/ch.ogg" 500 2 | grep -q "第 2 / 2 段"
-check $? "seek 支持按链定位"
+check_stdout 0 "起始时间: 0.00 秒" "seek 0 落在首个音频页（起始 0.00 秒）" "$BIN" seek testdata/opus_sample.opus 0
+check_stdout 0 "第 2 / 2 段" "seek 支持按链定位" "$BIN" seek "$TMP/ch.ogg" 500 2
 
 echo "== 6. 退出码约定 =="
 "$BIN" verify testdata/opus_sample.opus >/dev/null 2>&1
 [ $? -eq 0 ]; check $? "verify 完好文件 → 0"
+# 同一类「输入形态超出命令能力」（链接流）：chop / remux 必须映射到同一个退出码 2，
+# 否则脚本无法按退出码区分「文件坏了」(1) 与「命令做不了」(2)。
+"$BIN" chop "$TMP/ch.ogg" "$TMP/chop-ch.ogg" 100 200 >/dev/null 2>&1
+[ $? -eq 2 ]; check $? "chop 链接流 → 2（能力边界）"
+"$BIN" remux "$TMP/ch.ogg" "$TMP/ch.m4a" >/dev/null 2>&1
+[ $? -eq 2 ]; check $? "remux 链接流 → 2（与 chop 同类判定）"
 printf 'not an ogg' > "$TMP/junk.bin"
 "$BIN" verify "$TMP/junk.bin" >/dev/null 2>&1
 [ $? -eq 1 ]; check $? "verify 非 Ogg → 1（校验失败）"
@@ -220,8 +271,7 @@ echo "== 7. 边界输入不崩 =="
 "$BIN" info "$TMP/empty.bin" >/dev/null 2>&1
 [ $? -eq 1 ]; check $? "空文件给数据错误（1）而不是崩溃"
 head -c 300 testdata/opus_sample.opus > "$TMP/trunc.ogg"
-"$BIN" verify "$TMP/trunc.ogg" | grep -q "处跳过"
-check $? "截断文件能报出跳过区间"
+check_stdout 1 "处跳过" "截断文件能报出跳过区间" "$BIN" verify "$TMP/trunc.ogg"
 "$BIN" verify "$TMP/trunc.ogg" >/dev/null 2>&1
 [ $? -eq 1 ]; check $? "截断文件 verify 退出 1"
 "$BIN" demux "$TMP/trunc.ogg" "$TMP/td" >/dev/null 2>&1

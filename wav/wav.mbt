@@ -133,6 +133,15 @@ fn subformat_guid_is(data : Bytes, offset : Int32, first : Int32) -> Bool {
 }
 
 ///|
+/// WAV 采样率的合理上限。
+///
+/// 真实音频格式最高约 768 kHz（专业设备），这里取 10 MHz 留足余量。
+/// 超过上限的采样率不可能来自真实文件，却会让下游按「整数百分秒」做的
+/// 时长显示在 Int32 里溢出（`frames % sample_rate * 100`，F-PAR-04）——
+/// 解析阶段直接拒绝，不让一个字段把错误带进展示层。
+const MAX_WAV_SAMPLE_RATE : Int32 = 10000000
+
+///|
 /// 解析 `fmt ` 块。
 ///
 /// 返回（格式参数、采样类型、每采样容器字节数）；任何字段不一致都返回 `None`，
@@ -196,6 +205,11 @@ fn parse_fmt_chunk(
   // 用 <= 0 而不是 == 0：u32 高位为 1 的字段读进有符号 Int 是负数，
   // 只挡 0 会让「采样率 -1 Hz」一路走到显示层。
   if channels <= 0 || sample_rate <= 0 || bits_per_sample <= 0 {
+    return None
+  }
+  // F-PAR-04：荒谬的采样率（例如 2e9 Hz）会让下游 `frames % rate * 100`
+  // 在 Int32 里溢出并打印负数时长。真实音频格式远小于 10 MHz，直接拒绝。
+  if sample_rate > MAX_WAV_SAMPLE_RATE {
     return None
   }
   // 每采样容器字节数由 block_align / channels 决定；不整除说明块对齐被改坏。

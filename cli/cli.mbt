@@ -78,7 +78,9 @@ pub fn usage() -> String {
   "  moonmux to-ogg <in.m4a> <out.ogg>\n" +
   "                                  把 MP4（Opus）解封装回 Ogg Opus（remux 的逆操作）\n" +
   "  moonmux version                  打印版本\n" +
-  "  moonmux help                     显示本帮助"
+  "  moonmux help                     显示本帮助\n" +
+  "\n" +
+  "  --help / -h 等同 help，--version 等同 version（常用别名）"
 }
 
 ///|
@@ -243,7 +245,15 @@ pub fn parse(args : Array[String]) -> Command {
   if args.length() == 0 {
     return Command::Bad("缺少子命令", usage())
   }
-  let sub = args[0]
+  // 常用别名：`--help` / `-h` / `--version` 与 help / version 等价。
+  // 参数个数仍按 0 个校验 —— `--help extra` 是用法错误，不能被静默接受。
+  let sub = if args[0] == "--help" || args[0] == "-h" {
+    "help"
+  } else if args[0] == "--version" {
+    "version"
+  } else {
+    args[0]
+  }
   // 子命令之后的参数个数
   let n = args.length() - 1
   // 只有 info/dump/verify/extract 接受选项。其余子命令把 `--xxx` 当未知选项拒绝：
@@ -256,7 +266,9 @@ pub fn parse(args : Array[String]) -> Command {
     let mut fi = 1
     while fi < args.length() {
       if args[fi].has_prefix("--") {
-        return Command::Bad("未知选项: " + args[fi], usage())
+        // 与 take_flag 的未知选项报错一致：给**子命令**的用法提示，
+        // 而不是一律回落到总用法（help/version 等没有专属用法时自动回落到总用法）。
+        return Command::Bad("未知选项: " + args[fi], usage_for(sub))
       }
       fi = fi + 1
     }
@@ -545,6 +557,6 @@ pub fn parse(args : Array[String]) -> Command {
       Command::Help
     }
   } else {
-    Command::Bad("未知子命令: " + sub, usage())
+    Command::Bad("未知子命令: " + args[0], usage())
   }
 }

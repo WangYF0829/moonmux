@@ -232,12 +232,22 @@ fn read_stsd(data : Bytes, b : BoxRef) -> (String, Int32, Int32) {
 /// 直接按有符号读会显示成负数（M-17）。2 GiB 读取边界内不可能有 >= 2³¹
 /// 个样本（stsz 表或定长样本都装不进文件），所以按「不可解析」返回 None，
 /// 与缺 mvhd 的处理一致。
+///
+/// F-PAR-06：0x7FFFFFFF 这类「正的最大值」同样装不进 <2 GiB 的文件，
+/// 而且与解封装的能力边界（`MAX_DEMUX_SAMPLES` = 1,048,576）不一致 ——
+/// inspect 若显示 21 亿样本会误导用户。这里统一按不可解析处理，并额外
+/// 用逐样本表的实际可用字节数校验（定长分支没有表，只能靠上限）。
 fn read_stsz_count(data : Bytes, b : BoxRef) -> Int32? {
-  if b.next - b.body < 12 {
+  let avail = b.next - b.body
+  if avail < 12 {
     None
   } else {
+    let fixed = rd_u32_be(data, b.body + 4)
     let count = rd_u32_be(data, b.body + 8)
-    if count < 0 {
+    if fixed < 0 || count < 0 || count.to_int64() > MAX_DEMUX_SAMPLES {
+      None
+    } else if fixed == 0 && count > (avail - 12) / 4 {
+      // 逐样本表：count 个 u32 必须真的装在 stsz box 里
       None
     } else {
       Some(count)

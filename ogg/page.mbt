@@ -139,8 +139,8 @@ fn page_length_at(data : Bytes, offset : Int32) -> Int32? {
 ///|
 /// 从 `data` 的 `offset` 处解析一个 Ogg 页，同时给出下一页的起始偏移。
 ///
-/// 返回 `None` 表示此处不是合法页起点（捕获模式不匹配或数据不足），
-/// 调用方可以据此在字节流中重新同步。
+/// 返回 `None` 表示此处不是合法页起点（捕获模式不匹配、version / 保留位
+/// 非法或数据不足），调用方可以据此在字节流中重新同步。
 pub fn Page::parse(data : Bytes, offset : Int32) -> (Page, Int32)? {
   // 用减法边界避免极大正 offset 在 offset + 27 时回绕。
   if offset < 0 || offset > data.length() - 27 {
@@ -152,6 +152,13 @@ pub fn Page::parse(data : Bytes, offset : Int32) -> (Page, Int32)? {
   // RFC 3533 只定义 version 0。以前这里既不校验也不保存 version，
   // 序列化时又硬写 0，于是「version 被改成 1」的文件 CRC 仍然全绿。
   if data[offset + 4].to_int() != 0 {
+    return None
+  }
+  // RFC 3533 §6：头类型的 0x08–0x80 为保留位，必须为 0。
+  // 必须在**所有**接受路径上统一校验：重同步预筛 `plausible_page_start`
+  // 早已把保留位非 0 的候选挡掉，若 Page::parse 仍接受，同一个文件会出现
+  // 「严格解析接受、重同步路径跳过」的两套结论（F-PAR-05 / M-26 同类）。
+  if (data[offset + 5].to_int() & 0xF8) != 0 {
     return None
   }
   let header_type = data[offset + 5]
@@ -248,8 +255,17 @@ pub fn Page::expected_crc(self : Page) -> UInt32 {
 ///
 /// `Page` 是 `pub(all)`，库用户可以构造任意段值。序列化时把 >255 的段
 /// 截断成 1 个字节会静默写出一张自损页（长度字段与负载对不上），
-/// 所以写盘前提供显式校验入口。
+/// 所以写盘前提供显式校验入口。RFC 3533 §6 的保留头类型位同样在这里
+/// 拒绝：否则手工构造的页会让「写出去的字节」与「自己能解析回来的字节」
+/// 不一致（F-PAR-05）。
 pub fn validate_page(page : Page) -> Result[Unit, String] {
+  if (page.header_type.to_int() & 0xF8) != 0 {
+    return Err(
+      "页头类型保留位不为 0（header_type=" +
+      page.header_type.to_int().to_string() +
+      "，RFC 3533 §6 要求 0x08–0x80 为 0）",
+    )
+  }
   let n = page.segments.length()
   if n > 255 {
     return Err("页段数 " + n.to_string() + " 超过 255")

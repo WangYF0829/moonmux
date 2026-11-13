@@ -167,10 +167,9 @@ test "a truncated tail becomes a skipped range" {
 }
 
 ///|
-/// 带页头保留位（RFC 3533 要求为 0，但 `Page::parse` 只校验 version）的页：
-/// 严格解析接受它，容错解析也必须接受 —— `plausible_page_start` 只用于
-/// 筛选候选，不能当合法性判据，否则 info 接受的文件会被 verify 判成
-/// 「不是合法 Ogg」并触发全文件重同步（M-26 回归）。
+/// 带页头保留位（RFC 3533 §6 要求为 0）的页：F-PAR-05 之后 `Page::parse`
+/// 也拒绝它，与重同步预筛 `plausible_page_start` 的判据一致 —— 严格解析与
+/// 容错解析必须给出同样的结论：这个文件里没有合法页。
 fn reserved_bit_blob() -> Bytes {
   let pages : Array[Page] = [
     {
@@ -196,15 +195,19 @@ fn reserved_bit_blob() -> Bytes {
 }
 
 ///|
-test "lenient parsing accepts every page strict parsing accepts (reserved bits)" {
+test "reserved-bit pages are rejected by strict and lenient parsing alike" {
   let blob = reserved_bit_blob()
-  let strict = parse_pages(blob)
-  assert_eq(strict.length(), 2)
+  // 严格解析：Page::parse 拒绝保留位非 0 的页（F-PAR-05）
+  assert_eq(parse_pages(blob).length(), 0)
+  // 容错解析：同样全拒绝，整段字节都计入跳过区间（不再出现 M-26 的
+  // 「info 接受、verify 判成不是合法 Ogg」两套结论）
   let (lenient, gaps) = parse_pages_lenient(blob)
-  assert_eq(lenient.length(), strict.length())
-  assert_eq(gaps.length(), 0)
-  // 保留位随页头原样保留，没有被改写
-  assert_eq(lenient[0].header_type.to_int(), 0x0A)
+  assert_eq(lenient.length(), 0)
+  let mut skipped = 0
+  for gap in gaps {
+    skipped = skipped + gap.bytes
+  }
+  assert_eq(skipped, blob.length())
 }
 
 ///|
