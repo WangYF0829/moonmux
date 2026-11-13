@@ -1,7 +1,7 @@
-# moonmux 架构与设计说明
+﻿# moonmux 架构与设计说明
 
 > 本文回答「项目怎么组织、关键不变量是什么、为什么这样取舍」，供后续维护者阅读。
-> 版本：v0.9.4（2026-11-13 发布基线；验收整改版）；版本变更见 [`CHANGELOG.md`](../CHANGELOG.md) 与 [`docs/releases/`](releases/)，发布流程与回滚预案见 [`RELEASING.md`](../RELEASING.md)。
+> 版本：v0.9.4（2026-11-13 发布）；版本变更见 [`CHANGELOG.md`](../CHANGELOG.md) 与 [`docs/releases/`](releases/)，发布流程与回滚预案见 [`RELEASING.md`](../RELEASING.md)。
 
 ## 1. 目标与非目标
 
@@ -92,7 +92,7 @@ mdat → 按 chunk 切出样本（= Opus 包）
 |---|---|
 | 单元/白盒 | 本地 `moon test --deny-warn --target all` 实测：native **475**、wasm-gc **425**、js **425**（`wasm` 后端 0 个测试、不在 `supported_targets`）；v0.9.3 基线为 369（native）。覆盖页/包/CRC/清单/转码/box/Mp4 往返与解封装/CLI 解析/WAV 全格式/流式页读取/gate v3，含真实 Ogg 文件的逐页 CRC 断言 |
 | 黑盒 | 各包 `*_public_test.mbt`（`for "test"` 导入，只使用公开 API），覆盖 ogg/wav/mp4/codec/manifest/pipeline 的主路径与错误路径 smoke 用例 |
-| 覆盖率（D2 已达标） | **工具口径（`check_coverage.sh`）总 82.87%（5210/6287，门禁 ≥80%、达标）**；库层行覆盖率 **91.79%（3779/4117，门限 ≥88%）**；`coverage analyze` 未覆盖行 **635**（Linux 估算 ~662，CI 阈值 780 + 20 = 800，余量 ~138）；门禁脚本 `scripts/check_coverage.sh`（CI `coverage` job，`--total-threshold 80`） |
+| 覆盖率 | **工具口径（`check_coverage.sh`）总 82.87%（5210/6287，门禁 ≥80%）**；库层行覆盖率 **91.79%（3779/4117，门限 ≥88%）**；`coverage analyze` 未覆盖行 **635**（Linux 估算 ~662，CI 阈值 780 + 20 = 800，余量 ~138）；门禁脚本 `scripts/check_coverage.sh`（CI `coverage` job，`--total-threshold 80`） |
 | 公开 API 文档覆盖 | `scripts/check_api_docs.sh --threshold 95 --max-gap 0`（CI `check` job）：从 `.mbti` 解析 pub 符号并核对源码 `///` 覆盖；当前 **132/132 = 100%**（阈值 ≥95%、未文档符号 0） |
 | 合成流闭环 | 合成 OpusHead+OpusTags+音频包 → Ogg → remux → inspect 读回（`mp4/mp4_wbtest.mbt`） |
 | 外部对账 | `scripts/verify_mp4.sh`：真实样本 remux 后 ffprobe 断言编码/声道/采样率/时长，ffmpeg 解码无错 |

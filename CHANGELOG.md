@@ -13,7 +13,7 @@
 
 ## [0.9.4] — 2026-11-13
 
-> 验收整改版：Vorbis gate v3（内存 + CPU 双预算）、CLI / 解析边界修复、发布治理与发布记录、CI 11 门禁、D2 覆盖率达标（82.87%）。发布记录见 [docs/releases/v0.9.4.md](docs/releases/v0.9.4.md)。
+> 0.9.4 发布：Vorbis 解码 gate、CLI / 解析边界修复、发布流程与记录、CI 门禁、覆盖率 82.87%。发布记录见 [docs/releases/v0.9.4.md](docs/releases/v0.9.4.md)。
 
 ### Added
 

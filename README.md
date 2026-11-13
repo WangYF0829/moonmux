@@ -1,4 +1,4 @@
-> 作者：WangYF0829（王轶凡）｜创建日期：2026-10-13｜用途：moonmux 项目文档
+﻿> 作者：WangYF0829（王轶凡）｜创建日期：2026-10-13｜用途：moonmux 项目文档
 
 # moonmux
 
@@ -12,7 +12,7 @@
 
 ## 2026-11 更新（v0.9.4）
 
-项目当前版本 **v0.9.4**（2026-11-13，验收整改版：Vorbis gate v3、CI 11 门禁、D2 覆盖率 82.87%、发布治理与安装证据）。主要能力与发布里程碑：
+项目当前版本 **v0.9.4**（2026-11-13 发布）：Vorbis 解码 gate、CLI/解析边界修复、CI 门禁、覆盖率与发布材料。主要能力与发布里程碑：
 
 | 项 | 状态 |
 |---|---|
@@ -32,10 +32,10 @@
 | **补丁（v0.9.1）**：`mux` 的 `manifest.txt` 为目录/管道/设备时按 I/O 错误退出 2；平台专属 8.3 短名测试 | **已完成（v0.9.1）** |
 | **安全/资源边界修复（v0.9.2）**：MP4 stts/stsz 先校验后分配（C-01/H-02）、co64 64 位偏移校验、inspect 缺 mvhd/stsz 高位拒绝；Ogg 重同步零拷贝 CRC + 确定性预算（H-01）；解码前统一 gate + 按解码工作量估算 PCM 预算（H-03/H-04）；extract --force 收紧（H-05）；demux 清单先行（H-06）；发布包内容门禁（H-07） | **已完成（v0.9.2）** |
 | **仓库整理（v0.9.3）**：源码注释与文档中的内部语料路径改为中性描述；发布包门禁改白名单；无行为变更 | **已完成（v0.9.3）** |
-| **验收整改（v0.9.4）**：Vorbis gate v3（内存 + CPU 双预算）、CLI/解析边界修复、CI 11 门禁、D2 覆盖率 82.87%、发布治理（RELEASING/发布记录/NOTICE/SBOM/PII） | **已完成（v0.9.4）** |
+| **安全加固与门禁完善（v0.9.4）**：Vorbis gate v3（内存 + CPU 双预算）、CLI/解析边界修复、CI 11 门禁、D2 覆盖率 82.87%、发布治理（RELEASING/发布记录/NOTICE/SBOM/PII） | **已完成（v0.9.4）** |
 | 测试 / 示例 / 文档 / CHANGELOG / **v0.9.4 发布（mooncakes + GitHub Release）** | **已完成** |
 
-- **已可用（最新发布 v0.9.4）**：`moon add WangYF0829/moonmux` 安装 **v0.9.4**（2026-11-13 验收整改版：安全 gate v3、CI 门禁、覆盖率 82.87%；v0.9.2 为安全/资源边界修复：MP4 表校验先于分配、Ogg 重同步预算、解码前 gate 与工作量预算、`extract --force` 收紧、demux 清单提交点、发布包门禁等；此前 v0.9.0 补 MP4 编辑列表与 `roll`、WAV `fact`、页校验、CLI 契约、2 GiB 闸门；v0.8.0 修复 TOC/remux 闸门/MP4 读侧，v0.7.x 提供 WAV 块保真与 `WavWriter`，v0.6.0 性能基准与变异测试，v0.5.0 `to-ogg` 解封装，v0.4.0 WAV 全格式与流式页读取）。
+- **已可用（最新发布 v0.9.4）**：`moon add WangYF0829/moonmux` 安装 **v0.9.4**（2026-11-13 发布：Vorbis 解码 gate、CI 门禁、覆盖率 82.87%；v0.9.2 为安全/资源边界修复：MP4 表校验先于分配、Ogg 重同步预算、解码前 gate 与工作量预算、`extract --force` 收紧、demux 清单提交点、发布包门禁等；此前 v0.9.0 补 MP4 编辑列表与 `roll`、WAV `fact`、页校验、CLI 契约、2 GiB 闸门；v0.8.0 修复 TOC/remux 闸门/MP4 读侧，v0.7.x 提供 WAV 块保真与 `WavWriter`，v0.6.0 性能基准与变异测试，v0.5.0 `to-ogg` 解封装，v0.4.0 WAV 全格式与流式页读取）。
 - 变更明细见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 5 分钟上手
@@ -238,7 +238,7 @@ CI 的 11 个 job 在每次 push / PR（ubuntu + windows 矩阵）执行下列�
 | 编译 / 格式 / 包信息 | `moon check --deny-warn`（含 `--target all --frozen`）、`moon fmt --check`、`moon info --frozen` | 0 error / 0 warning |
 | 测试矩阵 | `moon test --deny-warn --target all` | native **475/475**、wasm-gc **425/425**、js **425/425**（wasm 0 测试） |
 | 公开 API 文档覆盖（D6） | `bash scripts/check_api_docs.sh --threshold 95 --max-gap 0`（`check` job，Linux） | **132/132 = 100%**（阈值 ≥95%、未文档符号 0） |
-| 覆盖率（D2 已达标） | `moon coverage analyze`（未覆盖行 ≤ 780 + 20）+ `bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80`（`coverage` job） | **工具口径总 82.87%**（5210/6287，门禁 ≥80%）、库层行覆盖率 **91.79%**（3779/4117，≥88%）、未覆盖行 **635**（Linux 估算 ~662 < 800） |
+| 覆盖率 | `moon coverage analyze`（未覆盖行 ≤ 780 + 20）+ `bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80`（`coverage` job） | **工具口径总 82.87%**（5210/6287，门禁 ≥80%）、库层行覆盖率 **91.79%**（3779/4117，≥88%）、未覆盖行 **635**（Linux 估算 ~662 < 800） |
 | API 兼容性 | `bash scripts/check_api_diff.sh --target-all`（对上一发布 tag 的逐包 `.mbti` diff，并校验 native/wasm/wasm-gc/js 接口一致；0 = 仅新增/白名单，1 = 破坏性） | exit 0（本轮无破坏性变更） |
 | 包内容 / 供应链 | `check_package.sh`（清单/体积/worktree/密钥）、`check_pii.sh`（PII）、`gen_sbom.sh`（SBOM 归档） | exit 0 |
 | 性能 / 变异 / 端到端 | `bench.mjs --baseline`（阈值 + 4 ms 噪声下限 + 平台守卫）、`fuzz.mjs`（固定种子 400 次）、`smoke.sh`（66 项断言）、Windows smoke、mp4 ffprobe 对账 | 全部通过 |
@@ -444,12 +444,12 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 
 ## 开发状态
 
-当前最新版本为 **v0.9.4**（2026-11-13，验收整改版）。版本历程：v0.2.0（2026-10-23）→ v0.3.0–v0.3.2（2026-11-07：MP4 写入、`remux`、CRC 查表）→ v0.4.0（2026-11-09：WAV 全格式与流式页读取）→ v0.5.0（2026-11-09：MP4 → Ogg 解封装 `to-ogg`）→ v0.6.0（2026-11-09：性能基准与变异测试）→ v0.7.0（2026-11-09：WAV 块保真与 `WavWriter`）→ v0.7.1（2026-11-09：文档同步）→ v0.8.0（2026-11-10：正确性修复）→ v0.9.0（2026-11-10：正确性/契约修复）→ v0.9.1（2026-11-10：清单 I/O 退出码修复）→ v0.9.2（2026-11-11：安全/资源边界修复）→ v0.9.3（2026-11-12：仓库整理）→ v0.9.4（2026-11-13：验收整改：安全 gate v3、CI 门禁、覆盖率 82.87%）。
+当前最新版本为 **v0.9.4**（2026-11-13 发布；安全加固与门禁完善）。版本历程：v0.2.0（2026-10-23）→ v0.3.0–v0.3.2（2026-11-07：MP4 写入、`remux`、CRC 查表）→ v0.4.0（2026-11-09：WAV 全格式与流式页读取）→ v0.5.0（2026-11-09：MP4 → Ogg 解封装 `to-ogg`）→ v0.6.0（2026-11-09：性能基准与变异测试）→ v0.7.0（2026-11-09：WAV 块保真与 `WavWriter`）→ v0.7.1（2026-11-09：文档同步）→ v0.8.0（2026-11-10：正确性修复）→ v0.9.0（2026-11-10：正确性/契约修复）→ v0.9.1（2026-11-10：清单 I/O 退出码修复）→ v0.9.2（2026-11-11：安全/资源边界修复）→ v0.9.3（2026-11-12：仓库整理）→ v0.9.4（2026-11-13：安全加固与门禁完善）。
 
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测）、**MP4/ISOBMFF 写入（Opus-in-MP4，`remux`）与解封装（`to-ogg`）**，
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` / `chop` / `remux` / `to-ogg` 十五个子命令，
-**475 个测试通过**（Windows x64 本地实测：native 475/475、wasm-gc 425/425、js 425/425；`wasm` 后端 0 个测试、不在 `supported_targets`），覆盖率 **工具口径总 82.87%（5210/6287，CI 门禁 ≥80%，D2 已达标）、库层行覆盖率 91.79%（3779/4117，≥88%）**；未覆盖行 **635**、Linux 估算 ~662（CI 阈值 780+20 = 800），**公开 API 文档覆盖 132/132 = 100%**（D6 门禁 ≥95%），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+**475 个测试通过**（Windows x64 本地实测：native 475/475、wasm-gc 425/425、js 425/425；`wasm` 后端 0 个测试、不在 `supported_targets`），覆盖率 **工具口径总 82.87%（5210/6287，CI 门禁 ≥80%）、库层行覆盖率 91.79%（3779/4117，≥88%）**；未覆盖行 **635**、Linux 估算 ~662（CI 阈值 780+20 = 800），**公开 API 文档覆盖 132/132 = 100%**（D6 门禁 ≥95%），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）、转码验证、Ogg→MP4 外部工具（ffprobe/ffmpeg）对账与 MP4→Ogg 逐包还原验证。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`native` / `wasm-gc` / `js` 后端（覆盖矩阵见上文「支持矩阵」）；
@@ -459,7 +459,7 @@ GitHub Actions CI（11 个 job：check/fmt/info/test × 2 OS + target-all + **AP
 变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.0 / v0.3.1 / v0.3.2 / v0.4.0 / v0.5.0 / v0.6.0 / v0.7.0 / v0.7.1 / v0.8.0 / v0.9.0 / v0.9.1 / v0.9.2 / v0.9.3 / v0.9.4）。
 发布流程与回滚预案见 [RELEASING.md](RELEASING.md)；v0.9.4 的 commit / tag / 工具链 / **zip sha256** / gate 结果见 [docs/releases/v0.9.4.md](docs/releases/v0.9.4.md)（历史 v0.9.3 见 [docs/releases/v0.9.3.md](docs/releases/v0.9.3.md)），**G1-01 冷装抽样证据**（30/30 = 100%，中位 1980 ms）见 [docs/releases/v0.9.3-install-sampling.md](docs/releases/v0.9.3-install-sampling.md)；**依赖维护性评估**（G1-B2 = DEGRADED，含退出预案与工具链 pin 结论）见 [docs/dependency-assessment.md](docs/dependency-assessment.md)；**已知问题与残余风险**（KI-01..05，含 moonvorbis 上游 issue 草稿）见 [docs/known-issues.md](docs/known-issues.md)；**历史 PII 风险接受**见 [docs/security/pii-advisory.md](docs/security/pii-advisory.md)；第三方依赖许可见 [THIRD_PARTY.md](THIRD_PARTY.md) 与 [NOTICE](NOTICE)。
 
-主要新增能力（v0.3.0–v0.9.4）：MP4 / ISOBMFF 封装（Opus-in-MP4）与 `remux`、MP4 → Ogg 解封装 `to-ogg`（读写闭环）；CRC-32 查表优化；WAV 全格式兼容（IEEE float / Extensible / 24-in-4）与增量流式页读取；性能基准与确定性变异测试；WAV 块保真与流式写接口 `WavWriter`；v0.8.0 的 Opus TOC / remux 闸门 / MP4 读侧 / stsz / 多声道头 / granule / dOps gain / 头包页隔离 / 跨页替换 / WAV fmt 布局等正确性修复，v0.9.0/v0.9.1 的 MP4 编辑列表 / WAV fact / 页校验 / CLI 契约 / 2 GiB 闸门 / 清单 I/O 退出码等，v0.9.2 的分配前 Int64 上界 / 重同步预算 / 解码前 gate 与工作量预算 / 写路径安全收紧，以及 v0.9.3 的仓库整理、v0.9.4 的验收整改（Vorbis gate v3 双预算、CLI/解析边界修复、CI 11 门禁、覆盖率 82.87%）。
+主要新增能力（v0.3.0–v0.9.4）：MP4 / ISOBMFF 封装（Opus-in-MP4）与 `remux`、MP4 → Ogg 解封装 `to-ogg`（读写闭环）；CRC-32 查表优化；WAV 全格式兼容（IEEE float / Extensible / 24-in-4）与增量流式页读取；性能基准与确定性变异测试；WAV 块保真与流式写接口 `WavWriter`；v0.8.0 的 Opus TOC / remux 闸门 / MP4 读侧 / stsz / 多声道头 / granule / dOps gain / 头包页隔离 / 跨页替换 / WAV fmt 布局等正确性修复，v0.9.0/v0.9.1 的 MP4 编辑列表 / WAV fact / 页校验 / CLI 契约 / 2 GiB 闸门 / 清单 I/O 退出码等，v0.9.2 的分配前 Int64 上界 / 重同步预算 / 解码前 gate 与工作量预算 / 写路径安全收紧，以及 v0.9.3 的仓库整理、v0.9.4 的安全加固与门禁完善（Vorbis gate、CLI/解析边界修复、CI 门禁、覆盖率 82.87%）。
 仍不做：WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器，边界与原因见上）。
 
 ## 许可证

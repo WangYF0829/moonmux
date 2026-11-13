@@ -1,4 +1,4 @@
-# 发布流程（RELEASING）
+﻿# 发布流程（RELEASING）
 
 > 面向对象：moonmux 发布负责人 / 复核人。
 > 适用范围：mooncakes.io（`WangYF0829/moonmux`）与 GitHub Release。
@@ -22,7 +22,7 @@
       `docs/architecture.md` 版本行、CHANGELOG `[Unreleased]` 与顶部版本条目、`git describe --tags`（以脚本实际内容为准）。
 - [ ] **工作区干净**：`git status --porcelain` 为空；`git ls-files` 中无 `_build/`、`*.mbti`、`pkg.generated.mbti`、日志。
 - [ ] **质量门禁**：`moon check --deny-warn`、`moon fmt --check`、`moon test --deny-warn --target all`
-      （当前基线：native 475/475、wasm-gc 425/425、js 425/425；覆盖率工具口径总 82.87%（5210/6287，D2 ≥80% 已达标）、库层 91.79%（≥88%）、未覆盖行 635 / Linux 估算 ~662）全部退出 0。
+      （当前基线：native 475/475、wasm-gc 425/425、js 425/425；覆盖率工具口径总 82.87%（5210/6287，门限 ≥80%）、库层 91.79%（≥88%）、未覆盖行 635 / Linux 估算 ~662）全部退出 0。
 - [ ] **发布前一键预检**：`bash scripts/preflight_release.sh` → 退出码 0（PASS/FAIL 汇总表）；要求 **clean worktree**，
       发布演练/整改期可用 `--allow-dirty`；快速门禁用 `--skip-bench` / `--skip-fuzz` / `--skip-smoke`；
       覆盖：工具链记录 / worktree / 版本一致性 / 格式 / check / test all / api-diff / api-docs / 覆盖率（总 ≥80%）/ PII / 包内容 / SBOM / bench / fuzz / smoke。
@@ -31,7 +31,7 @@
 - [ ] **API 文档覆盖门禁（D6）**：`bash scripts/check_api_docs.sh --threshold 95 --max-gap 0` → 退出码 0；
       当前 **132/132 = 100%** pub 符号有 `///`（阈值 ≥95%、未文档符号 0；登记例外时才放宽 `--max-gap 1`）。CI `check` job 已接线。
 - [ ] **覆盖率门禁**：`bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80` → 退出码 0；
-      当前工具口径总覆盖率 **82.87%**（5210/6287，**≥80% 门禁，D2 已达标**）、库层行覆盖率 **91.79%**（≥88%），另有未覆盖行 ≤ 780+20 的非回归门禁（当前 635 / Linux 估算 ~662）。CI `coverage` job 已接线（阈值 80）。
+      当前工具口径总覆盖率 **82.87%**（5210/6287，**门限 ≥80%**）、库层行覆盖率 **91.79%**（≥88%），另有未覆盖行 ≤ 780+20 的非回归门禁（当前 635 / Linux 估算 ~662）。CI `coverage` job 已接线（阈值 80）。
 - [ ] **包内容门禁**：`bash scripts/check_package.sh` 退出码 0（`moon package --list` 与 `git ls-files` 差集、worktree 干净、
       文件数 / 体积基线、禁止路径与密钥模式）；同时人工确认无 `_build/`、`*.mbti`、`pkg.generated.mbti`、`*.log`、`*.zip`、`out/`、`tmp/`、`*.bak`。
 - [ ] **敏感信息 / PII 扫描**：`bash scripts/check_pii.sh`（手机号 / 邮箱 / 凭据正则）无命中；`git grep` 扫 `ghp_` / `sk-` / `AKIA` 无命中。
@@ -163,7 +163,7 @@ moon deprecate WangYF0829/moonmux --undo
 | bench 跨平台不可直接比较 | Linux CI 与 Windows 基线的绝对耗时不同 | 平台守卫：平台不匹配只 WARN；CI 共享 runner 放宽到 50%，本地/专用 runner 用 10% |
 | bench 噪声（小操作 / I/O） | ~15–22 ms 操作受进程启动抖动影响；`demux` I/O 抖动 ±10 ms | 小操作绝对值下限 4 ms；基线取多轮 min 上界；`demux` 取 6 次测量上界 80.0 ms（见 `threshold_policy`） |
 | `moon publish --dry-run` 退出码语义（moon 0.1.20261012） | 409（已发布）/ 202（未发布）均可能非零退出 | 以服务器返回文本判定（§2）；CI `publish-dry-run` job 已按此接线 |
-| 覆盖率 CI 阈值余量 | Windows 未覆盖行 **635** ≤ 780；Linux 估算 **~662** < 800，余量 ~138 行（D2 总覆盖 82.87% 已达标 ≥80%） | qa 持续补测降低未覆盖行；新增防御分支须同步补测试 |
+| 覆盖率 CI 阈值余量 | Windows 未覆盖行 **635** ≤ 780；Linux 估算 **~662** < 800，余量 ~138 行（总覆盖 82.87%，门限 ≥80%） | qa 持续补测降低未覆盖行；新增防御分支须同步补测试 |
 | G1-B2 依赖维护性 = **DEGRADED** | 3/3 依赖近 12 个月有发布且未弃用、但 3/3 无 SECURITY.md、2/3 bus factor=1 且无接管预案；`moonvorbis` 有 `unsafe_get` 上游缺陷 | 已登记并给出退出预案（fork/替换/降级）与安全披露渠道评估，见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md)；KI-01 跟踪上游 issue；发布记录注明该状态 |
 | 工具链无法固定到具体版本 | installer 支持版本参数，但**固定版本下载 URL 全线 403**（latest 200），CI 只能跟随 latest | 维持「latest + 每个 job 记录 `moon version --all`」；发布记录固定工具链版本；结论与复验命令见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md) |
 | 历史发布包 PII（0.2.0–0.9.1） | 作者联系方式存在于不可撤回的历史版本与 git 历史 | 已接受风险并发布公告：[`docs/security/pii-advisory.md`](docs/security/pii-advisory.md) + [`docs/known-issues.md`](docs/known-issues.md) KI-03；当前版本已干净，`check_pii.sh` 纳入发布检查单 |
