@@ -92,7 +92,7 @@
 | **zip sha256** | 完整哈希（同时写入 GitHub Release 附件 / body） |
 | 注册表校验 | `moon view WangYF0829/moonmux --json` 的 `metadata.checksum` 与本地复算值 |
 | CI run | run id / head_sha / job 数（当前 11）/ 结论 / 链接 |
-| 各 gate 结果 | check / fmt / test（target 数）/ **API 文档覆盖 132/132** / coverage（分支% / 行口径总% / 库层% / 未覆盖行）/ smoke / mp4 / install / **api-diff（--target-all）** / **bench（基线对比）** / fuzz / package-list |
+| 各 gate 结果 | check / fmt / test（target 数）/ **API 文档覆盖 133/133** / coverage（分支% / 行口径总% / 库层% / 未覆盖行）/ smoke / mp4 / install / **api-diff（--target-all）** / **bench（基线对比）** / fuzz / package-list |
 | 可复现性 | 保留工作区字节是否可复现；标准 checkout 的 sha256 与差异文件清单 |
 | API 基线 | `.mbti` 基线归档位置（见 §8） |
 | SBOM / 归档 | `gen_sbom.sh` 输出目录（moon tree / moon.mod / 工具链 / artifact sha256） |
