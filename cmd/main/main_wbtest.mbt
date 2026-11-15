@@ -1426,3 +1426,89 @@ test "run_chop trims a single stream" {
   assert_eq(sp[0], 1U)
   reset_test_dir(dir)
 }
+
+///|
+/// `\\.\` 设备命名空间里只有盘符形式可以归一化；管道/卷设备必须原样保留，
+/// 由路径参数入口 `normalize_cli_path` 拒绝（不能剥成 CWD 相对路径）。
+#cfg(platform="windows")
+test "device namespace prefixes: drive form stripped, pipe form preserved" {
+  assert_eq(strip_extended_prefix("\\\\.\\C:\\tmp\\a.ogg"), "C:\\tmp\\a.ogg")
+  assert_eq(strip_extended_prefix("\\\\.\\pipe\\x.ogg"), "\\\\.\\pipe\\x.ogg")
+  assert_eq(
+    strip_extended_prefix("\\\\?\\Volume{0123}\\x.ogg"),
+    "\\\\?\\Volume{0123}\\x.ogg",
+  )
+  assert_eq(
+    strip_extended_prefix("\\\\?\\GLOBALROOT\\Device\\x.ogg"),
+    "\\\\?\\GLOBALROOT\\Device\\x.ogg",
+  )
+  // UNC 关键字大小写不敏感；只有带共享路径时才剥离
+  assert_eq(
+    strip_extended_prefix("\\\\?\\UNC\\srv\\share\\a.ogg"),
+    "\\\\srv\\share\\a.ogg",
+  )
+  assert_eq(
+    strip_extended_prefix("\\\\?\\unc\\srv\\share\\a.ogg"),
+    "\\\\srv\\share\\a.ogg",
+  )
+  assert_eq(strip_extended_prefix("\\\\?\\UNC\\"), "\\\\?\\UNC\\")
+  assert_false(has_unsupported_device_prefix("\\\\.\\C:\\tmp\\a.ogg"))
+  assert_true(has_unsupported_device_prefix("\\\\.\\pipe\\x.ogg"))
+  assert_true(has_unsupported_device_prefix("\\\\.\\PhysicalDrive0"))
+  assert_true(has_unsupported_device_prefix("\\\\.\\"))
+  assert_true(has_unsupported_device_prefix("\\\\?\\Volume{0123}\\x.ogg"))
+  assert_true(has_unsupported_device_prefix("\\\\?\\GLOBALROOT\\Device\\x.ogg"))
+  assert_true(has_unsupported_device_prefix("\\\\?\\pipe\\x.ogg"))
+  assert_true(has_unsupported_device_prefix("\\\\?\\"))
+  // 可安全解释的扩展前缀不触发拒绝
+  assert_false(has_unsupported_device_prefix("\\\\?\\C:\\tmp\\a.ogg"))
+  assert_false(has_unsupported_device_prefix("\\\\?\\UNC\\srv\\share\\a.ogg"))
+  assert_false(has_unsupported_device_prefix("\\\\?\\unc\\srv\\share\\a.ogg"))
+  assert_false(has_unsupported_device_prefix("C:\\tmp\\a.ogg"))
+  assert_false(has_unsupported_device_prefix("a.ogg"))
+  // 路径参数规范化：合法前缀被剥离，文本参数不经过这里
+  assert_eq(normalize_cli_path("\\\\?\\C:\\tmp\\a.ogg"), "C:\\tmp\\a.ogg")
+  assert_eq(normalize_cli_path("\\\\.\\C:\\tmp\\a.ogg"), "C:\\tmp\\a.ogg")
+  assert_eq(
+    normalize_cli_path("\\\\?\\unc\\srv\\share\\a.ogg"),
+    "\\\\srv\\share\\a.ogg",
+  )
+}
+
+///|
+/// POSIX 上没有 Windows 设备命名空间语义：任何前缀都不该被拒绝/改写。
+#cfg(not(platform="windows"))
+test "device namespace rejection is Windows-only" {
+  assert_false(has_unsupported_device_prefix("\\\\.\\pipe\\x.ogg"))
+  assert_eq(
+    strip_extended_prefix("\\\\.\\C:\\tmp\\a.ogg"),
+    "\\\\.\\C:\\tmp\\a.ogg",
+  )
+  assert_eq(
+    strip_extended_prefix("\\\\?\\Volume{0123}\\x.ogg"),
+    "\\\\?\\Volume{0123}\\x.ogg",
+  )
+  assert_eq(
+    normalize_cli_path("\\\\?\\C:\\tmp\\a.ogg"),
+    "\\\\?\\C:\\tmp\\a.ogg",
+  )
+}
+
+///|
+/// MAX_PATH 提示边界：总长 260 字符（Win32 传统路径已越界）必须给提示，
+/// 259 字符（可写）保持安静。
+#cfg(platform="windows")
+test "long path hint boundary is exactly 260" {
+  let mut tail257 : String = ""
+  while tail257.length() < 257 {
+    tail257 = tail257 + "a"
+  }
+  // "C:\"（3 字符）+ 257 = 260 字符
+  let p260 = "C:\\" + tail257
+  assert_eq(p260.length(), 260)
+  assert_true(long_path_hint(p260).length() > 0)
+  // "C:\" + 256 = 259 字符
+  let p259 = "C:\\" + tail257[0:256].to_owned()
+  assert_eq(p259.length(), 259)
+  assert_eq(long_path_hint(p259), "")
+}

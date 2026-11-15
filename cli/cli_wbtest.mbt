@@ -566,3 +566,21 @@ test "unknown option prints the subcommand usage" {
     _ => assert_true(false)
   }
 }
+
+///|
+/// 子命令级帮助识别：15 个功能子命令都算已知，未知子命令/help/version 不算
+/// （`moonmux <cmd> --help` 只对真实命令打印用法并 exit 0）。
+test "is_known_command recognizes exactly the 15 functional subcommands" {
+  let known = [
+    "info", "demux", "mux", "cat", "split", "extract", "dump", "tags", "tag", "seek",
+    "verify", "to-wav", "chop", "remux", "to-ogg",
+  ]
+  for c in known {
+    assert_true(is_known_command(c))
+  }
+  assert_false(is_known_command("bogus"))
+  assert_false(is_known_command("--help"))
+  assert_false(is_known_command("help"))
+  assert_false(is_known_command("version"))
+  assert_false(is_known_command(""))
+}

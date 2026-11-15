@@ -306,6 +306,11 @@ fn VorbisCodebook::alloc_bytes(self : VorbisCodebook) -> Int64 {
 /// 数组字段与 setup 段一一对应（下标即段序号），pipeline 用它们推导
 /// 「每包 Huffman 符号数上界」——floor/residue 的每个参数都来自已校验的
 /// setup，不会出现「预算按结构猜、解码按另一套参数读」的偏差。
+///
+/// **稳定性说明（v0.9.4 起明确）**：本结构是解码器内部布局的镜像，属**低层接口**。
+/// 0.x 阶段它随 setup 校验增强而扩字段/改名（不构成 patch 级契约）；调用方如需
+/// 长期稳定，请只依赖 `parse_vorbis_setup_info` 的整体校验结果与预算数值
+/// （`decoder_setup_bytes` / `huffman_work_upper`），不要序列化或持久化本结构。
 pub(all) struct VorbisSetupInfo {
   channels : Int32
   codebooks : Int32

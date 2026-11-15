@@ -253,7 +253,7 @@ if [ "$TARGET_ALL" -eq 1 ]; then
     log "BREAKING: 当前树存在后端间公开接口不一致："
     sed -n '/diverging interfaces/,$p' "$CUR_LOG" | sed -n '1,80p'
   else
-    log "PASS: native / wasm / wasm-gc / js 各后端公开接口一致（无 diverging interfaces 报告）"
+    log "PASS: 声明的 native / wasm-gc / js 后端公开接口一致（wasm 不在 supported_targets、无包，moon info 的 wasm 告警为空真；无 diverging interfaces 报告）"
   fi
 else
   log "== 3/4 后端接口一致性 =="

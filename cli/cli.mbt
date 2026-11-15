@@ -153,6 +153,29 @@ pub fn usage_for(topic : String) -> String {
 }
 
 ///|
+/// 判断是否为已知的可执行子命令（15 个功能命令之一）。
+///
+/// 用于 `<cmd> --help` / `<cmd> -h` 识别：已知子命令打印该命令用法并以 0 退出，
+/// 未知子命令仍按用法错误处理（exit 2），避免把拼错的命令当成功帮助。
+pub fn is_known_command(topic : String) -> Bool {
+  topic == "info" ||
+  topic == "demux" ||
+  topic == "mux" ||
+  topic == "cat" ||
+  topic == "split" ||
+  topic == "extract" ||
+  topic == "dump" ||
+  topic == "tags" ||
+  topic == "tag" ||
+  topic == "seek" ||
+  topic == "verify" ||
+  topic == "to-wav" ||
+  topic == "chop" ||
+  topic == "remux" ||
+  topic == "to-ogg"
+}
+
+///|
 /// 参数个数不符时的统一报错文本。`got` / `want` 均不含子命令本身。
 fn arity_msg(sub : String, got : Int32, want : Int32) -> String {
   sub +

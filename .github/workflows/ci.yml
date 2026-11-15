@@ -7,7 +7,7 @@ on:
       - '**.md'
       - 'LICENSE'
       - '.gitignore'
-      - '.moonignore'
+      # 注意：`.moonignore` 不能忽略 —— 它直接决定 `moon package` 的发布内容。
   pull_request:
   workflow_dispatch:
 
@@ -37,6 +37,8 @@ env:
   # 阈值 730→780，配合 20 行容差，上限 800。
   # 2026-11-13 第 7 轮补测后裁决：Windows uncovered=635（干净副本实测，native 475 测试），
   # 注释估算 Linux ≈662 < 800（余量 ~138）；qa-gate 补测目标 ≤745 已达成（635）。
+  # 2026-11-15 路径/帮助加固后 native 480（Windows）/ 478（Linux），未覆盖行预计小幅上升，
+  # 仍低于 780 + 20 容差上限；若 CI 实测超限，按流程补测而不是放宽阈值。
   # **阈值不放宽**（MAX_UNCOVERED_LINES=780 + TOLERANCE=20 保持不变；库层/总覆盖率门禁：库层 ≥88%、总 ≥80%，第 7 轮整改后实测总 ≈82.7%）；
   # 若 Linux 实测仍超限，仅在本注释记录实测值与余量风险，不在本修复轮调阈值。
   MAX_UNCOVERED_LINES: 780
@@ -116,6 +118,10 @@ jobs:
       - name: moon fmt --check
         run: moon fmt --check
 
+      - name: moon doc
+        if: runner.os == 'Linux'
+        run: moon doc
+
       - name: moon info
         run: moon info --frozen
 
@@ -161,7 +167,7 @@ jobs:
           # `moon package` 会先打印 "Package to .../_build/..." 日志行，先滤掉非清单行
           moon package --list --frozen 2>&1 | grep -Ev '^(Package to|Check passed|Finished|Running|Building)' | sed 's#\\#/#g' | tee /tmp/pkglist.log
           # 白名单：只允许项目源码/文档/测试数据路径进包（新增目录需在此显式登记）
-          bad=$(grep -Ev '^(CHANGELOG\.md|LICENSE|NOTICE|README\.md|RELEASING\.md|THIRD_PARTY\.md|moon\.mod|moon\.pkg|moonmux\.mbt|moonmux_wbtest\.mbt|项目申报书\.md|docs/|scripts/|testdata/|examples/|cmd/|cli/|codec/|manifest/|mp4/|ogg/|pipeline/|wav/)' /tmp/pkglist.log || true)
+          bad=$(grep -Ev '^(CONTRIBUTING\.md|SECURITY\.md|CHANGELOG\.md|LICENSE|NOTICE|README\.md|RELEASING\.md|THIRD_PARTY\.md|moon\.mod|moon\.pkg|moonmux\.mbt|moonmux_wbtest\.mbt|项目申报书\.md|docs/|scripts/|testdata/|examples/|cmd/|cli/|codec/|manifest/|mp4/|ogg/|pipeline/|wav/)' /tmp/pkglist.log || true)
           if [ -n "$bad" ]; then
             echo "package contains unexpected paths:"
             echo "$bad"
@@ -331,7 +337,7 @@ jobs:
           fi
 
       # 库层/总覆盖率门禁（行覆盖率口径）：复用上一步 `moon coverage analyze` 生成的 trace
-      # （--no-run 不重复跑测试，约 +1s）：库层 >=88%、总覆盖率 >=75%。
+      # （--no-run 不重复跑测试，约 +1s）：库层 >=88%、总覆盖率 >=80%。
       - name: Library / total coverage gate
         shell: bash
         run: bash scripts/check_coverage.sh --no-run --target-dir _build --lib-threshold 88 --total-threshold 80
@@ -453,17 +459,17 @@ jobs:
 
       - name: Verify clean-project install
         env:
-          MOONMUX_INSTALL_VERSION: "0.9.4"
+          MOONMUX_INSTALL_VERSION: "0.9.5"
         run: |
           # 版本 bump 提交可能先于发布到达：轮询等待 mooncakes 出现该版本
           for i in $(seq 1 30); do
             if bash scripts/install_check.sh; then
               exit 0
             fi
-            echo "等待 mooncakes 上的 0.9.4（第 $i 次，最多 30 次）"
+            echo "等待 mooncakes 上的 0.9.5（第 $i 次，最多 30 次）"
             sleep 5
           done
-          echo "mooncakes 上仍未出现可安装的 0.9.4"
+          echo "mooncakes 上仍未出现可安装的 0.9.5"
           exit 1
 
   # 发布预检：只在"打包 + 解包 + 干净工程 check"层面验证，不会真实上传。

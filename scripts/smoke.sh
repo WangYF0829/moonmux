@@ -95,7 +95,7 @@ if [ ! -x "$BIN" ]; then
 fi
 
 echo "== 0. 版本与输出类型防护 =="
-check_stdout 0 "moonmux 0.9.4" "version 与模块版本一致（0.9.4）" "$BIN" version
+check_stdout 0 "moonmux 0.9.5" "version 与模块版本一致（0.9.5）" "$BIN" version
 "$BIN" extract testdata/opus_sample.opus 1 "$TMP" >/dev/null 2>&1
 [ $? -eq 2 ]; check $? "目录作为输出路径被拒绝（2）"
 
@@ -128,9 +128,11 @@ check_error_streams 2 "多余参数 → 2（不被静默忽略）" "$BIN" info t
 check_error_streams 2 "缺必需参数 → 2" "$BIN" demux testdata/opus_sample.opus
 check_error_has 2 "用法: moonmux demux" "未知选项的用法提示落到子命令" "$BIN" demux --json a.ogg b
 check_stdout 0 "用法:" "help 成功并把用法写到 stdout" "$BIN" help
-check_stdout 0 "moonmux 0.9.4" "version 输出到 stdout" "$BIN" version
+check_stdout 0 "moonmux 0.9.5" "version 输出到 stdout" "$BIN" version
 check_stdout 0 "用法:" "--help 别名等同 help" "$BIN" --help
-check_stdout 0 "moonmux 0.9.4" "--version 别名等同 version" "$BIN" --version
+check_stdout 0 "moonmux 0.9.5" "--version 别名等同 version" "$BIN" --version
+check_stdout 0 "用法: moonmux info" "子命令 --help 打印该命令用法" "$BIN" info --help
+check_error_streams 2 "未知子命令 + --help 仍按用法错误（2）" "$BIN" frobnicate --help
 
 echo "== 1. 单流往返（逐字节） =="
 "$BIN" demux testdata/opus_sample.opus "$TMP/rt1" >/dev/null 2>&1
@@ -172,6 +174,15 @@ check $? "改过标签的文件结构体检通过"
 ORIG=$(wc -c < testdata/vorbis_sample.ogg)
 NEW=$(wc -c < "$TMP/t.ogg")
 [ "$NEW" -ge "$ORIG" ]; check $? "改标签后文件大小合理（$ORIG → $NEW）"
+# 路径前缀只应对「路径参数」生效；tag 的 KEY=VALUE 是文本，必须原样保留。
+# 若入口对所有 argv 做 `\\?\` 剥离/设备拒绝，这里会改写或误拒文本值。
+"$BIN" tag testdata/vorbis_sample.ogg "$TMP/t2.ogg" \
+  'TITLE=\\.\pipe\literal' 'NOTE=\\?\Volume{0123}\x' >/dev/null 2>&1
+check $? "tag 值里的反斜杠前缀不被当成路径改写/拒绝"
+"$BIN" tags "$TMP/t2.ogg" > "$TMP/t2.txt" 2>&1
+grep -Fq 'TITLE=\\.\pipe\literal' "$TMP/t2.txt" &&
+  grep -Fq 'NOTE=\\?\Volume{0123}\x' "$TMP/t2.txt"
+check $? "tag 值原样保留（设备/扩展前缀）"
 
 echo "== 4b. 转码（解码路径）=="
 # 单测只覆盖容器层；解码器升级后 to-wav 的输出没有任何自动化校验。

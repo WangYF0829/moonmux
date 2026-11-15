@@ -165,9 +165,9 @@ run_step "PII/凭据扫描 check_pii.sh" "$LOG_DIR/pii.log" bash scripts/check_p
 
 # 10) 发布包内容
 if [ "$ALLOW_DIRTY" -eq 1 ]; then
-  run_step "发布包内容 check_package.sh（--allow-dirty）" "$LOG_DIR/package.log" bash scripts/check_package.sh --allow-dirty
+  run_step "发布包内容 check_package.sh（--allow-dirty --strict-repro）" "$LOG_DIR/package.log" bash scripts/check_package.sh --allow-dirty --strict-repro
 else
-  run_step "发布包内容 check_package.sh" "$LOG_DIR/package.log" bash scripts/check_package.sh
+  run_step "发布包内容 check_package.sh（--strict-repro）" "$LOG_DIR/package.log" bash scripts/check_package.sh --strict-repro
 fi
 
 # 11) SBOM（信息性）
@@ -207,7 +207,7 @@ if [ "$SKIP_SMOKE" -eq 1 ]; then
   record SKIP "端到端 smoke" "--skip-smoke"
   printf '\n==> 端到端 smoke: SKIP\n'
 else
-  run_step "端到端 smoke（66 项）" "$LOG_DIR/smoke.log" bash scripts/smoke.sh
+  run_step "端到端 smoke（70 项断言）" "$LOG_DIR/smoke.log" bash scripts/smoke.sh
 fi
 
 # ---------- 汇总 ----------

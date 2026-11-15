@@ -13,7 +13,7 @@
 | `LL728/moonopus` | 0.2.2 | Apache-2.0（+ BSD-3-Clause 表数据） | https://github.com/Xcsa-ee/moonopus | `pipeline/` 的 Ogg Opus 解码（`to-wav` 的 Opus 路径） | ① 含 `LICENSE`（Apache-2.0）与 `LICENSE-LIBOPUS`；② `celt_tables.mbt` / `celt_mode.mbt` 含提取自 [xiph/opus](https://github.com/xiph/opus) 参考实现的表数据，按 **BSD-3-Clause** 使用（RFC 6716 §4.3.3 要求 bit-exact，规范未列出数值）；上游 `COPYING` 全文保留在依赖包内，再分发时须完整携带并保留版权声明；③ **身份链提示**：mooncakes 模块 owner 为 `LL728`，而仓库指向 `Xcsa-ee/moonopus`（`LL728/moonopus` 在 GitHub 为 404），引入/再分发时需注意该 fork/转移关系 |
 | `LL728/moonvorbis` | 0.1.4 | Apache-2.0 | https://github.com/LL728/moonvorbis | `pipeline/` 的 Ogg Vorbis 解码（`to-wav` 的 Vorbis 路径） | 含 `LICENSE`（Apache-2.0）；**已知安全残余**：恶意码流可能触发解码器内存安全问题，`to-wav` 不应直接暴露给不可信输入（见 CHANGELOG `[0.9.2]` 已知残余与 `docs/releases/v0.9.3.md` §6） |
 
-依赖树（`moon tree`，v0.9.3）：
+依赖树（`moon tree`，v0.9.5）：
 
 ```text
 WangYF0829/moonmux@0.9.3

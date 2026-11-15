@@ -1,15 +1,15 @@
-﻿# 发布流程（RELEASING）
+# 发布流程（RELEASING）
 
 > 面向对象：moonmux 发布负责人 / 复核人。
 > 适用范围：mooncakes.io（`WangYF0829/moonmux`）与 GitHub Release。
-> 工具链基线：`moon 0.1.20261012` / `moonc 0.10.15`（v0.9.3 发布验证所用版本；每次发布以 `moon version --all` 实际输出为准并记入发布记录）。
+> 工具链基线：`moon 0.1.20261012` / `moonc 0.10.15`（v0.9.3 / v0.9.4 / v0.9.5 发布验证所用版本；每次发布以 `moon version --all` 实际输出为准并记入发布记录）。
 > 历史发布记录见 [`docs/releases/`](docs/releases/)。
 
 ## 0. 先记住三件事
 
 1. **发布不可撤回**：mooncakes 没有「删除 / 撤回单个版本」的能力，同一版本号不能重发（重复发布会返回 HTTP 409 `duplicated`）；唯一的止损手段是 `moon deprecate WangYF0829/moonmux`（**全模块弃用**）并尽快发修复版。
 2. **发布包由工作区生成**：`moon package` / `moon publish` 打包的是当前工作区文件（含未跟踪文件），`.moonignore` 只负责排除。发布前工作区必须干净。
-3. **可复现性与工作区换行符绑定**：v0.9.3 实测——保留作者工作区字节（4 个文本文件为 CRLF：`LICENSE`、`README.md`、`docs/architecture.md`、`scripts/smoke.sh`）时，`moon package` 产物与已发布 zip **逐字节一致**（sha256 `d374f9cf…5631`，371,067 B）；从 tag 做标准 `git checkout`（`.gitattributes` 的 `* text=auto eol=lf` 把 4 个文件转成 LF）后重建为 370,958 B / `55c6fe7a…2019`，**不可逐字节复现**（内容归一化后一致）。→ 发布前用 `git status --porcelain` 确认干净，并在发布记录中写明所用工作区的换行状态；不要把“标准 checkout 可复现”当默认结论。
+3. **可复现性要求：发布工作区必须与标准 checkout 的字节一致（UTF-8 无 BOM + LF）**。历史发布包（v0.9.3 / v0.9.4）保留了作者工作区的 CRLF/BOM 字节：只有该工作区能逐字节复现，标准 `git checkout`（`.gitattributes` 的 `eol=lf`）不能（v0.9.3 实测 371,067 B vs 370,958 B，sha256 不同）。自本流程起：发布前把跟踪的文本文件规范化为 LF、去除 UTF-8 BOM，并用 `bash scripts/check_package.sh --strict-repro` 验证；打包后再在 tag 的**全新 checkout** 上重跑 `moon package`，两次 zip 的 sha256 必须一致。发布记录同时写明作者工作区与标准 checkout 的 sha256。
 
 ## 1. 发布前检查单（按序执行，全部留档）
 
@@ -22,18 +22,18 @@
       `docs/architecture.md` 版本行、CHANGELOG `[Unreleased]` 与顶部版本条目、`git describe --tags`（以脚本实际内容为准）。
 - [ ] **工作区干净**：`git status --porcelain` 为空；`git ls-files` 中无 `_build/`、`*.mbti`、`pkg.generated.mbti`、日志。
 - [ ] **质量门禁**：`moon check --deny-warn`、`moon fmt --check`、`moon test --deny-warn --target all`
-      （当前基线：native 475/475、wasm-gc 425/425、js 425/425；覆盖率工具口径总 82.87%（5210/6287，门限 ≥80%）、库层 91.79%（≥88%）、未覆盖行 635 / Linux 估算 ~662）全部退出 0。
+      （v0.9.5 实测：native **480/480**（Windows；Linux CI **478**，差 2 项 Windows 专属用例）、wasm-gc **428/428**、js **428/428**；覆盖率 v0.9.5 实测工具口径总 **82.53%**、库层 **91.82%**（3781/4118）；v0.9.4 发布基线为 475/473/425、82.87%/91.79%）全部退出 0。
 - [ ] **发布前一键预检**：`bash scripts/preflight_release.sh` → 退出码 0（PASS/FAIL 汇总表）；要求 **clean worktree**，
       发布演练/整改期可用 `--allow-dirty`；快速门禁用 `--skip-bench` / `--skip-fuzz` / `--skip-smoke`；
       覆盖：工具链记录 / worktree / 版本一致性 / 格式 / check / test all / api-diff / api-docs / 覆盖率（总 ≥80%）/ PII / 包内容 / SBOM / bench / fuzz / smoke。
 - [ ] **API 兼容性门禁**：`bash scripts/check_api_diff.sh --target-all` → 退出码 0（仅新增 / 白名单差异）；
       1 = 出现删除 / 改签名 / 枚举值变化（0.x 下需升 minor 并附迁移说明）；CI `api-diff` job 同语义（已调用 `--target-all`，校验 native/wasm/wasm-gc/js 各后端接口一致）。
 - [ ] **API 文档覆盖门禁（D6）**：`bash scripts/check_api_docs.sh --threshold 95 --max-gap 0` → 退出码 0；
-      当前 **132/132 = 100%** pub 符号有 `///`（阈值 ≥95%、未文档符号 0；登记例外时才放宽 `--max-gap 1`）。CI `check` job 已接线。
+      当前 **133/133 = 100%** pub 符号有 `///`（阈值 ≥95%、未文档符号 0；登记例外时才放宽 `--max-gap 1`）。CI `check` job 已接线。
 - [ ] **覆盖率门禁**：`bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80` → 退出码 0；
-      当前工具口径总覆盖率 **82.87%**（5210/6287，**门限 ≥80%**）、库层行覆盖率 **91.79%**（≥88%），另有未覆盖行 ≤ 780+20 的非回归门禁（当前 635 / Linux 估算 ~662）。CI `coverage` job 已接线（阈值 80）。
-- [ ] **包内容门禁**：`bash scripts/check_package.sh` 退出码 0（`moon package --list` 与 `git ls-files` 差集、worktree 干净、
-      文件数 / 体积基线、禁止路径与密钥模式）；同时人工确认无 `_build/`、`*.mbti`、`pkg.generated.mbti`、`*.log`、`*.zip`、`out/`、`tmp/`、`*.bak`。
+      v0.9.5 实测工具口径总覆盖率 **82.53%**（门限 ≥80%）、库层 **91.82%**（3781/4118，≥88%）；v0.9.4 发布基线为总 82.87%（5210/6287）、库层 91.79%、未覆盖行 635（Linux 662）。CI `coverage` job 已接线（阈值 80）。注意：`check_coverage.sh` 会先隔离仓库内其它位置的历史 trace（否则 `moon coverage report` 从项目根递归合并旧 trace 会虚高），并检测 `Counts array length mismatch` 告警。
+- [ ] **包内容门禁**：`bash scripts/check_package.sh --strict-repro` 退出码 0（`moon package --list` 与 `git ls-files` 差集、worktree 干净、
+      文件数 / 体积基线、禁止路径、密钥模式、UTF-8 BOM / CRLF 可复现性检查）；同时人工确认无 `_build/`、`*.mbti`、`pkg.generated.mbti`、`*.log`、`*.zip`、`out/`、`tmp/`、`*.bak`。
 - [ ] **敏感信息 / PII 扫描**：`bash scripts/check_pii.sh`（手机号 / 邮箱 / 凭据正则）无命中；`git grep` 扫 `ghp_` / `sk-` / `AKIA` 无命中。
 - [ ] **bench 基线**：`node scripts/bench.mjs --runs 5 --batches 2 --baseline scripts/bench-baseline.json --fail-over 0.10` 退出码 0；
       规则：①小操作（基线 < 50 ms）允许波动 = `max(fail_over × 基线, 4 ms 噪声下限)`，大操作按比例；②基线取「多轮 min 的上界」（每项 30 样本）而非绝对最小值；③`demux` 为 I/O 密集，基线取 6 次测量上界 **80.0 ms**（同机 66.2–84.6 ms 抖动），阈值仍可捕获 ≥20% 真实回退；④更新基线须在提交说明中给出实测环境（OS / CPU / `moon version --all`）、采样轮数/runs/batches 与数值，并同步更新 `scripts/bench-baseline.json` 的 `threshold_policy` / `notes`；⑤**跨平台只 WARN（平台守卫）**，严格门禁需在 ubuntu 生成同平台基线。
@@ -163,7 +163,7 @@ moon deprecate WangYF0829/moonmux --undo
 | bench 跨平台不可直接比较 | Linux CI 与 Windows 基线的绝对耗时不同 | 平台守卫：平台不匹配只 WARN；CI 共享 runner 放宽到 50%，本地/专用 runner 用 10% |
 | bench 噪声（小操作 / I/O） | ~15–22 ms 操作受进程启动抖动影响；`demux` I/O 抖动 ±10 ms | 小操作绝对值下限 4 ms；基线取多轮 min 上界；`demux` 取 6 次测量上界 80.0 ms（见 `threshold_policy`） |
 | `moon publish --dry-run` 退出码语义（moon 0.1.20261012） | 409（已发布）/ 202（未发布）均可能非零退出 | 以服务器返回文本判定（§2）；CI `publish-dry-run` job 已按此接线 |
-| 覆盖率 CI 阈值余量 | Windows 未覆盖行 **635** ≤ 780；Linux 估算 **~662** < 800，余量 ~138 行（总覆盖 82.87%，门限 ≥80%） | qa 持续补测降低未覆盖行；新增防御分支须同步补测试 |
+| 覆盖率 CI 阈值余量 | Windows 未覆盖行 **635** ≤ 780；CI Linux 实测 **662** < 800，余量 ~138 行（Windows 总覆盖 82.87% / CI Linux 81.42%，门限 ≥80%） | qa 持续补测降低未覆盖行；新增防御分支须同步补测试 |
 | G1-B2 依赖维护性 = **DEGRADED** | 3/3 依赖近 12 个月有发布且未弃用、但 3/3 无 SECURITY.md、2/3 bus factor=1 且无接管预案；`moonvorbis` 有 `unsafe_get` 上游缺陷 | 已登记并给出退出预案（fork/替换/降级）与安全披露渠道评估，见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md)；KI-01 跟踪上游 issue；发布记录注明该状态 |
 | 工具链无法固定到具体版本 | installer 支持版本参数，但**固定版本下载 URL 全线 403**（latest 200），CI 只能跟随 latest | 维持「latest + 每个 job 记录 `moon version --all`」；发布记录固定工具链版本；结论与复验命令见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md) |
 | 历史发布包 PII（0.2.0–0.9.1） | 作者联系方式存在于不可撤回的历史版本与 git 历史 | 已接受风险并发布公告：[`docs/security/pii-advisory.md`](docs/security/pii-advisory.md) + [`docs/known-issues.md`](docs/known-issues.md) KI-03；当前版本已干净，`check_pii.sh` 纳入发布检查单 |

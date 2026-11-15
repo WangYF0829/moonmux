@@ -11,12 +11,15 @@
 #   3) 发布清单不得包含禁止路径（_build/、_review/、tmp/、out/、*.mbti、*.log、
 #      *.zip、*.bak、*.pem、*.key、.env、*.wasm、*.exe、*.dll）。
 #   4) 发布文件内容不得命中密钥模式（ghp_/gho_/ghu_/ghs_/github_pat_/sk-/AKIA/PRIVATE KEY）。
-#   5) 文件数与 zip 体积在基线范围内（v0.9.3 已发布：86 文件 / 371,067 B；
-#      本修复新增 3 个 scripts/ 脚本后预期约 89 文件；单文件不超过 1 MiB）。
+#   5) 文件数与 zip 体积在基线范围内（v0.9.4 已发布：111 文件 / 520,040 B；
+#      当前工作区新增 SECURITY.md / CONTRIBUTING.md / docs/releases/v0.9.5.md，预期 114 文件；单文件不超过 1 MiB）。
+#   6) 可复现性卫生：发布文本文件不得含 UTF-8 BOM / CRLF（否则同一 commit 从
+#      标准 checkout 打包与作者工作区打包的 zip 字节不同；--strict-repro 时判 FAIL）。
 #
 # 用法：
 #   bash scripts/check_package.sh                    # 标准门禁（要求 worktree 干净）
 #   bash scripts/check_package.sh --allow-dirty      # 本地调试：跳过第 1 项 worktree 断言
+#   bash scripts/check_package.sh --strict-repro     # 发布用：BOM/CRLF 直接判 FAIL
 #   bash scripts/check_package.sh --help
 #
 # 环境变量（可选）：
@@ -49,11 +52,13 @@ fi
 cd "$ROOT" || { echo "check_package: 无法进入仓库根 $ROOT" >&2; exit 2; }
 
 ALLOW_DIRTY=0
+STRICT_REPRO=0
 for arg in "$@"; do
   case "$arg" in
     --allow-dirty) ALLOW_DIRTY=1 ;;
+    --strict-repro) STRICT_REPRO=1 ;;
     -h|--help)
-      sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -216,15 +221,15 @@ echo
 
 # ---- 5) 基线（文件数 / zip 体积 / 单文件体积） ----------------------------
 echo "[5/5] 基线检查"
-BASELINE_FILES_REFERENCE=86      # v0.9.3 已发布包文件数
-BASELINE_ZIP_BYTES_REFERENCE=371067  # v0.9.3 已发布 zip 体积（sha256 d374f9cf…5631）
-BASELINE_FILES_HINT_AFTER_FIX=89 # 增加 scripts/check_package.sh + gen_sbom.sh + check_pii.sh 后预期
+BASELINE_FILES_REFERENCE=111      # v0.9.4 已发布包文件数（Release zip 111 条目）
+BASELINE_ZIP_BYTES_REFERENCE=520040  # v0.9.4 已发布 zip 体积（sha256 07fc5b70…8033）
+BASELINE_FILES_HINT_AFTER_FIX=114 # 当前工作区预期文件数（新增 SECURITY.md / CONTRIBUTING.md / v0.9.5 发布记录）
 PACKAGE_MIN_FILES="${PACKAGE_MIN_FILES:-80}"
 PACKAGE_MAX_FILES="${PACKAGE_MAX_FILES:-120}"
 PACKAGE_MIN_ZIP_BYTES="${PACKAGE_MIN_ZIP_BYTES:-300000}"
 PACKAGE_MAX_ZIP_BYTES="${PACKAGE_MAX_ZIP_BYTES:-800000}"
 PACKAGE_MAX_FILE_BYTES="${PACKAGE_MAX_FILE_BYTES:-1048576}"
-echo "  参考基线：v0.9.3 发布 $BASELINE_FILES_REFERENCE 文件 / $BASELINE_ZIP_BYTES_REFERENCE B zip；本修复后预期 $BASELINE_FILES_HINT_AFTER_FIX 文件"
+echo "  参考基线：v0.9.4 发布 $BASELINE_FILES_REFERENCE 文件 / $BASELINE_ZIP_BYTES_REFERENCE B zip；当前工作区预期 $BASELINE_FILES_HINT_AFTER_FIX 文件"
 echo "  允许范围：文件 $PACKAGE_MIN_FILES..$PACKAGE_MAX_FILES；zip $PACKAGE_MIN_ZIP_BYTES..$PACKAGE_MAX_ZIP_BYTES B；单文件 <= $PACKAGE_MAX_FILE_BYTES B"
 echo "  当前：$PKG_COUNT 文件"
 
@@ -270,6 +275,50 @@ if [ -n "$LATEST_ZIP" ] && [ -f "$LATEST_ZIP" ]; then
   fi
 else
   warn "未找到 _build/publish/*.zip，跳过 zip 体积基线（先运行 moon package）"
+fi
+echo
+
+# ---- 附加：可复现性卫生（BOM / CRLF） -----------------------------------
+# moon package 打包的是**工作区字节**；同一 commit 若在另一台机器 checkout 后
+# 是 LF，而作者工作区是 CRLF/BOM，两次 zip 的 sha256 就不同。发布前要求文本文件
+# 统一为 UTF-8 无 BOM + LF（.gitattributes 已声明 eol=lf）。
+echo "[附加] 可复现性卫生（BOM / CRLF）"
+BOM_HITS="$TMP_DIR/bom.txt"
+CRLF_HITS="$TMP_DIR/crlf.txt"
+: >"$BOM_HITS"
+: >"$CRLF_HITS"
+CR="$(printf '\r')"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  [ -f "$f" ] || continue
+  case "$f" in
+    *.ps1) continue ;; # .gitattributes 明确 eol=crlf
+  esac
+  # grep -I 跳过二进制文件；空文件无需检查
+  grep -Iq '' "$f" 2>/dev/null || continue
+  if [ "$(head -c 3 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "efbbbf" ]; then
+    printf '%s\n' "$f" >>"$BOM_HITS"
+  fi
+  if LC_ALL=C grep -q "$CR" "$f" 2>/dev/null; then
+    printf '%s\n' "$f" >>"$CRLF_HITS"
+  fi
+done <"$TMP_DIR/pkg.txt"
+if [ -s "$BOM_HITS" ] || [ -s "$CRLF_HITS" ]; then
+  if [ -s "$BOM_HITS" ]; then
+    echo "  含 UTF-8 BOM 的发布文件："
+    sed 's/^/        /' "$BOM_HITS"
+  fi
+  if [ -s "$CRLF_HITS" ]; then
+    echo "  含 CRLF 的发布文件："
+    sed 's/^/        /' "$CRLF_HITS"
+  fi
+  if [ "$STRICT_REPRO" -eq 1 ]; then
+    fail "发布包含 BOM/CRLF 文本（跨 checkout 逐字节不可复现；--strict-repro 判定）"
+  else
+    warn "发布包含 BOM/CRLF 文本（跨 checkout 逐字节不可复现；发布前用 --strict-repro 复核）"
+  fi
+else
+  pass "发布文本文件无 BOM / 无 CRLF（逐字节可复现）"
 fi
 echo
 

@@ -1,4 +1,4 @@
-﻿# 更新日志
+# 更新日志
 
 本项目遵循语义化版本；每个版本对应 GitHub Release 与 mooncakes.io 发布。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)（`Unreleased` + Added / Changed / Fixed / Deprecated / Removed / Security）。
@@ -7,8 +7,31 @@
 
 ## [Unreleased]
 
+## [0.9.5] — 2026-11-15
+
+> 0.9.5 发布：Windows 路径命名空间/子命令帮助、tag 文本参数保真、发布可复现性门禁、SECURITY/CONTRIBUTING、CI 文档与覆盖率门禁完善。发布记录见 [docs/releases/v0.9.5.md](docs/releases/v0.9.5.md)。
+
+### Added
+
+- 新增 [`SECURITY.md`](SECURITY.md)：GitHub Security Advisories 私密报告渠道、支持版本、确认/分级/修复时限、已知信任边界（KI-01/02）与安全默认值。
+- 新增 [`CONTRIBUTING.md`](CONTRIBUTING.md)：本地构建/测试/预检命令、公开 API 与测试分层约定、提交与发布流程。
+- CLI 支持子命令级帮助 `moonmux <cmd> --help` / `-h`：15 个功能子命令打印各自用法并以 0 退出；未知子命令仍按用法错误 exit 2。
+- `check_package.sh` 新增 `--strict-repro`：发布文本文件含 UTF-8 BOM / CRLF 时判 FAIL；预检默认启用。
+- CI `check` job 增加 `moon doc`（Linux）验证文档可构建；`.moonignore` 变更不再被 `paths-ignore` 跳过（它直接决定发布包内容）。
+
+### Changed
+
+- 测试：native **475 → 480**（Windows；Linux CI 478）、wasm-gc/js **425 → 428**；`scripts/smoke.sh` 断言 **66 → 70**（新增子命令 `--help`、未知子命令帮助、tag 文本参数保真断言）。覆盖率 v0.9.5 实测：总 **82.53%**、库层 **91.82%**（3781/4118）；公开 API 文档覆盖 **133/133 = 100%**。
+- 发布流程改为**可复现优先**：跟踪文本统一 UTF-8 无 BOM + LF；`RELEASING.md` 要求在 tag 的全新 checkout 上复跑 `moon package` 并比对 zip sha256（历史 v0.9.3/v0.9.4 的 CRLF/BOM 差异作为事实保留）。
+- `scripts/check_coverage.sh`：默认总覆盖率阈值 75 → **80**；测量前清理 target-dir 内旧 trace、报告前把仓库内其它位置的 `moonbit_coverage_*` 临时移出（trap 恢复），并检测 `Counts array length mismatch` / `obsolete coverage`（避免历史 trace 合并虚高）。
+- `scripts/gen_sbom.sh`：`moon tree` 输出中的构建机绝对路径脱敏为 `<repo>`；把 SBOM 归档到仓库内目录时不再把输出目录本身计入 `worktree_dirty_lines`；显式 `--zip` 优先于自动探测。
+- `scripts/check_package.sh`：基线更新为 v0.9.4（111 文件 / 520,040 B）→ 当前 113 文件；修正输出中的版本标签与预期文件数说明。
+
 ### Fixed
 
+- **Windows 路径参数**：设备/对象命名空间（`\\.\pipe\…`、`\\.\PhysicalDriveN`、`\\?\Volume{…}`、`\\?\GLOBALROOT\…`）按能力边界 exit 2 拒绝，不再被剥成 CWD 相对路径；`\\?\UNC\…` 大小写不敏感；扩展前缀只接受盘符绝对路径/UNC/`\\.\C:\` 三种形式。路径规范化改为只作用于路径参数，`tag` 的 KEY=VALUE 文本不再被 `\\?\` 剥离或设备前缀误拒。
+- `demux` / `split`：输出路径已存在但不是目录时，给出明确错误而不是落入「文件不存在」的 I/O 诊断。
+- Windows 路径长度提示边界修正为 **≥260 字符**（259 可写），并在 README/能力边界同步说明。
 - 发布后 CI/测试基础设施修复（**无库行为变更**）：① `cmd/main/main_wbtest.mbt` 的 `normalize_path` 用例按平台断言（POSIX 不复刻 Windows 大小写/反斜杠/尾随点折叠）；② `scripts/install_check.sh` 在干净工程中切换 `preferred_target = "native"` 并 `moon check --target native`（`moon new` 默认 wasm 与 `supported_targets` 不兼容）；③ CI `publish-dry-run` 在无 mooncakes 凭据时跳过并告警（`Registry login is required`）。
 
 ## [0.9.4] — 2026-11-13

@@ -13,14 +13,18 @@
 #
 # 用法：
 #   bash scripts/gen_sbom.sh                                  # 默认输出 _review/fix/sbom/
-#   bash scripts/gen_sbom.sh --out docs/releases/v0.9.3      # CI 接线：交给发布文档组复核
-#   bash scripts/gen_sbom.sh --zip _build/publish/WangYF0829-moonmux-0.9.3.zip
+#   bash scripts/gen_sbom.sh --out /tmp/sbom-v0.9.5 --zip moonmux-0.9.5.zip   # 发布归档（脱敏后可打 zip 作附件）
+#   bash scripts/gen_sbom.sh --zip _build/publish/WangYF0829-moonmux-0.9.5.zip
 #   bash scripts/gen_sbom.sh --with-package-list              # 额外固化发布清单（会触发一次 package）
 #   bash scripts/gen_sbom.sh --force                          # 允许覆盖同一输出目录（默认不覆盖）
 #
 # 说明：默认输出路径只落在 _review/fix/sbom/（修复组自留证据）；不需要发布文档组目录。
-#       发布流水线可通过 --out docs/releases/<version>/ 归档为正式材料。
+#       发布流水线应显式 `--out <临时目录>/sbom` 归档（不要写进 docs/，否则会进发布包），
+#       发布时把该目录打 zip 作为 GitHub Release 附件。
 #       输出目录已存在 manifest.txt 时默认不会覆盖：自动改用 <out>/run-<UTC时间戳>/。
+#       v0.9.4 后：moon-tree.* 会脱敏构建机绝对路径（<repo>）；worktree_dirty_lines
+#       不再把 --out 目录本身算作 dirty（此前会与 clean-worktree 发布门禁矛盾）。
+#       自动探测 _build/publish/*.zip 时只作参考，发布请用 --zip 显式指定发布包。
 #
 # 退出码：0 = 归档完成；1 = 归档命令失败；2 = 用法/环境错误。
 set -u
@@ -68,6 +72,45 @@ if [ -e "$OUT/manifest.txt" ] && [ "$FORCE" -ne 1 ]; then
 fi
 mkdir -p "$OUT" || { echo "gen_sbom: 无法创建输出目录：$OUT" >&2; exit 2; }
 
+# 输出目录相对仓库根的形式：计算 worktree 脏行数时把它排除，
+# 否则「把 SBOM 归档到仓库内目录」这一动作本身会让 manifest 记下 dirty=1，
+# 与「发布门禁要求 clean worktree」自相矛盾（v0.9.4 发布 SBOM 即有此问题）。
+case "$OUT" in
+  "$ROOT"/*) REL_OUT="${OUT#$ROOT/}" ;;
+  *) REL_OUT="" ;;
+esac
+dirty_count() {
+  if [ -n "$REL_OUT" ]; then
+    git status --porcelain 2>/dev/null | grep -vF -- "$REL_OUT" | wc -l | tr -d ' '
+  else
+    git status --porcelain 2>/dev/null | wc -l | tr -d ' '
+  fi
+}
+
+# 把构建机本地绝对路径归一化成 <repo>：发布 SBOM 里出现 C:\Users\<用户名>\… 会泄漏
+# 构建机路径/用户名（历史 PII 敏感性见 docs/security/pii-advisory.md）。
+sanitize_local_paths() {
+  f="$1"
+  command -v node >/dev/null 2>&1 || return 0
+  node - "$f" "$ROOT" <<'JS'
+const fs = require('fs');
+const [f, root] = process.argv.slice(2);
+let s = fs.readFileSync(f, 'utf8');
+const win = root.replace(/^\/([A-Za-z])\//, (_, d) => d.toUpperCase() + ':/');
+const forms = new Set([
+  root,
+  win,
+  win.replace(/\//g, '\\'),
+  win.replace(/\//g, '\\\\'),
+  win.replace(/\//g, '\\/'),
+]);
+for (const x of forms) {
+  if (x) s = s.split(x).join('<repo>');
+}
+fs.writeFileSync(f, s);
+JS
+}
+
 echo "== SBOM / 发布材料归档 =="
 echo "仓库根：$ROOT"
 echo "输出目录：$OUT"
@@ -87,13 +130,17 @@ run_to_file() {
 # 1) 依赖图 + 模块清单 + 工具链
 run_to_file "moon tree --json" "$OUT/moon-tree.json" moon tree --json
 run_to_file "moon tree" "$OUT/moon-tree.txt" moon tree
+sanitize_local_paths "$OUT/moon-tree.json"
+sanitize_local_paths "$OUT/moon-tree.txt"
 cat moon.mod >"$OUT/moon.mod"
 run_to_file "moon version --all" "$OUT/moon-version-all.txt" moon version --all
 
 # 2) 发布 zip sha256（显式 --zip 优先；否则自动探测 _build/publish/*.zip 最新文件）
 ZIP="$ZIP_ARG"
+AUTO_ZIP=0
 if [ -z "$ZIP" ]; then
   ZIP="$(ls -t _build/publish/*.zip 2>/dev/null | head -n 1)"
+  [ -n "$ZIP" ] && AUTO_ZIP=1
 fi
 {
   echo "# 发布制品校验（artifact sha256）"
@@ -115,6 +162,9 @@ if grep -q '^zip_sha256=(not found' "$OUT/artifact-sha256.txt"; then
   echo "  WARN  未找到发布 zip；artifact-sha256.txt 记录 not found（发布前先 moon package）"
 else
   echo "  OK    发布 zip sha256 -> ${OUT#$ROOT/}/artifact-sha256.txt"
+  if [ "$AUTO_ZIP" -eq 1 ]; then
+    echo "  WARN  发布 zip 为自动探测（_build/publish 最新文件: $ZIP）；正式发布 SBOM 请用 --zip 显式指定发布包"
+  fi
 fi
 
 # 3) 依赖缓存 zip 的 sha256（与 mooncakes 注册表 checksum 对照；找不到则标注 missing）
@@ -160,7 +210,7 @@ fi
   echo "commit=$(git rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "git_describe=$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"
   echo "tag_points_at_head=$(git tag --points-at HEAD 2>/dev/null | tr '\n' ' ' || echo '')"
-  DIRTY_LINES="$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  DIRTY_LINES="$(dirty_count)"
   echo "worktree_dirty_lines=$DIRTY_LINES"
   echo "moon_version=$(moon version --all 2>/dev/null | head -1 | tr -d '\r')"
   echo

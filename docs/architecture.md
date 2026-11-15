@@ -1,7 +1,7 @@
-﻿# moonmux 架构与设计说明
+# moonmux 架构与设计说明
 
 > 本文回答「项目怎么组织、关键不变量是什么、为什么这样取舍」，供后续维护者阅读。
-> 版本：v0.9.4（2026-11-13 发布）；版本变更见 [`CHANGELOG.md`](../CHANGELOG.md) 与 [`docs/releases/`](releases/)，发布流程与回滚预案见 [`RELEASING.md`](../RELEASING.md)。
+> 版本：v0.9.5（2026-11-15 发布）；版本变更见 [`CHANGELOG.md`](../CHANGELOG.md) 与 [`docs/releases/`](releases/)，发布流程与回滚预案见 [`RELEASING.md`](../RELEASING.md)。
 
 ## 1. 目标与非目标
 
@@ -90,9 +90,9 @@ mdat → 按 chunk 切出样本（= Opus 包）
 
 | 层 | 手段 |
 |---|---|
-| 单元/白盒 | 本地 `moon test --deny-warn --target all` 实测：native **475**、wasm-gc **425**、js **425**（`wasm` 后端 0 个测试、不在 `supported_targets`）；v0.9.3 基线为 369（native）。覆盖页/包/CRC/清单/转码/box/Mp4 往返与解封装/CLI 解析/WAV 全格式/流式页读取/gate v3，含真实 Ogg 文件的逐页 CRC 断言 |
+| 单元/白盒 | 本地 `moon test --deny-warn --target all` 实测：当前 master native **480**（Windows；Linux CI **478**，差 2 项 Windows 专属用例）、wasm-gc **428**、js **428**（`wasm` 后端 0 个测试、不在 `supported_targets`）；v0.9.4 发布基线 475/473/425。覆盖页/包/CRC/清单/转码/box/Mp4 往返与解封装/CLI 解析/WAV 全格式/流式页读取/gate v3，含真实 Ogg 文件的逐页 CRC 断言 |
 | 黑盒 | 各包 `*_public_test.mbt`（`for "test"` 导入，只使用公开 API），覆盖 ogg/wav/mp4/codec/manifest/pipeline 的主路径与错误路径 smoke 用例 |
-| 覆盖率 | **工具口径（`check_coverage.sh`）总 82.87%（5210/6287，门禁 ≥80%）**；库层行覆盖率 **91.79%（3779/4117，门限 ≥88%）**；`coverage analyze` 未覆盖行 **635**（Linux 估算 ~662，CI 阈值 780 + 20 = 800，余量 ~138）；门禁脚本 `scripts/check_coverage.sh`（CI `coverage` job，`--total-threshold 80`） |
+| 覆盖率 | **工具口径（`check_coverage.sh`，Windows 干净副本）总 82.87%（5210/6287，门禁 ≥80%）**；库层行覆盖率 **91.79%（3779/4117，门限 ≥88%）**；`coverage analyze` 未覆盖行 **635**（Windows）/ **662（CI Linux 实测）**，CI 阈值 780 + 20 = 800；CI Linux 覆盖率 job 实测总 **81.42%**（同样 ≥80%）；门禁脚本 `scripts/check_coverage.sh`（CI `coverage` job，`--total-threshold 80`；脚本内置 trace 隔离与混用告警，避免本地历史 trace 虚高） |
 | 公开 API 文档覆盖 | `scripts/check_api_docs.sh --threshold 95 --max-gap 0`（CI `check` job）：从 `.mbti` 解析 pub 符号并核对源码 `///` 覆盖；当前 **132/132 = 100%**（阈值 ≥95%、未文档符号 0） |
 | 合成流闭环 | 合成 OpusHead+OpusTags+音频包 → Ogg → remux → inspect 读回（`mp4/mp4_wbtest.mbt`） |
 | 外部对账 | `scripts/verify_mp4.sh`：真实样本 remux 后 ffprobe 断言编码/声道/采样率/时长，ffmpeg 解码无错 |
@@ -107,8 +107,9 @@ mdat → 按 chunk 切出样本（= Opus 包）
 ## 6. 已知边界与下一期候选
 
 - **`to-wav` 信任边界**：解码前统一 gate v3（`@codec.parse_vorbis_setup_info`：OpusHead / OpusTags、Vorbis ID / comment、**Vorbis setup 完整有界校验** —— codebook（sparse 真实位预算）/ floor / residue / mapping / mode 段、跨段交叉引用、lookup1/2 表、ordered 与 framing，并产出内存分配上界、Huffman 比较成本上界（含 residue VQ 码字数）与 IMDCT 成本上界）；**RT4-01 PoC（6,511 B）现在 exit 1 / 0.87 s**，RT3 相关 19 组 PoC 回归仍全部 exit=1、0 崩溃、0 残留，真实 `to-wav` 产物字节数不变（Vorbis 176444 / Opus 576044，Vorbis debug 92.6 s）。仍**不建议直接处理不可信输入** —— 残余风险：① Huffman 码长表有效性（全 0 / 超长码语义）仍由解码器判定；② floor1 `x` 序等语义细节不在 gate 覆盖；③ 内存模型是上界估算而非精确峰值；④ **CPU 双预算 debug 上限约 18 ms/字节**（真实样本 92.6 s 已接近硬约束；余量 IMDCT ×1.43 / Huffman ×1.49），高码长+多符号的合法流仍可能被误拒；⑤ release/Linux 未实测；⑥ 依赖 `LL728/moonvorbis@0.1.4` 内部的 `unsafe_get` 仍是残余风险。详见 README「能力边界」与 `docs/releases/v0.9.3.md` §6。
-- **target 支持**：`moon.mod` 声明 `supported_targets = ["native","wasm-gc","js"]`；本地 `--target all` 实测 native 475 / wasm-gc 425 / js 425，`wasm` 后端 0 个测试（未验证、不承诺）。CI 用 `moon test --target all` 覆盖声明后端（见 `.github/workflows/ci.yml`）。
+- **target 支持**：`moon.mod` 声明 `supported_targets = ["native","wasm-gc","js"]`；当前 master `--target all` 实测 Windows native 480 / wasm-gc 428 / js 428（Linux CI native 478，差 2 项 Windows 专属用例；v0.9.4 发布基线 475/473/425），`wasm` 后端 0 个测试（未验证、不承诺）。CI 用 `moon test --target all` 覆盖声明后端（见 `.github/workflows/ci.yml`）。
 - **CLI 输出上限**：`demux` 输出文件对象 ≤ **999999**（`MAX_DEMUX_PACKETS`，口径 = 包数 + 2 × 逻辑流数；写盘前按页数 × 255 粗估、超限 exit 2 且不建输出目录，未超限再按段表精算）；`split` 段数 ≤ **999999**（`MAX_SPLIT_PARTS`，超限 exit 2 且不建输出目录）。
+- **Windows 路径语义**：扩展长度前缀只接受 `\\?\C:\…`、`\\?\UNC\srv\share\…`（`UNC` 大小写不敏感）与 `\\.\C:\…` 盘符形式；`\\.\pipe\…`、`\\?\Volume{…}`、`\\?\GLOBALROOT\…` 等设备/对象命名空间按能力边界 exit 2 拒绝，绝不剥成 CWD 相对路径。路径规范化只作用于路径参数，`tag` 的 KEY=VALUE 文本原样保留。
 - 2 GiB 文件上限（`Int` 32 位 + `@fs` 整文件 API）；聚合写命令在分配前做 Int64 估算。v0.4.0 起提供流式**解析**；`WavWriter` 是内存内增量接口。
 - MP4 仅 Opus 单音轨；Vorbis-in-MP4 明确不做；不做章节/多轨编辑。
 - `extract` 默认拒绝「输出与输入内容相同」的别名；`--force` 只允许幂等覆盖（已有输出与待写内容相同），不允许覆盖不同内容——`@fs` 无 stat/inode，无法安全区分硬链接别名与普通文件。
@@ -116,7 +117,7 @@ mdat → 按 chunk 切出样本（= Opus 包）
 - **真实 Vorbis 解码慢是已知限制**：`testdata/vorbis_sample.ogg` 在 debug native 下 to-wav 约 **92.6 s**（依赖解码器 O(n²) IMDCT + Huffman 逐 bit 线性扫表；release/Linux 未实测）；CPU 双预算 debug 上限约 **18 ms/字节**，真实样本已接近硬约束；本项目只能做放大比预算、不能加速，长文件建议先 `split`；内存预算上界模型与真实峰值可能因 allocator / 环境浮动（已留 2 倍余量）。
 - 备份/别名检查的内存：`@fs` 没有 stat/inode/rename API，覆盖已有输出时需把旧文件整体读入内存做内容比较，峰值约为旧文件大小 + 新输出；无法流式比较或原子替换。
 - **依赖维护性与已知问题**：依赖维护性评估（G1-B2 = **DEGRADED**：3/3 依赖近 12 个月有发布且未弃用、3/3 无 SECURITY.md、2/3 bus factor=1）与退出预案、工具链 pin 结论见 [`docs/dependency-assessment.md`](dependency-assessment.md)；KI-01..05（含 `moonvorbis` 上游 issue 草稿）见 [`docs/known-issues.md`](known-issues.md)；历史发布包 PII 风险接受见 [`docs/security/pii-advisory.md`](security/pii-advisory.md)。
-- **发布可复现性受工作区换行影响**：v0.9.3 实测「保留作者工作区字节」可逐字节复现发布 zip（sha256 `d374f9cf…5631`），但标准 `git checkout` 会按 `.gitattributes` 把 4 个文本文件转为 LF，重建为 370,958 B（sha256 `55c6fe7a…2019`），不可逐字节复现；发布前须按 `RELEASING.md` 规范化并记录。
+- **发布可复现性**：发布前把跟踪的文本文件规范化为 UTF-8 无 BOM + LF，并用 `bash scripts/check_package.sh --strict-repro` 验证；同一 tag 的标准 `git checkout` 与作者工作区应生成相同 zip sha256。历史 v0.9.3/v0.9.4 发布包保留了工作区 CRLF/BOM 字节（v0.9.3：371,067 B vs 标准 checkout 370,958 B），其不可复现性作为历史事实记录，新流程不再沿用。
 - 下一期候选：无。容器层读写、MP4 写/解封装、WAV 全格式/块保真/流式写、基准与变异测试均已落地；明确不做 Vorbis-in-MP4 与多音轨 MP4。
 
 

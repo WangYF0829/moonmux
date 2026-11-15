@@ -8,7 +8,16 @@
 #        - 库层覆盖率：排除 cmd/main、examples/*、root 包（moonmux.mbt）后的
 #          “库包”行覆盖率（cli/codec/manifest/mp4/ogg/pipeline/wav）；
 #        - 总覆盖率：报告 `Total:` 行（行覆盖率）。
-#      阈值：库层 ≥ 88%、总覆盖率 ≥ 75%（可用参数覆盖）。
+#      阈值：库层 ≥ 88%、总覆盖率 ≥ 80%（可用参数覆盖）。
+#
+# trace 卫生（重要，2026-11-13 第 10 轮修复）：
+#   `moon coverage report` 会从**项目根递归**发现名为 `moonbit_coverage_*` 的 trace 文件，
+#   因此开发机上其它目录的历史 trace（旧构建/旧副本/上一次 preflight 的 trace）会被合并进
+#   本次测量，导致覆盖率虚高（实测同一工作区可虚高 ~6.5pp，且工具只打印
+#   "Counts array length mismatch" 警告而不失败）。本脚本在测量前后做隔离：
+#     * 运行测试前清空 target-dir 内已有 trace；
+#     * 生成报告前把**仓库内其它位置**的 trace 临时移出仓库（trap 恢复），只保留 target-dir 内的；
+#     * 报告输出若仍出现 "Counts array length mismatch" / "obsolete coverage" 则按工具错误 exit 2。
 #
 # 口径说明（重要）：
 #   * 本工具链（moon 0.1.20261012）的 cobertura 报告只有行覆盖（无 branch-rate），
@@ -33,13 +42,13 @@ usage() {
 
 生成/解析代码覆盖率报告并执行门禁：
   - 库层覆盖率（排除 cmd/main、examples/*、root 的 moonmux.mbt）>= 88%
-  - 总覆盖率（summary Total 行覆盖率）>= 75%
+  - 总覆盖率（summary Total 行覆盖率）>= 80%
 口径：行覆盖率；本工具链 cobertura 无 branch-rate，分支阈值按 summary Total 执行。
 
 选项:
   --target-dir <dir>      coverage 构建目录（默认 _build；--no-run 时解析该目录已有数据）
   --lib-threshold <pct>   库层覆盖率阈值（默认 88）
-  --total-threshold <pct> 总覆盖率阈值（默认 75）
+  --total-threshold <pct> 总覆盖率阈值（默认 80）
   --no-run                跳过 `moon test --enable-coverage`，直接解析已有 trace 数据
   --summary-file <file>   直接解析已有的 summary 文本（不再生成）
   --keep                  保留临时文件（排查用）
@@ -51,7 +60,7 @@ EOF
 
 TARGET_DIR="_build"
 LIB_THRESHOLD="88"
-TOTAL_THRESHOLD="75"
+TOTAL_THRESHOLD="80"
 NO_RUN=0
 SUMMARY_FILE=""
 KEEP=0
@@ -84,7 +93,21 @@ SUMMARY="$TMP_DIR/summary.txt"
 COBERTURA="$TMP_DIR/cobertura.xml"
 METRICS="$TMP_DIR/metrics.txt"
 WORST="$TMP_DIR/worst.txt"
-cleanup() { [ "$KEEP" -eq 1 ] || rm -rf "$TMP_DIR" 2>/dev/null || true; }
+REPORT_ERR="$TMP_DIR/report.err"
+TRACE_BACKUP=""          # 仓库内其它位置 trace 的临时存放目录（隔离用）
+TRACE_MANIFEST=""        # "原路径<TAB>备份路径" 列表，退出时按序恢复
+isolated_restore() {
+  if [ -n "${TRACE_MANIFEST:-}" ] && [ -f "$TRACE_MANIFEST" ]; then
+    while IFS="$(printf '\t')" read -r orig bak; do
+      [ -n "$orig" ] || continue
+      [ -f "$bak" ] || continue
+      mkdir -p "$(dirname "$orig")" 2>/dev/null || true
+      mv -f "$bak" "$orig" 2>/dev/null || true
+    done < "$TRACE_MANIFEST"
+  fi
+  if [ -n "${TRACE_BACKUP:-}" ]; then rm -rf "$TRACE_BACKUP" 2>/dev/null || true; fi
+}
+cleanup() { isolated_restore; [ "$KEEP" -eq 1 ] || rm -rf "$TMP_DIR" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
 printf '== 覆盖率门禁 ==\n'
@@ -103,6 +126,8 @@ else
   esac
   if [ "$NO_RUN" -eq 0 ]; then
     mkdir -p "$TD_ABS" || die "无法创建 target-dir: $TD_ABS"
+    # 清理 target-dir 内上一次运行残留的 trace，避免同目录旧 trace 与本次合并。
+    find "$TD_ABS" -name 'moonbit_coverage_*' -type f -delete 2>/dev/null || true
     TEST_LOG="$TMP_DIR/moon-test.log"
     printf '   运行: moon test --enable-coverage --target native --target-dir %s\n' "$TARGET_DIR"
     ( cd "$ROOT" && moon test --enable-coverage --target native --target-dir "$TARGET_DIR" ) > "$TEST_LOG" 2>&1
@@ -116,8 +141,37 @@ else
     [ -d "$TD_ABS" ] || die "--no-run 但 target-dir 不存在: $TD_ABS"
   fi
 
+  # ---- trace 卫生：把仓库内其它位置的 moonbit_coverage_* 临时移出（报告后恢复）----
+  # `moon coverage report` 会从项目根递归发现 trace；开发机上其它目录的历史 trace
+  # （旧构建/旧副本/上一次 preflight）会被合并，导致覆盖率虚高（实测 ~+6.5pp）。
+  isolate_traces_elsewhere() {
+    if [ -n "${TRACE_BACKUP:-}" ] && [ -d "$TRACE_BACKUP" ]; then return 0; fi
+    TRACE_BACKUP="$(mktemp -d "${TMPDIR:-/tmp}/moonmux-covtraces.XXXXXX" 2>/dev/null)" \
+      || die "mktemp 失败（trace 隔离）"
+    TRACE_MANIFEST="$TRACE_BACKUP/manifest.tsv"
+    : > "$TRACE_MANIFEST"
+    moved=0
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      case "$f" in
+        "$TD_ABS"/*) continue ;;
+      esac
+      moved=$((moved + 1))
+      dst="$TRACE_BACKUP/$moved.$(basename "$f")"
+      if mv -f "$f" "$dst" 2>/dev/null; then
+        printf '%s\t%s\n' "$f" "$dst" >> "$TRACE_MANIFEST"
+      fi
+    done <<EOF
+$(find "$ROOT" -name 'moonbit_coverage_*' -type f 2>/dev/null)
+EOF
+    if [ "$moved" -gt 0 ]; then
+      printf '   trace 隔离: 临时移开仓库内其它位置的 %s 个历史 trace（报告后恢复）\n' "$moved"
+    fi
+  }
+  isolate_traces_elsewhere
+
   # 主路径：summary 报告（cwd 必须是 trace 所在目录；source-paths 指回仓库根）
-  if ( cd "$TD_ABS" && moon coverage report -f summary --source-paths "$ROOT" ) > "$SUMMARY" 2> "$TMP_DIR/report.err"; then
+  if ( cd "$TD_ABS" && moon coverage report -f summary --source-paths "$ROOT" ) > "$SUMMARY" 2> "$REPORT_ERR"; then
     MODE="summary"
   else
     MODE=""
@@ -128,9 +182,14 @@ else
        && [ -s "$COBERTURA" ]; then
       MODE="cobertura-fallback"
     else
-      sed -n '1,30p' "$TMP_DIR/report.err" >&2
+      sed -n '1,30p' "$REPORT_ERR" >&2
       die "无法生成 coverage 报告（summary/cobertura 均不可用）；请确认先跑过 moon test --enable-coverage"
     fi
+  fi
+  # 隔离后仍出现 trace 混用告警 → 视为工具错误（否则会静默给出错误覆盖率）。
+  if grep -qE 'Counts array length mismatch|obsolete coverage' "$SUMMARY" "$REPORT_ERR" 2>/dev/null; then
+    grep -E 'Counts array length mismatch|obsolete coverage' "$REPORT_ERR" "$SUMMARY" 2>/dev/null | head -5 >&2 || true
+    die "coverage 报告检测到 trace 混用（Counts array length mismatch / obsolete coverage）；请先 moon coverage clean 并清理残留 trace 后重跑"
   fi
 fi
 

@@ -524,25 +524,106 @@ fn windows_paths() -> Bool {
 }
 
 ///|
-/// 去掉 Windows 扩展长度/设备前缀：`\\?\C:\…`、`\\.\C:\…`、`\\?\UNC\srv\share\…`。
+/// ASCII 大小写不敏感前缀判断（仅用于 `UNC` 这类 Windows 关键字）。
+fn starts_with_ascii_ci(s : String, prefix : String) -> Bool {
+  if s.length() < prefix.length() {
+    return false
+  }
+  let mut i = 0
+  while i < prefix.length() {
+    match (s.get_char(i), prefix.get_char(i)) {
+      (Some(a), Some(b)) => if lower_char(a) != lower_char(b) { return false }
+      _ => return false
+    }
+    i = i + 1
+  }
+  true
+}
+
+///|
+/// 判断 `p[at..]` 是否为「盘符 + 冒号 + 反斜杠」的绝对路径前缀。
+fn is_drive_abs_at(p : String, at : Int32) -> Bool {
+  if p.length() < at + 3 {
+    return false
+  }
+  match (p.get_char(at), p.get_char(at + 1), p.get_char(at + 2)) {
+    (Some(c), Some(':'), Some('\\')) => {
+      let n = c.to_int()
+      (n >= 65 && n <= 90) || (n >= 97 && n <= 122)
+    }
+    _ => false
+  }
+}
+
+///|
+/// 去掉 Windows 扩展长度前缀：`\\?\C:\…`、`\\?\UNC\srv\share\…`、`\\.\C:\…`。
 ///
 /// `\\?\C:\…` 是合法的扩展长度路径写法。不做这层归一化时，
 /// `normalize_path` 会把它变成 `//?/c:/…`，「盘符之后又出现 `:`」的 ADS 判据
 /// 于是把它误判成 NTFS 备用数据流（错误文案完全指错方向）。
 /// 归一化后所有路径比较/写盘都按普通路径进行；超过 260 字符时由
 /// `long_path_hint` 给出可操作提示（`@fs` 走传统 Win32 API，不支持长路径）。
+///
+/// 只剥离**可安全解释**的三种形式：盘符绝对路径、UNC 共享路径、`\\.\C:\` 盘符形式。
+/// 其余（`\\?\Volume{…}`、`\\?\GLOBALROOT\…`、`\\?\pipe\…`、`\\.\pipe\…` 等）
+/// 绝不剥成相对路径 —— 否则会被静默当成 CWD 下的同名文件读写。它们由
+/// `has_unsupported_device_prefix` 在**路径参数**入口拒绝。
 fn strip_extended_prefix(p : String) -> String {
   if !windows_paths() {
     return p
   }
-  if p.has_prefix("\\\\?\\UNC\\") {
-    // \\?\UNC\server\share → \\server\share
+  if starts_with_ascii_ci(p, "\\\\?\\UNC\\") && p.length() > 8 {
+    // \\?\UNC\server\share → \\server\share（UNC 关键字大小写不敏感）
     "\\\\" + p[8:].to_owned()
-  } else if p.has_prefix("\\\\?\\") || p.has_prefix("\\\\.\\") {
+  } else if p.has_prefix("\\\\?\\") && is_drive_abs_at(p, 4) {
+    // \\?\C:\… → C:\…
+    p[4:].to_owned()
+  } else if p.has_prefix("\\\\.\\") && is_drive_abs_at(p, 4) {
+    // \\.\C:\… → C:\…（仅盘符形式）
     p[4:].to_owned()
   } else {
     p
   }
+}
+
+///|
+/// 判断是否为**不能**按普通磁盘路径解释的设备/扩展命名空间前缀。
+///
+/// - `\\.\pipe\…`、`\\.\PhysicalDriveN`：Win32 设备命名空间（命名管道/卷设备）；
+/// - `\\?\Volume{…}`、`\\?\GLOBALROOT\…`、`\\?\pipe\…`：NT 对象命名空间；
+/// - 空的 `\\?\` 或 `\\?\` + 非盘符/非 UNC 的形式。
+///
+/// 这些路径原样交给 Win32 会打开设备而不是文件；剥离前缀又会变成 CWD 相对路径，
+/// 两种行为都不是用户想要的。入口按「不支持的能力边界」以 exit 2 拒绝。
+fn has_unsupported_device_prefix(p : String) -> Bool {
+  if !windows_paths() {
+    return false
+  }
+  if p.has_prefix("\\\\.\\") {
+    return !is_drive_abs_at(p, 4)
+  }
+  if p.has_prefix("\\\\?\\") {
+    return !(is_drive_abs_at(p, 4) ||
+      (starts_with_ascii_ci(p, "\\\\?\\UNC\\") && p.length() > 8))
+  }
+  false
+}
+
+///|
+/// 规范化一个**路径参数**（文件或目录）：拒绝不支持的设备/扩展命名空间，
+/// 再剥离可安全解释的扩展长度前缀。
+///
+/// 注意：只对路径参数调用，不要对 `tag` 的 KEY=VALUE、数字等文本参数调用 ——
+/// 否则文本值里的 `\\?\` / `\\.\` 会被改写或拒绝。
+fn normalize_cli_path(p : String) -> String {
+  if has_unsupported_device_prefix(p) {
+    fail(
+      "错误: 不支持的 Windows 设备/扩展命名空间路径（如 \\\\.\\pipe\\…、\\\\?\\Volume{…}）—— " +
+      p +
+      "\n  请使用普通盘符路径或 UNC 共享路径",
+    )
+  }
+  strip_extended_prefix(p)
 }
 
 ///|
@@ -563,8 +644,10 @@ fn io_reason(msg : String) -> String {
 ///
 /// 超长路径在 `@fs` 里表现为「No such file or directory」/「No error」这类
 /// 没有指向性的错误；命中时补一条可操作提示，避免用户反复重试同一路径。
+/// 边界：总长 259 字符可写，260 字符即失败（Win32 传统路径不含结尾 NUL 的上限是 259），
+/// 因此提示阈值取 `>= 260`。
 fn long_path_hint(path : String) -> String {
-  if windows_paths() && absolute_path(path).length() > 260 {
+  if windows_paths() && absolute_path(path).length() >= 260 {
     "\n  提示: Windows 传统 API 的路径上限是 260 字符（MAX_PATH）；请缩短路径，或把工作目录移到更靠近盘根的位置"
   } else {
     ""
@@ -1720,6 +1803,16 @@ fn run_demux(src : String, dir : String) -> Unit {
       // 而清单只覆盖新文件 —— 产物内容错乱、verify 却全绿。
       // 这类错误只能靠入口挡住，容器层看不出来。
       if @fs.path_exists(dir) {
+        // 先判「存在但不是目录」：直接 read_dir 会由 @fs 打印 "Failed to open directory"
+        // 并落入 io_reason 的「文件不存在」归类，用户看到的诊断完全指错方向。
+        if !(@fs.is_dir(dir) catch { _ => false }) {
+          fail(
+            "错误: 输出路径已存在但不是目录 —— " +
+            dir +
+            "\n  demux 的输出目标是目录；请换一个目录路径，或先删除该文件",
+          )
+          return
+        }
         let existing = @fs.read_dir(dir) catch {
           IOError(msg) =>
             return fail(
@@ -2471,6 +2564,14 @@ fn run_split(src : String, dir : String) -> Unit {
       // 与 demux 一致：复用非空目录会留下上一次的 partN.ogg，
       // 用户可能把它当成这次拆分的产物。
       if @fs.path_exists(dir) {
+        if !(@fs.is_dir(dir) catch { _ => false }) {
+          fail(
+            "错误: 输出路径已存在但不是目录 —— " +
+            dir +
+            "\n  split 的输出目标是目录；请换一个目录路径，或先删除该文件",
+          )
+          return
+        }
         let existing = @fs.read_dir(dir) catch {
           IOError(msg) =>
             return fail(
@@ -3882,29 +3983,62 @@ fn main {
   let rest : Array[String] = []
   let mut i = 1
   while i < argv.length() {
-    // 统一去掉 `\\?\` / `\\.\` 前缀：让后续比较/ADS 判据/写盘都看到普通路径。
-    // 不做这层归一化时，`\\?\C:\…` 会被 ADS 判据误杀。
-    rest.push(strip_extended_prefix(argv[i]))
+    rest.push(argv[i])
     i = i + 1
   }
+  // 路径参数按命令逐项规范化（见 dispatch 各分支）：只处理真正的路径字段，
+  // 不改写 `tag` 的 KEY=VALUE 等文本参数，也避免把 `\\.\pipe\…` 剥成 CWD 相对路径。
+  // 子命令级帮助：`moonmux <cmd> --help` / `-h` 打印该命令用法并以 0 退出，
+  // 与顶层 `moonmux --help`（exit 0）保持一致；未知子命令仍按用法错误处理。
+  if rest.length() == 2 &&
+    (rest[1] == "--help" || rest[1] == "-h") &&
+    @cli.is_known_command(rest[0]) {
+    println(@cli.usage_for(rest[0]))
+    return
+  }
   match @cli.parse(rest) {
-    @cli.Command::Info(path, json) => run_info(path, json)
-    @cli.Command::Demux(src, dir) => run_demux(src, dir)
-    @cli.Command::Mux(dir, out) => run_mux(dir, out)
-    @cli.Command::Cat(inputs, out) => run_cat(inputs, out)
-    @cli.Command::Split(src, dir) => run_split(src, dir)
+    @cli.Command::Info(path, json) => run_info(normalize_cli_path(path), json)
+    @cli.Command::Demux(src, dir) =>
+      run_demux(normalize_cli_path(src), normalize_cli_path(dir))
+    @cli.Command::Mux(dir, out) =>
+      run_mux(normalize_cli_path(dir), normalize_cli_path(out))
+    @cli.Command::Cat(inputs, out) => {
+      let norm : Array[String] = []
+      for p in inputs {
+        norm.push(normalize_cli_path(p))
+      }
+      run_cat(norm, normalize_cli_path(out))
+    }
+    @cli.Command::Split(src, dir) =>
+      run_split(normalize_cli_path(src), normalize_cli_path(dir))
     @cli.Command::Extract(src, index, out, force) =>
-      run_extract(src, index, out, force)
-    @cli.Command::Dump(path, hex) => run_dump(path, hex)
-    @cli.Command::Tags(path) => run_tags(path)
-    @cli.Command::TagWrite(src, out, assigns) => run_tag(src, out, assigns)
-    @cli.Command::Seek(path, ms, chain) => run_seek(path, ms, chain)
-    @cli.Command::Verify(path, json) => run_verify(path, json)
-    @cli.Command::ToWav(src, out, bits) => run_towav(src, out, bits)
+      run_extract(
+        normalize_cli_path(src),
+        index,
+        normalize_cli_path(out),
+        force,
+      )
+    @cli.Command::Dump(path, hex) => run_dump(normalize_cli_path(path), hex)
+    @cli.Command::Tags(path) => run_tags(normalize_cli_path(path))
+    @cli.Command::TagWrite(src, out, assigns) =>
+      run_tag(normalize_cli_path(src), normalize_cli_path(out), assigns)
+    @cli.Command::Seek(path, ms, chain) =>
+      run_seek(normalize_cli_path(path), ms, chain)
+    @cli.Command::Verify(path, json) =>
+      run_verify(normalize_cli_path(path), json)
+    @cli.Command::ToWav(src, out, bits) =>
+      run_towav(normalize_cli_path(src), normalize_cli_path(out), bits)
     @cli.Command::Chop(src, out, start_ms, end_ms) =>
-      run_chop(src, out, start_ms, end_ms)
-    @cli.Command::Remux(src, out) => run_remux(src, out)
-    @cli.Command::ToOgg(src, out) => run_to_ogg(src, out)
+      run_chop(
+        normalize_cli_path(src),
+        normalize_cli_path(out),
+        start_ms,
+        end_ms,
+      )
+    @cli.Command::Remux(src, out) =>
+      run_remux(normalize_cli_path(src), normalize_cli_path(out))
+    @cli.Command::ToOgg(src, out) =>
+      run_to_ogg(normalize_cli_path(src), normalize_cli_path(out))
     @cli.Command::Version => println(@moonmux.describe())
     @cli.Command::Help => println(@cli.usage())
     @cli.Command::Bad(msg, usage) => {

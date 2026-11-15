@@ -1,18 +1,18 @@
-﻿> 作者：WangYF0829（王轶凡）｜创建日期：2026-10-13｜用途：moonmux 项目文档
+> 作者：WangYF0829（王轶凡）｜创建日期：2026-10-13｜用途：moonmux 项目文档
 
 # moonmux
 
 [![CI](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml/badge.svg)](https://github.com/WangYF0829/moonmux/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-475%20passing-brightgreen.svg)](#构建与测试)
-[![Version](https://img.shields.io/badge/version-0.9.4-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
-[![mooncakes](https://img.shields.io/badge/mooncakes-0.9.4-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
+[![Tests](https://img.shields.io/badge/tests-480%20passing-brightgreen.svg)](#构建与测试)
+[![Version](https://img.shields.io/badge/version-0.9.5-blue.svg)](https://github.com/WangYF0829/moonmux/releases)
+[![mooncakes](https://img.shields.io/badge/mooncakes-0.9.5-blueviolet)](https://mooncakes.io/docs/WangYF0829/moonmux)
 
 纯 MoonBit 实现的音频容器工具包，补上 MoonBit 生态中「能解码、不能封装」的最后一环。
 
-## 2026-11 更新（v0.9.4）
+## 2026-11 更新（v0.9.5）
 
-项目当前版本 **v0.9.4**（2026-11-13 发布）：Vorbis 解码 gate、CLI/解析边界修复、CI 门禁、覆盖率与发布材料。主要能力与发布里程碑：
+项目当前版本 **v0.9.5**（2026-11-15 发布）：Windows 设备/扩展命名空间路径拒绝、子命令级帮助、发布可复现性门禁、SECURITY/CONTRIBUTING 与文档/覆盖率门禁完善。主要能力与发布里程碑：
 
 | 项 | 状态 |
 |---|---|
@@ -33,9 +33,10 @@
 | **安全/资源边界修复（v0.9.2）**：MP4 stts/stsz 先校验后分配（C-01/H-02）、co64 64 位偏移校验、inspect 缺 mvhd/stsz 高位拒绝；Ogg 重同步零拷贝 CRC + 确定性预算（H-01）；解码前统一 gate + 按解码工作量估算 PCM 预算（H-03/H-04）；extract --force 收紧（H-05）；demux 清单先行（H-06）；发布包内容门禁（H-07） | **已完成（v0.9.2）** |
 | **仓库整理（v0.9.3）**：源码注释与文档中的内部语料路径改为中性描述；发布包门禁改白名单；无行为变更 | **已完成（v0.9.3）** |
 | **安全加固与门禁完善（v0.9.4）**：Vorbis gate v3（内存 + CPU 双预算）、CLI/解析边界修复、CI 11 门禁、D2 覆盖率 82.87%、发布治理（RELEASING/发布记录/NOTICE/SBOM/PII） | **已完成（v0.9.4）** |
-| 测试 / 示例 / 文档 / CHANGELOG / **v0.9.4 发布（mooncakes + GitHub Release）** | **已完成** |
+| **路径/发布加固（v0.9.5）**：设备/扩展命名空间路径拒绝（不再剥成 CWD 相对路径）、子命令 `--help`、tag 文本参数保真、发布包 BOM/CRLF 可复现门禁、SECURITY/CONTRIBUTING、`moon doc` 与覆盖率 trace 隔离 | **已完成（v0.9.5）** |
+| 测试 / 示例 / 文档 / CHANGELOG / **v0.9.5 发布（mooncakes + GitHub Release）** | **已完成** |
 
-- **已可用（最新发布 v0.9.4）**：`moon add WangYF0829/moonmux` 安装 **v0.9.4**（2026-11-13 发布：Vorbis 解码 gate、CI 门禁、覆盖率 82.87%；v0.9.2 为安全/资源边界修复：MP4 表校验先于分配、Ogg 重同步预算、解码前 gate 与工作量预算、`extract --force` 收紧、demux 清单提交点、发布包门禁等；此前 v0.9.0 补 MP4 编辑列表与 `roll`、WAV `fact`、页校验、CLI 契约、2 GiB 闸门；v0.8.0 修复 TOC/remux 闸门/MP4 读侧，v0.7.x 提供 WAV 块保真与 `WavWriter`，v0.6.0 性能基准与变异测试，v0.5.0 `to-ogg` 解封装，v0.4.0 WAV 全格式与流式页读取）。
+- **已可用（最新发布 v0.9.5）**：`moon add WangYF0829/moonmux` 安装 **v0.9.5**（2026-11-15 发布：路径/发布加固、480 个 native 测试；v0.9.4 为 Vorbis 解码 gate、CLI/解析边界与 CI 门禁；v0.9.2 为安全/资源边界修复：MP4 表校验先于分配、Ogg 重同步预算、解码前 gate 与工作量预算、`extract --force` 收紧、demux 清单提交点、发布包门禁等；此前 v0.9.0 补 MP4 编辑列表与 `roll`、WAV `fact`、页校验、CLI 契约、2 GiB 闸门；v0.8.0 修复 TOC/remux 闸门/MP4 读侧，v0.7.x 提供 WAV 块保真与 `WavWriter`，v0.6.0 性能基准与变异测试，v0.5.0 `to-ogg` 解封装，v0.4.0 WAV 全格式与流式页读取）。
 - 变更明细见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 5 分钟上手
@@ -45,7 +46,7 @@
 ```sh
 moon new --user <your-user> --name <your-name> myproj   # 已有工程可跳过
 cd myproj
-moon add WangYF0829/moonmux@0.9.4
+moon add WangYF0829/moonmux@0.9.5
 ```
 
 在 `cmd/main/moon.pkg` 中加入 import（下面的示例只用容器层，不引入解码器）：
@@ -106,7 +107,7 @@ moonmux 补的就是最后两行。
 
 ## 作为库使用
 
-模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）并发布 **0.9.4**（2026-11-13；0.2.0 于 2026-11-06 首发）：
+模块已按 mooncakes.io 规范命名（`WangYF0829/moonmux`）并发布 **0.9.5**（2026-11-15；0.2.0 于 2026-11-06 首发）：
 
 ```bash
 moon add WangYF0829/moonmux
@@ -150,11 +151,11 @@ v0.4.0 新增库 API：`@ogg.PageReader` / `@ogg.for_each_page_chunked`（增量
 |---|---|
 | `0` | 成功 |
 | `1` | **数据 / 校验错误**：输入不是合法 Ogg / WAV / MP4、被截断、CRC 或结构体检失败、清单与目录不符、`verify` 报 error 等 |
-| `2` | **用法 / 参数引用 / I/O / 能力边界 / 输入形态不支持**：参数错、缺参数、多余参数、未知选项、文件读不到、拒绝覆盖、单文件 2 GiB 上限、`demux` 包数上限、`MOONMUX_MAX_PCM_MB` 非法值、Windows 路径超过 `MAX_PATH`、`remux` 拒绝链式/多流输入等 |
+| `2` | **用法 / 参数引用 / I/O / 能力边界 / 输入形态不支持**：参数错、缺参数、多余参数、未知选项、文件读不到、拒绝覆盖、单文件 2 GiB 上限、`demux` 包数上限、`MOONMUX_MAX_PCM_MB` 非法值、Windows 路径达到或超过 `MAX_PATH`（≥260 字符）、`\\.\` 设备命名空间（命名管道/卷设备）路径、`remux` 拒绝链式/多流输入等 |
 
 脚本与 CI 可直接据此判断，不必 grep 中文输出。
 
-**判定标准**：数据本身不合法（截断、CRC 失败、清单与目录不符）退出 1；命令用错、I/O 失败或输入形态/规模超出本工具声明的能力边界退出 2。具体到单个命令的判定，以 `moonmux <cmd> --help` 与实际端到端断言（`scripts/smoke.sh`）为准。
+**判定标准**：数据本身不合法（截断、CRC 失败、清单与目录不符）退出 1；命令用错、I/O 失败或输入形态/规模超出本工具声明的能力边界退出 2。具体到单个命令的判定，以 `moonmux <cmd> --help`（15 个功能子命令的 `--help` / `-h` 打印该命令用法并退出 0）与实际端到端断言（`scripts/smoke.sh`）为准。
 
 **写命令要求输入完整**：每页 CRC 通过、每条逻辑流以 EOS 收尾、尾部最多 1 MiB 全零填充；
 缺 EOS 的直播流会被拒绝（本工具面向静态文件）。`verify` 对缺 EOS 只报 warn（退出 0），
@@ -163,7 +164,7 @@ v0.4.0 新增库 API：`@ogg.PageReader` / `@ogg.for_each_page_chunked`（增量
 `mux` 还会把已有输出与实际读取的每个包/清单做身份比较，拦截目录外任意文件名的硬链接别名。
 写命令面向单写者：不要并发写同一个输出文件。
 
-**错误与用法信息统一走 stderr**（stdout 只留成功结果；`--json` 命令失败时输出 `{"error":...}`）。**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav` / `chop`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（POSIX 66 项断言，Linux 与 Windows Git Bash 都跑；v0.9.3 基线 54 项，整改轮补充 CLI 契约 / stdout-stderr 归属 / `--help`·`--version` 别名等断言，覆盖往返、退出码、截断、清单异常、FIFO 与输出别名防护）。`verify --json` 的“不是合法 Ogg”也输出 `{"error":...}`；非选项类子命令遇到 `--xxx` 按未知选项退出 2，不会被当成路径。
+**stdout / stderr 归属**：成功结果与 `verify` 的 findings 报告写 **stdout**；错误与用法信息写 **stderr**。`--json` 命令（`info --json` / `verify --json`）**只在数据错误（exit 1）时**把 `{"error":...}` 写到 stdout；**用法 / I-O / 能力边界错误（exit 2）stdout 恒为空**，错误只在 stderr（脚本判断请用退出码，不要假设 exit 2 时有 JSON）。**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav` / `chop`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（POSIX **70 项断言**；Linux 实测 70 PASS，Windows Git Bash 实测 68 PASS + 1 SKIP（FIFO 2 项合并跳过）；v0.9.3 基线 54 项、v0.9.4 发布时 66 项，后续补充 CLI 契约 / stdout-stderr 归属 / `--help`·`--version`/子命令帮助 / tag 文本参数保真等断言，覆盖往返、退出码、截断、清单异常、FIFO 与输出别名防护）。`verify --json` 的“不是合法 Ogg”也输出 `{"error":...}`；非选项类子命令遇到 `--xxx` 按未知选项退出 2，不会被当成路径。
 
 ## 能力边界
 
@@ -182,7 +183,7 @@ v0.4.0 新增库 API：`@ogg.PageReader` / `@ogg.for_each_page_chunked`（增量
 | 裁剪流时长 | 上界 | 容器层拿不到首个音频页的样本数，精确值需解码 |
 | MP4 编辑列表 | 已写 `edts/elst`（pre-skip 裁剪）与 `roll` 样本组 | 不做章节/多轨编辑；`mdhd` 保留总样本数，`mvhd/tkhd` 用裁剪后时长 |
 | `remux` 输入 | 单段、单逻辑流 Ogg | 链式 / 多流输入按「输入形态不支持」显式拒绝（**exit 2**，统一后的能力边界类退出码），不再静默只取第一段 |
-| Windows 路径 | 传统 Win32 API 上限 **260 字符（MAX_PATH）** | 超过时给出可操作错误（缩短路径 / 把工作目录移到更靠近盘根的位置）；`\\?\` 前缀与 ADS（备用数据流）按普通路径语义处理，不会被误判成设备名 |
+| Windows 路径 | 传统 Win32 API 上限 **260 字符（MAX_PATH）**，实际可写路径为 **259 字符** | **达到或超过 260 字符**时给出可操作错误（缩短路径 / 把工作目录移到更靠近盘根的位置）；扩展前缀只接受 `\\?\C:\…`、`\\?\UNC\srv\share\…`（`UNC` 大小写不敏感）与 `\\.\C:\…` 盘符形式，ADS（备用数据流）不会被误判成设备名；**`\\.\pipe\…` / `\\.\PhysicalDriveN` / `\\?\Volume{…}` / `\\?\GLOBALROOT\…` 等设备/对象命名空间不支持**（exit 2，不会剥成相对路径去读写别的文件）。路径规范化只作用于路径参数，`tag` 的 KEY=VALUE 文本原样保留 |
 | `PageReader` 重同步预算 | 每次调用 `8 × 缓冲长度 + 64 KiB` 的 CRC 工作预算 | v0.9.2 起有确定性候选预算：超限即放弃重同步并把剩余缓冲记为跳过区间（报「疑似伪页头洪水」），恶意伪造 `OggS` 不会无限放大 CPU / `gaps`；普通文件不受影响 |
 | 写侧公开 API | `serialize_pages_checked` / `validate_page` 可用 | CLI 写命令已全部走校验入口；库用户直接调用 `serialize_pages` 时仍需自行保证 `Page` 合法 |
 | WAV 块保真布局 | fmt 在 data 之前、扩展块在 fmt 之后的标准布局 | 原始 fmt 与扩展块逐字节写回；fmt 之前出现未知块或非零填充字节的极端布局会按语义规范化（扩展块保留、采样数据无损） |
@@ -215,36 +216,36 @@ moon test
 
 ## 支持矩阵
 
-`moon.mod` 声明 `preferred_target = "native"`、`supported_targets = [ "native", "wasm-gc", "js" ]`（以此字段为唯一事实源）。当前实测与 CI 覆盖如下（测试数为 Windows x64 实测，整改后本地完整 `--target all`）：
+`moon.mod` 声明 `preferred_target = "native"`、`supported_targets = [ "native", "wasm-gc", "js" ]`（以此字段为唯一事实源）。当前实测与 CI 覆盖如下（测试数为 Windows x64 实测；**native 在 Linux CI 为 478**，差 2 项为 Windows 专属路径/设备用例，仅在 `#cfg(platform="windows")` 下编译执行；上一版 v0.9.4 为 475/473）：
 
 | target | 本地实测 | CI 覆盖 | 说明 |
 |---|---|---|---|
-| `native`（preferred） | ✅ 475/475 | ✅ ubuntu `moon test --target all` / `moon test --target native`；windows native CLI 测试；双平台 smoke；bench / mp4 / install 均 native | CLI 与 examples 的主目标；需要 MSVC（Windows）或 C 工具链（Linux / macOS） |
-| `wasm-gc` | ✅ 425/425 | ✅ ubuntu `moon test --target all`（declared backends）+ windows `--target wasm-gc` | 纯库路径；两个读取文件示例声明 `supported_targets = "native"`，不参与 |
-| `js` | ✅ 425/425（`moon test` / `moon run --target js`） | ✅ ubuntu `moon test --target all`（declared backends） | 纯库路径可用；native-only 的 CLI / 示例项不适用 |
+| `native`（preferred） | ✅ 480/480（Windows）/ 478（Linux CI） | ✅ ubuntu `moon test --target all` / `moon test --target native`；windows native CLI 测试；双平台 smoke；bench / mp4 / install 均 native | CLI 与 examples 的主目标；需要 MSVC（Windows）或 C 工具链（Linux / macOS） |
+| `wasm-gc` | ✅ 428/428 | ✅ ubuntu `moon test --target all`（declared backends）+ windows `--target wasm-gc` | 纯库路径；两个读取文件示例声明 `supported_targets = "native"`，不参与 |
+| `js` | ✅ 428/428（`moon test` / `moon run --target js`） | ✅ ubuntu `moon test --target all`（declared backends） | 纯库路径可用；native-only 的 CLI / 示例项不适用 |
 
 - **`supported_targets`**：`moon.mod` 声明 `native` / `wasm-gc` / `js`（以此字段为唯一事实源；上表与之对齐）。
 - `wasm`（legacy）：本地 `--target all` 下 **0 个测试用例（未验证）**，不在 `supported_targets` 中，不应视为已支持。
 - **OS**：CI 常规矩阵为 `ubuntu-latest` + `windows-latest`；macOS 未验证。
-- **工具链**：CI 跟随 mooncakes 官方 latest（每个 job 记录 `moon version --all`）；v0.9.4 发布验证使用 moon `0.1.20261012` / moonc `0.10.15`（见 [docs/releases/v0.9.4.md](docs/releases/v0.9.4.md)）。工具链固定版本的可行性已评估：installer 支持版本参数，但**固定版本下载 URL 全线 403、latest 200**，故维持「latest + 版本记录」（详见 [docs/dependency-assessment.md](docs/dependency-assessment.md)）。
+- **工具链**：CI 跟随 mooncakes 官方 latest（每个 job 记录 `moon version --all`）；v0.9.4 / v0.9.5 发布验证使用 moon `0.1.20261012` / moonc `0.10.15`（见 [docs/releases/v0.9.5.md](docs/releases/v0.9.5.md)）。工具链固定版本的可行性已评估：installer 支持版本参数，但**固定版本下载 URL 全线 403、latest 200**，故维持「latest + 版本记录」（详见 [docs/dependency-assessment.md](docs/dependency-assessment.md)）。
 - `supported_targets` 字段与上表不一致时视为缺陷。
 
 ## 质量门禁
 
-CI 的 11 个 job 在每次 push / PR（ubuntu + windows 矩阵）执行下列门禁，详细接线见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)：
+CI 的 11 个 job 在每次 push / PR 执行下列门禁（`check` job 用 ubuntu + windows 双 OS 矩阵，其余 job 为 ubuntu，另有独立的 windows smoke job；md/LICENSE 等文档-only 推送不触发），详细接线见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)：
 
 | 门禁 | 命令 / 阈值 | 当前实测 |
 |---|---|---|
 | 编译 / 格式 / 包信息 | `moon check --deny-warn`（含 `--target all --frozen`）、`moon fmt --check`、`moon info --frozen` | 0 error / 0 warning |
-| 测试矩阵 | `moon test --deny-warn --target all` | native **475/475**、wasm-gc **425/425**、js **425/425**（wasm 0 测试） |
-| 公开 API 文档覆盖（D6） | `bash scripts/check_api_docs.sh --threshold 95 --max-gap 0`（`check` job，Linux） | **132/132 = 100%**（阈值 ≥95%、未文档符号 0） |
-| 覆盖率 | `moon coverage analyze`（未覆盖行 ≤ 780 + 20）+ `bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80`（`coverage` job） | **工具口径总 82.87%**（5210/6287，门禁 ≥80%）、库层行覆盖率 **91.79%**（3779/4117，≥88%）、未覆盖行 **635**（Linux 估算 ~662 < 800） |
+| 测试矩阵 | `moon test --deny-warn --target all` | native **480/480（Windows）/ 478（Linux CI）**、wasm-gc **428/428**、js **428/428**（wasm 0 测试；上一版 v0.9.4 为 475/473/425） |
+| 公开 API 文档覆盖（D6） | `bash scripts/check_api_docs.sh --threshold 95 --max-gap 0`（`check` job，Linux） | **133/133 = 100%**（阈值 ≥95%、未文档符号 0） |
+| 覆盖率 | `moon coverage analyze`（未覆盖行 ≤ 780 + 20）+ `bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80`（`coverage` job） | **v0.9.5 实测：总 82.53%、库层 91.82%**（3781/4118）；上一版 v0.9.4 为总 82.87%（5210/6287）/ 91.79%（3779/4117）/ 未覆盖行 635。CI Linux 以 job 实测为准（v0.9.4 为 81.42% / 662 uncovered） |
 | API 兼容性 | `bash scripts/check_api_diff.sh --target-all`（对上一发布 tag 的逐包 `.mbti` diff，并校验 native/wasm/wasm-gc/js 接口一致；0 = 仅新增/白名单，1 = 破坏性） | exit 0（本轮无破坏性变更） |
 | 包内容 / 供应链 | `check_package.sh`（清单/体积/worktree/密钥）、`check_pii.sh`（PII）、`gen_sbom.sh`（SBOM 归档） | exit 0 |
-| 性能 / 变异 / 端到端 | `bench.mjs --baseline`（阈值 + 4 ms 噪声下限 + 平台守卫）、`fuzz.mjs`（固定种子 400 次）、`smoke.sh`（66 项断言）、Windows smoke、mp4 ffprobe 对账 | 全部通过 |
+| 性能 / 变异 / 端到端 | `bench.mjs --baseline`（阈值 + 4 ms 噪声下限 + 平台守卫）、`fuzz.mjs`（固定种子 400 次）、`smoke.sh`（70 项断言）、Windows smoke、mp4 ffprobe 对账 | 全部通过 |
 | 发布前预检（一键） | `bash scripts/preflight_release.sh`（干净 worktree；开发期可 `--allow-dirty`，快速门禁可 `--skip-bench/--skip-fuzz/--skip-smoke`） | 发布演练用；输出 PASS/FAIL 汇总，exit 0 才可发布 |
 
-逐版本 gate 结果见 [`docs/releases/v0.9.4.md`](docs/releases/v0.9.4.md)（历史版本见 [`docs/releases/v0.9.3.md`](docs/releases/v0.9.3.md)）；安装抽样证据见 [`docs/releases/v0.9.3-install-sampling.md`](docs/releases/v0.9.3-install-sampling.md)（30/30 冷装，中位 1980 ms）。
+逐版本 gate 结果见 [`docs/releases/v0.9.5.md`](docs/releases/v0.9.5.md)（历史版本见 [`docs/releases/v0.9.4.md`](docs/releases/v0.9.4.md)）；安装抽样证据见 [`docs/releases/v0.9.3-install-sampling.md`](docs/releases/v0.9.3-install-sampling.md)（30/30 冷装，中位 1980 ms）。
 
 ## 性能基准（bench）
 
@@ -394,6 +395,8 @@ moonmux/
 ├── scripts/           smoke / verify_mp4 / bench / fuzz / install_check / preflight_release / check_package / check_pii / gen_sbom / check_api_diff / check_api_docs / check_coverage / bench-baseline
 ├── testdata/          真实音频样本
 ├── RELEASING.md       发布流程、发布前检查单、回滚预案
+├── SECURITY.md        安全披露渠道、SLA 与已知信任边界
+├── CONTRIBUTING.md    贡献流程、提交前检查与代码/测试约定
 └── NOTICE / THIRD_PARTY.md   许可声明与第三方依赖清单
 ```
 
@@ -444,28 +447,29 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 
 ## 开发状态
 
-当前最新版本为 **v0.9.4**（2026-11-13 发布；安全加固与门禁完善）。版本历程：v0.2.0（2026-10-23）→ v0.3.0–v0.3.2（2026-11-07：MP4 写入、`remux`、CRC 查表）→ v0.4.0（2026-11-09：WAV 全格式与流式页读取）→ v0.5.0（2026-11-09：MP4 → Ogg 解封装 `to-ogg`）→ v0.6.0（2026-11-09：性能基准与变异测试）→ v0.7.0（2026-11-09：WAV 块保真与 `WavWriter`）→ v0.7.1（2026-11-09：文档同步）→ v0.8.0（2026-11-10：正确性修复）→ v0.9.0（2026-11-10：正确性/契约修复）→ v0.9.1（2026-11-10：清单 I/O 退出码修复）→ v0.9.2（2026-11-11：安全/资源边界修复）→ v0.9.3（2026-11-12：仓库整理）→ v0.9.4（2026-11-13：安全加固与门禁完善）。
+当前最新版本为 **v0.9.5**（2026-11-15 发布；路径/发布加固与可复现性门禁）。版本历程：v0.2.0（2026-10-23）→ v0.3.0–v0.3.2（2026-11-07：MP4 写入、`remux`、CRC 查表）→ v0.4.0（2026-11-09：WAV 全格式与流式页读取）→ v0.5.0（2026-11-09：MP4 → Ogg 解封装 `to-ogg`）→ v0.6.0（2026-11-09：性能基准与变异测试）→ v0.7.0（2026-11-09：WAV 块保真与 `WavWriter`）→ v0.7.1（2026-11-09：文档同步）→ v0.8.0（2026-11-10：正确性修复）→ v0.9.0（2026-11-10：正确性/契约修复）→ v0.9.1（2026-11-10：清单 I/O 退出码修复）→ v0.9.2（2026-11-11：安全/资源边界修复）→ v0.9.3（2026-11-12：仓库整理）→ v0.9.4（2026-11-13：安全加固与门禁完善）→ v0.9.5（2026-11-15：路径/CLI 与发布可复现性加固）。
 
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测）、**MP4/ISOBMFF 写入（Opus-in-MP4，`remux`）与解封装（`to-ogg`）**，
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` / `chop` / `remux` / `to-ogg` 十五个子命令，
-**475 个测试通过**（Windows x64 本地实测：native 475/475、wasm-gc 425/425、js 425/425；`wasm` 后端 0 个测试、不在 `supported_targets`），覆盖率 **工具口径总 82.87%（5210/6287，CI 门禁 ≥80%）、库层行覆盖率 91.79%（3779/4117，≥88%）**；未覆盖行 **635**、Linux 估算 ~662（CI 阈值 780+20 = 800），**公开 API 文档覆盖 132/132 = 100%**（D6 门禁 ≥95%），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+**480 个测试通过**（Windows x64 本地实测：native 480/480、【Linux CI native 478，差 2 项为 Windows 专属用例】、wasm-gc 428/428、js 428/428；`wasm` 后端 0 个测试、不在 `supported_targets`），覆盖率 **工具口径总 82.53%、库层行覆盖率 91.82%（3781/4118）**（v0.9.5 本地实测；CI Linux 以 job 实测为准；上一版 v0.9.4 为总 82.87% / 91.79%），**公开 API 文档覆盖 133/133 = 100%**（D6 门禁 ≥95%），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）、转码验证、Ogg→MP4 外部工具（ffprobe/ffmpeg）对账与 MP4→Ogg 逐包还原验证。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`native` / `wasm-gc` / `js` 后端（覆盖矩阵见上文「支持矩阵」）；
-475 个测试（native；wasm-gc / js 各 425）、端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
+480 个测试（Windows native；Linux CI native 478、wasm-gc / js 各 428）、端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
 `scripts/verify_mp4.sh`（ffprobe/ffmpeg 外部对账）、`scripts/install_check.sh`（干净工程 `moon add` 验证）、`scripts/bench.mjs`（性能基准，含基线 / 阈值 / 平台守卫）、`scripts/fuzz.mjs`（确定性变异测试）、发布/供应链脚本（`preflight_release.sh` / `check_package.sh` / `check_pii.sh` / `gen_sbom.sh` / `check_api_diff.sh` / `check_api_docs.sh` / `check_coverage.sh` / `bench-baseline.json`）、
 GitHub Actions CI（11 个 job：check/fmt/info/test × 2 OS + target-all + **API 文档覆盖 + 库层/总覆盖率门限（总 ≥80%）** + native/Windows smoke + mp4 + install + **api-diff（已对 `--target-all` 各后端接口做 diff）** + **examples** + **publish-dry-run** + bench 阈值 + fuzz）。
-变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.0 / v0.3.1 / v0.3.2 / v0.4.0 / v0.5.0 / v0.6.0 / v0.7.0 / v0.7.1 / v0.8.0 / v0.9.0 / v0.9.1 / v0.9.2 / v0.9.3 / v0.9.4）。
-发布流程与回滚预案见 [RELEASING.md](RELEASING.md)；v0.9.4 的 commit / tag / 工具链 / **zip sha256** / gate 结果见 [docs/releases/v0.9.4.md](docs/releases/v0.9.4.md)（历史 v0.9.3 见 [docs/releases/v0.9.3.md](docs/releases/v0.9.3.md)），**G1-01 冷装抽样证据**（30/30 = 100%，中位 1980 ms）见 [docs/releases/v0.9.3-install-sampling.md](docs/releases/v0.9.3-install-sampling.md)；**依赖维护性评估**（G1-B2 = DEGRADED，含退出预案与工具链 pin 结论）见 [docs/dependency-assessment.md](docs/dependency-assessment.md)；**已知问题与残余风险**（KI-01..05，含 moonvorbis 上游 issue 草稿）见 [docs/known-issues.md](docs/known-issues.md)；**历史 PII 风险接受**见 [docs/security/pii-advisory.md](docs/security/pii-advisory.md)；第三方依赖许可见 [THIRD_PARTY.md](THIRD_PARTY.md) 与 [NOTICE](NOTICE)。
+变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.0 / v0.3.1 / v0.3.2 / v0.4.0 / v0.5.0 / v0.6.0 / v0.7.0 / v0.7.1 / v0.8.0 / v0.9.0 / v0.9.1 / v0.9.2 / v0.9.3 / v0.9.4 / v0.9.5）。
+发布流程与回滚预案见 [RELEASING.md](RELEASING.md)；v0.9.5 的 commit / tag / 工具链 / **zip sha256** / gate 结果见 [docs/releases/v0.9.5.md](docs/releases/v0.9.5.md)（历史 v0.9.4 见 [docs/releases/v0.9.4.md](docs/releases/v0.9.4.md)、v0.9.3 见 [docs/releases/v0.9.3.md](docs/releases/v0.9.3.md)），**G1-01 冷装抽样证据**（30/30 = 100%，中位 1980 ms）见 [docs/releases/v0.9.3-install-sampling.md](docs/releases/v0.9.3-install-sampling.md)；**依赖维护性评估**（G1-B2 = DEGRADED，含退出预案与工具链 pin 结论）见 [docs/dependency-assessment.md](docs/dependency-assessment.md)；**已知问题与残余风险**（KI-01..05，含 moonvorbis 上游 issue）见 [docs/known-issues.md](docs/known-issues.md)；**历史 PII 风险接受**见 [docs/security/pii-advisory.md](docs/security/pii-advisory.md)；第三方依赖许可见 [THIRD_PARTY.md](THIRD_PARTY.md) 与 [NOTICE](NOTICE)。
 
-主要新增能力（v0.3.0–v0.9.4）：MP4 / ISOBMFF 封装（Opus-in-MP4）与 `remux`、MP4 → Ogg 解封装 `to-ogg`（读写闭环）；CRC-32 查表优化；WAV 全格式兼容（IEEE float / Extensible / 24-in-4）与增量流式页读取；性能基准与确定性变异测试；WAV 块保真与流式写接口 `WavWriter`；v0.8.0 的 Opus TOC / remux 闸门 / MP4 读侧 / stsz / 多声道头 / granule / dOps gain / 头包页隔离 / 跨页替换 / WAV fmt 布局等正确性修复，v0.9.0/v0.9.1 的 MP4 编辑列表 / WAV fact / 页校验 / CLI 契约 / 2 GiB 闸门 / 清单 I/O 退出码等，v0.9.2 的分配前 Int64 上界 / 重同步预算 / 解码前 gate 与工作量预算 / 写路径安全收紧，以及 v0.9.3 的仓库整理、v0.9.4 的安全加固与门禁完善（Vorbis gate、CLI/解析边界修复、CI 门禁、覆盖率 82.87%）。
+主要新增能力（v0.3.0–v0.9.5）：MP4 / ISOBMFF 封装（Opus-in-MP4）与 `remux`、MP4 → Ogg 解封装 `to-ogg`（读写闭环）；CRC-32 查表优化；WAV 全格式兼容（IEEE float / Extensible / 24-in-4）与增量流式页读取；性能基准与确定性变异测试；WAV 块保真与流式写接口 `WavWriter`；v0.8.0 的 Opus TOC / remux 闸门 / MP4 读侧 / stsz / 多声道头 / granule / dOps gain / 头包页隔离 / 跨页替换 / WAV fmt 布局等正确性修复，v0.9.0/v0.9.1 的 MP4 编辑列表 / WAV fact / 页校验 / CLI 契约 / 2 GiB 闸门 / 清单 I/O 退出码等，v0.9.2 的分配前 Int64 上界 / 重同步预算 / 解码前 gate 与工作量预算 / 写路径安全收紧，v0.9.3 的仓库整理、v0.9.4 的安全加固与门禁完善（Vorbis gate、CLI/解析边界修复、CI 门禁、覆盖率 82.87%），以及 v0.9.5 的 Windows 路径命名空间/子命令帮助/发布可复现性加固。
 仍不做：WAV → Ogg 的反向管线（生态中尚无纯 MoonBit 编码器，边界与原因见上）。
 
 ## 许可证
 
 Apache-2.0，见 [`LICENSE`](LICENSE)；版权声明见 [`NOTICE`](NOTICE)；第三方依赖许可证、仓库与用途见 [`THIRD_PARTY.md`](THIRD_PARTY.md)（含 `LL728/moonopus` 的 BSD-3-Clause 表数据组件与 `moonbitlang/x` 无 LICENSE 文本的上游缺口）。
 依赖维护性评估（G1-B2 = DEGRADED，含退出预案与工具链 pin 结论）见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md)；已知问题与残余风险（KI-01..05）见 [`docs/known-issues.md`](docs/known-issues.md)；历史发布包 PII 风险接受见 [`docs/security/pii-advisory.md`](docs/security/pii-advisory.md)。
+安全问题请按 [`SECURITY.md`](SECURITY.md) 私密报告（不要公开 PoC）；贡献与提交前检查见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 
 

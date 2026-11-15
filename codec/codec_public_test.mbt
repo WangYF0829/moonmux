@@ -239,3 +239,53 @@ test "public api: vorbis_block_sizes rejects non-vorbis headers" {
     None => assert_true(false)
   }
 }
+
+///|
+/// 公开 API `parse_vorbis_setup_info` 的黑盒行为：非法/截断/非 setup 头一律 Err，
+/// 声道数越界也在读位之前拒绝（不得 panic）。
+test "public api: parse_vorbis_setup_info rejects bad input" {
+  assert_true(@codec.parse_vorbis_setup_info(b"", 2) is Err(_))
+  assert_true(@codec.parse_vorbis_setup_info(b"\x05vorbis", 2) is Err(_))
+  assert_true(
+    @codec.parse_vorbis_setup_info(b"\x03vorbis\x00\x00", 2) is Err(_),
+  )
+  // 合法 OpusHead 不是 Vorbis setup 头
+  assert_true(@codec.parse_vorbis_setup_info(valid_opus_head(), 2) is Err(_))
+  // 声道数越界：1..255 之外直接拒绝
+  assert_true(@codec.parse_vorbis_setup_info(b"\x05vorbis", 0) is Err(_))
+  assert_true(@codec.parse_vorbis_setup_info(b"\x05vorbis", 256) is Err(_))
+}
+
+///|
+/// 公开结构 `VorbisSetupInfo` 与 `huffman_work_upper` 的黑盒契约：
+/// 非法下标返回 0（预算入口不得 panic 或返回负数），合法下标按公式给出上界。
+test "public api: VorbisSetupInfo and huffman_work_upper contract" {
+  let info : @codec.VorbisSetupInfo = {
+    channels: 2,
+    codebooks: 1,
+    floors: 1,
+    residues: 1,
+    mappings: 1,
+    modes: [1],
+    modes_mapping: [0],
+    floor_symbols: [3],
+    residue_type: [0],
+    residue_begin: [0],
+    residue_end: [4],
+    residue_partition_size: [4],
+    residue_vq_codewords: [1],
+    mappings_submaps: [1],
+    mappings_floor: [[0]],
+    mappings_residue: [[0]],
+    mappings_mux: [],
+    max_huffman_scan: 10L,
+    decoder_setup_bytes: 1024L,
+  }
+  // 非法 mode / 负数 n2：返回 0（不 panic）
+  assert_eq(info.huffman_work_upper(512, -1), 0L)
+  assert_eq(info.huffman_work_upper(-1, 0), 0L)
+  assert_eq(info.huffman_work_upper(512, 99), 0L)
+  // 合法 mode：floor 3 符号/声道 × 2 声道 + residue 1 partition × 2 声道 ×
+  // (1 + 8×vq=1) 个符号 = 6 + 18 = 24 符号；max_huffman_scan=10 → 240
+  assert_eq(info.huffman_work_upper(512, 0), 240L)
+}
