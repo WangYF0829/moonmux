@@ -11,8 +11,8 @@
 #   3) 发布清单不得包含禁止路径（_build/、_review/、tmp/、out/、*.mbti、*.log、
 #      *.zip、*.bak、*.pem、*.key、.env、*.wasm、*.exe、*.dll）。
 #   4) 发布文件内容不得命中密钥模式（ghp_/gho_/ghu_/ghs_/github_pat_/sk-/AKIA/PRIVATE KEY）。
-#   5) 文件数与 zip 体积在基线范围内（v0.9.4 已发布：111 文件 / 520,040 B；
-#      当前工作区新增 SECURITY.md / CONTRIBUTING.md / docs/releases/v0.9.5.md，预期 114 文件；单文件不超过 1 MiB）。
+#   5) 文件数与 zip 体积在基线范围内（v0.9.5 已发布：114 文件 / 540,252 B；
+#      单文件不超过 1 MiB）。
 #   6) 可复现性卫生：发布文本文件不得含 UTF-8 BOM / CRLF（否则同一 commit 从
 #      标准 checkout 打包与作者工作区打包的 zip 字节不同；--strict-repro 时判 FAIL）。
 #
@@ -221,15 +221,15 @@ echo
 
 # ---- 5) 基线（文件数 / zip 体积 / 单文件体积） ----------------------------
 echo "[5/5] 基线检查"
-BASELINE_FILES_REFERENCE=111      # v0.9.4 已发布包文件数（Release zip 111 条目）
-BASELINE_ZIP_BYTES_REFERENCE=520040  # v0.9.4 已发布 zip 体积（sha256 07fc5b70…8033）
-BASELINE_FILES_HINT_AFTER_FIX=114 # 当前工作区预期文件数（新增 SECURITY.md / CONTRIBUTING.md / v0.9.5 发布记录）
+BASELINE_FILES_REFERENCE=114      # v0.9.5 已发布包文件数（Release zip 114 条目）
+BASELINE_ZIP_BYTES_REFERENCE=540252  # v0.9.5 已发布 zip 体积（sha256 9ab2329c…2030）
+BASELINE_FILES_HINT_AFTER_FIX=114 # 当前工作区预期文件数（v0.9.5 发布后 docs 同步不改变文件集合）
 PACKAGE_MIN_FILES="${PACKAGE_MIN_FILES:-80}"
 PACKAGE_MAX_FILES="${PACKAGE_MAX_FILES:-120}"
 PACKAGE_MIN_ZIP_BYTES="${PACKAGE_MIN_ZIP_BYTES:-300000}"
 PACKAGE_MAX_ZIP_BYTES="${PACKAGE_MAX_ZIP_BYTES:-800000}"
 PACKAGE_MAX_FILE_BYTES="${PACKAGE_MAX_FILE_BYTES:-1048576}"
-echo "  参考基线：v0.9.4 发布 $BASELINE_FILES_REFERENCE 文件 / $BASELINE_ZIP_BYTES_REFERENCE B zip；当前工作区预期 $BASELINE_FILES_HINT_AFTER_FIX 文件"
+echo "  参考基线：v0.9.5 发布 $BASELINE_FILES_REFERENCE 文件 / $BASELINE_ZIP_BYTES_REFERENCE B zip；当前工作区预期 $BASELINE_FILES_HINT_AFTER_FIX 文件"
 echo "  允许范围：文件 $PACKAGE_MIN_FILES..$PACKAGE_MAX_FILES；zip $PACKAGE_MIN_ZIP_BYTES..$PACKAGE_MAX_ZIP_BYTES B；单文件 <= $PACKAGE_MAX_FILE_BYTES B"
 echo "  当前：$PKG_COUNT 文件"
 

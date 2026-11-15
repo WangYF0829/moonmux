@@ -8,18 +8,20 @@
 
 | 组件 | 版本 | 许可证（SPDX） | 仓库 | 用途 | 备注 |
 |---|---|---|---|---|---|
-| **moonmux（本项目）** | 0.9.3 | Apache-2.0 | https://github.com/WangYF0829/moonmux | 容器层 / CLI / 转码管线 | 版权归 WangYF0829（王轶凡） |
+| **moonmux（本项目）** | 0.9.5 | Apache-2.0 | https://github.com/WangYF0829/moonmux | 容器层 / CLI / 转码管线 | 版权归 WangYF0829（王轶凡） |
 | `moonbitlang/x` | 0.5.5 | Apache-2.0 | https://github.com/moonbitlang/x | `cmd/main` 用 `x/fs`、`x/sys`；`examples/ogg_info`、`examples/remux_ogg_to_mp4` 用 `x/fs`；亦为 `moonopus` / `moonvorbis` 的依赖 | **上游缺口**：包内无 `LICENSE` 文本文件，只有 `licenserc.toml`（Apache-2.0 头部声明）；许可信息以 `moon.mod` 的 `license = "Apache-2.0"` 与 `licenserc.toml` 为准，再分发时建议随包携带 Apache-2.0 全文 |
 | `LL728/moonopus` | 0.2.2 | Apache-2.0（+ BSD-3-Clause 表数据） | https://github.com/Xcsa-ee/moonopus | `pipeline/` 的 Ogg Opus 解码（`to-wav` 的 Opus 路径） | ① 含 `LICENSE`（Apache-2.0）与 `LICENSE-LIBOPUS`；② `celt_tables.mbt` / `celt_mode.mbt` 含提取自 [xiph/opus](https://github.com/xiph/opus) 参考实现的表数据，按 **BSD-3-Clause** 使用（RFC 6716 §4.3.3 要求 bit-exact，规范未列出数值）；上游 `COPYING` 全文保留在依赖包内，再分发时须完整携带并保留版权声明；③ **身份链提示**：mooncakes 模块 owner 为 `LL728`，而仓库指向 `Xcsa-ee/moonopus`（`LL728/moonopus` 在 GitHub 为 404），引入/再分发时需注意该 fork/转移关系 |
-| `LL728/moonvorbis` | 0.1.4 | Apache-2.0 | https://github.com/LL728/moonvorbis | `pipeline/` 的 Ogg Vorbis 解码（`to-wav` 的 Vorbis 路径） | 含 `LICENSE`（Apache-2.0）；**已知安全残余**：恶意码流可能触发解码器内存安全问题，`to-wav` 不应直接暴露给不可信输入（见 CHANGELOG `[0.9.2]` 已知残余与 `docs/releases/v0.9.3.md` §6） |
+| `LL728/moonvorbis` | 0.1.4 | Apache-2.0 | https://github.com/LL728/moonvorbis | `pipeline/` 的 Ogg Vorbis 解码（`to-wav` 的 Vorbis 路径） | 含 `LICENSE`（Apache-2.0）；**已知安全残余**：恶意码流可能触发解码器内存安全问题，`to-wav` 不应直接暴露给不可信输入（见 CHANGELOG `[0.9.2]` 已知残余与 `docs/releases/v0.9.5.md` §6） |
 
 依赖树（`moon tree`，v0.9.5）：
 
 ```text
-WangYF0829/moonmux@0.9.3
-├─ LL728/moonopus    0.2.2 ─┬─ moonbitlang/x 0.5.5
-├─ LL728/moonvorbis  0.1.4 ─┘
-└─ moonbitlang/x     0.5.5
+WangYF0829/moonmux@0.9.5 (local <repo>)
+├─ LL728/moonopus -> LL728/moonopus@0.2.2
+│  └─ moonbitlang/x -> moonbitlang/x@0.5.5
+├─ LL728/moonvorbis -> LL728/moonvorbis@0.1.4
+│  └─ moonbitlang/x -> moonbitlang/x@0.5.5
+└─ moonbitlang/x -> moonbitlang/x@0.5.5
 ```
 
 依赖全部为 Apache-2.0（兼容本项目 Apache-2.0），无 copyleft / 未知协议。
