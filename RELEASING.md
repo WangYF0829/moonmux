@@ -22,7 +22,7 @@
       `docs/architecture.md` 版本行、CHANGELOG `[Unreleased]` 与顶部版本条目、`git describe --tags`（以脚本实际内容为准）。
 - [ ] **工作区干净**：`git status --porcelain` 为空；`git ls-files` 中无 `_build/`、`*.mbti`、`pkg.generated.mbti`、日志。
 - [ ] **质量门禁**：`moon check --deny-warn`、`moon fmt --check`、`moon test --deny-warn --target all`
-      （v0.9.5 实测：native **480/480**（Windows；Linux CI **478**，差 2 项 Windows 专属用例）、wasm-gc **428/428**、js **428/428**；覆盖率 v0.9.5 实测工具口径总 **82.53%**、库层 **91.82%**（3781/4118）；v0.9.4 发布基线为 475/473/425、82.87%/91.79%）全部退出 0。
+      （v0.9.5 实测：native **480/480**（Windows；Linux CI **477**，净差 3 项（Windows / POSIX 专属用例））、wasm-gc **428/428**、js **428/428**；覆盖率 v0.9.5 实测工具口径总 **82.53%**、库层 **91.82%**（3781/4118）；v0.9.4 发布基线为 475/473/425、82.87%/91.79%）全部退出 0。
 - [ ] **发布前一键预检**：`bash scripts/preflight_release.sh` → 退出码 0（PASS/FAIL 汇总表）；要求 **clean worktree**，
       发布演练/整改期可用 `--allow-dirty`；快速门禁用 `--skip-bench` / `--skip-fuzz` / `--skip-smoke`；
       覆盖：工具链记录 / worktree / 版本一致性 / 格式 / check / test all / api-diff / api-docs / 覆盖率（总 ≥80%）/ PII / 包内容 / SBOM / bench / fuzz / smoke。

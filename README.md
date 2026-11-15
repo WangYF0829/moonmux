@@ -216,11 +216,11 @@ moon test
 
 ## 支持矩阵
 
-`moon.mod` 声明 `preferred_target = "native"`、`supported_targets = [ "native", "wasm-gc", "js" ]`（以此字段为唯一事实源）。当前实测与 CI 覆盖如下（测试数为 Windows x64 实测；**native 在 Linux CI 为 478**，差 2 项为 Windows 专属路径/设备用例，仅在 `#cfg(platform="windows")` 下编译执行；上一版 v0.9.4 为 475/473）：
+`moon.mod` 声明 `preferred_target = "native"`、`supported_targets = [ "native", "wasm-gc", "js" ]`（以此字段为唯一事实源）。当前实测与 CI 覆盖如下（测试数为 Windows x64 实测；**native 在 Linux CI 为 477**，净差 3 项（Windows / POSIX 专属用例），仅在 `#cfg(platform="windows")` 下编译执行；上一版 v0.9.4 为 475/473）：
 
 | target | 本地实测 | CI 覆盖 | 说明 |
 |---|---|---|---|
-| `native`（preferred） | ✅ 480/480（Windows）/ 478（Linux CI） | ✅ ubuntu `moon test --target all` / `moon test --target native`；windows native CLI 测试；双平台 smoke；bench / mp4 / install 均 native | CLI 与 examples 的主目标；需要 MSVC（Windows）或 C 工具链（Linux / macOS） |
+| `native`（preferred） | ✅ 480/480（Windows）/ 477（Linux CI） | ✅ ubuntu `moon test --target all` / `moon test --target native`；windows native CLI 测试；双平台 smoke；bench / mp4 / install 均 native | CLI 与 examples 的主目标；需要 MSVC（Windows）或 C 工具链（Linux / macOS） |
 | `wasm-gc` | ✅ 428/428 | ✅ ubuntu `moon test --target all`（declared backends）+ windows `--target wasm-gc` | 纯库路径；两个读取文件示例声明 `supported_targets = "native"`，不参与 |
 | `js` | ✅ 428/428（`moon test` / `moon run --target js`） | ✅ ubuntu `moon test --target all`（declared backends） | 纯库路径可用；native-only 的 CLI / 示例项不适用 |
 
@@ -237,7 +237,7 @@ CI 的 11 个 job 在每次 push / PR 执行下列门禁（`check` job 用 ubunt
 | 门禁 | 命令 / 阈值 | 当前实测 |
 |---|---|---|
 | 编译 / 格式 / 包信息 | `moon check --deny-warn`（含 `--target all --frozen`）、`moon fmt --check`、`moon info --frozen` | 0 error / 0 warning |
-| 测试矩阵 | `moon test --deny-warn --target all` | native **480/480（Windows）/ 478（Linux CI）**、wasm-gc **428/428**、js **428/428**（wasm 0 测试；上一版 v0.9.4 为 475/473/425） |
+| 测试矩阵 | `moon test --deny-warn --target all` | native **480/480（Windows）/ 477（Linux CI）**、wasm-gc **428/428**、js **428/428**（wasm 0 测试；上一版 v0.9.4 为 475/473/425） |
 | 公开 API 文档覆盖（D6） | `bash scripts/check_api_docs.sh --threshold 95 --max-gap 0`（`check` job，Linux） | **133/133 = 100%**（阈值 ≥95%、未文档符号 0） |
 | 覆盖率 | `moon coverage analyze`（未覆盖行 ≤ 780 + 20）+ `bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80`（`coverage` job） | **v0.9.5 本地实测：总 82.53%、库层 91.82%**（3781/4118）；**CI Linux 实测：总 80.49%（≥80%，余量 0.49pp）、库层 91.82%、未覆盖行 687（< 800）**；上一版 v0.9.4 为总 82.87%（5210/6287）/ 91.79% / 未覆盖行 635 |
 | API 兼容性 | `bash scripts/check_api_diff.sh --target-all`（对上一发布 tag 的逐包 `.mbti` diff，并校验 native/wasm/wasm-gc/js 接口一致；0 = 仅新增/白名单，1 = 破坏性） | exit 0（本轮无破坏性变更） |
@@ -452,11 +452,11 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测）、**MP4/ISOBMFF 写入（Opus-in-MP4，`remux`）与解封装（`to-ogg`）**，
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` / `chop` / `remux` / `to-ogg` 十五个子命令，
-**480 个测试通过**（Windows x64 本地实测：native 480/480、【Linux CI native 478，差 2 项为 Windows 专属用例】、wasm-gc 428/428、js 428/428；`wasm` 后端 0 个测试、不在 `supported_targets`），覆盖率 **工具口径总 82.53%、库层行覆盖率 91.82%（3781/4118）**（v0.9.5 本地实测；**CI Linux 实测总 80.49%、未覆盖行 687**，余量 0.49pp；上一版 v0.9.4 为总 82.87% / 91.79%），**公开 API 文档覆盖 133/133 = 100%**（D6 门禁 ≥95%），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+**480 个测试通过**（Windows x64 本地实测：native 480/480、【Linux CI native 477，净差 3 项（Windows / POSIX 专属用例）】、wasm-gc 428/428、js 428/428；`wasm` 后端 0 个测试、不在 `supported_targets`），覆盖率 **工具口径总 82.53%、库层行覆盖率 91.82%（3781/4118）**（v0.9.5 本地实测；**CI Linux 实测总 80.49%、未覆盖行 687**，余量 0.49pp；上一版 v0.9.4 为总 82.87% / 91.79%），**公开 API 文档覆盖 133/133 = 100%**（D6 门禁 ≥95%），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）、转码验证、Ogg→MP4 外部工具（ffprobe/ffmpeg）对账与 MP4→Ogg 逐包还原验证。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`native` / `wasm-gc` / `js` 后端（覆盖矩阵见上文「支持矩阵」）；
-480 个测试（Windows native；Linux CI native 478、wasm-gc / js 各 428）、端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
+480 个测试（Windows native；Linux CI native 477、wasm-gc / js 各 428）、端到端检查（`scripts/smoke.sh`，含 remux/MP4 项）、
 `scripts/verify_mp4.sh`（ffprobe/ffmpeg 外部对账）、`scripts/install_check.sh`（干净工程 `moon add` 验证）、`scripts/bench.mjs`（性能基准，含基线 / 阈值 / 平台守卫）、`scripts/fuzz.mjs`（确定性变异测试）、发布/供应链脚本（`preflight_release.sh` / `check_package.sh` / `check_pii.sh` / `gen_sbom.sh` / `check_api_diff.sh` / `check_api_docs.sh` / `check_coverage.sh` / `bench-baseline.json`）、
 GitHub Actions CI（11 个 job：check/fmt/info/test × 2 OS + target-all + **API 文档覆盖 + 库层/总覆盖率门限（总 ≥80%）** + native/Windows smoke + mp4 + install + **api-diff（已对 `--target-all` 各后端接口做 diff）** + **examples** + **publish-dry-run** + bench 阈值 + fuzz）。
 变更记录见 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases（v0.1.0 / v0.2.0 / v0.3.0 / v0.3.1 / v0.3.2 / v0.4.0 / v0.5.0 / v0.6.0 / v0.7.0 / v0.7.1 / v0.8.0 / v0.9.0 / v0.9.1 / v0.9.2 / v0.9.3 / v0.9.4 / v0.9.5）。

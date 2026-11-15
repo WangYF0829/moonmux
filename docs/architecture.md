@@ -90,7 +90,7 @@ mdat → 按 chunk 切出样本（= Opus 包）
 
 | 层 | 手段 |
 |---|---|
-| 单元/白盒 | 本地 `moon test --deny-warn --target all` 实测：v0.9.5 native **480**（Windows；Linux CI **478**，差 2 项 Windows 专属用例）、wasm-gc **428**、js **428**（`wasm` 后端 0 个测试、不在 `supported_targets`）；上一版 v0.9.4 为 475/473/425。覆盖页/包/CRC/清单/转码/box/Mp4 往返与解封装/CLI 解析/WAV 全格式/流式页读取/gate v3，含真实 Ogg 文件的逐页 CRC 断言 |
+| 单元/白盒 | 本地 `moon test --deny-warn --target all` 实测：v0.9.5 native **480**（Windows；Linux CI **477**，净差 3 项（Windows / POSIX 专属用例））、wasm-gc **428**、js **428**（`wasm` 后端 0 个测试、不在 `supported_targets`）；上一版 v0.9.4 为 475/473/425。覆盖页/包/CRC/清单/转码/box/Mp4 往返与解封装/CLI 解析/WAV 全格式/流式页读取/gate v3，含真实 Ogg 文件的逐页 CRC 断言 |
 | 黑盒 | 各包 `*_public_test.mbt`（`for "test"` 导入，只使用公开 API），覆盖 ogg/wav/mp4/codec/manifest/pipeline 的主路径与错误路径 smoke 用例 |
 | 覆盖率 | **工具口径（`check_coverage.sh`，v0.9.5 本地）总 82.53%（门禁 ≥80%）**；库层行覆盖率 **91.82%（3781/4118，门限 ≥88%）**；**CI Linux 实测总 80.49%、未覆盖行 687**（阈值 780 + 20 = 800；余量 0.49pp）；门禁脚本 `scripts/check_coverage.sh`（CI `coverage` job，`--total-threshold 80`；脚本内置 trace 隔离与混用告警，避免本地历史 trace 虚高） |
 | 公开 API 文档覆盖 | `scripts/check_api_docs.sh --threshold 95 --max-gap 0`（CI `check` job）：从 `.mbti` 解析 pub 符号并核对源码 `///` 覆盖；当前 **133/133 = 100%**（阈值 ≥95%、未文档符号 0） |
@@ -107,7 +107,7 @@ mdat → 按 chunk 切出样本（= Opus 包）
 ## 6. 已知边界与下一期候选
 
 - **`to-wav` 信任边界**：解码前统一 gate v3（`@codec.parse_vorbis_setup_info`：OpusHead / OpusTags、Vorbis ID / comment、**Vorbis setup 完整有界校验** —— codebook（sparse 真实位预算）/ floor / residue / mapping / mode 段、跨段交叉引用、lookup1/2 表、ordered 与 framing，并产出内存分配上界、Huffman 比较成本上界（含 residue VQ 码字数）与 IMDCT 成本上界）；**RT4-01 PoC（6,511 B）现在 exit 1 / 0.87 s**，RT3 相关 19 组 PoC 回归仍全部 exit=1、0 崩溃、0 残留，真实 `to-wav` 产物字节数不变（Vorbis 176444 / Opus 576044，Vorbis debug 92.6 s）。仍**不建议直接处理不可信输入** —— 残余风险：① Huffman 码长表有效性（全 0 / 超长码语义）仍由解码器判定；② floor1 `x` 序等语义细节不在 gate 覆盖；③ 内存模型是上界估算而非精确峰值；④ **CPU 双预算 debug 上限约 18 ms/字节**（真实样本 92.6 s 已接近硬约束；余量 IMDCT ×1.43 / Huffman ×1.49），高码长+多符号的合法流仍可能被误拒；⑤ release/Linux 未实测；⑥ 依赖 `LL728/moonvorbis@0.1.4` 内部的 `unsafe_get` 仍是残余风险。详见 README「能力边界」与 `docs/releases/v0.9.3.md` §6。
-- **target 支持**：`moon.mod` 声明 `supported_targets = ["native","wasm-gc","js"]`；v0.9.5 `--target all` 实测 Windows native 480 / wasm-gc 428 / js 428（Linux CI native 478，差 2 项 Windows 专属用例；上一版 v0.9.4 为 475/473/425），`wasm` 后端 0 个测试（未验证、不承诺）。CI 用 `moon test --target all` 覆盖声明后端（见 `.github/workflows/ci.yml`）。
+- **target 支持**：`moon.mod` 声明 `supported_targets = ["native","wasm-gc","js"]`；v0.9.5 `--target all` 实测 Windows native 480 / wasm-gc 428 / js 428（Linux CI native 477，净差 3 项（Windows / POSIX 专属用例）；上一版 v0.9.4 为 475/473/425），`wasm` 后端 0 个测试（未验证、不承诺）。CI 用 `moon test --target all` 覆盖声明后端（见 `.github/workflows/ci.yml`）。
 - **CLI 输出上限**：`demux` 输出文件对象 ≤ **999999**（`MAX_DEMUX_PACKETS`，口径 = 包数 + 2 × 逻辑流数；写盘前按页数 × 255 粗估、超限 exit 2 且不建输出目录，未超限再按段表精算）；`split` 段数 ≤ **999999**（`MAX_SPLIT_PARTS`，超限 exit 2 且不建输出目录）。
 - **Windows 路径语义**：扩展长度前缀只接受 `\\?\C:\…`、`\\?\UNC\srv\share\…`（`UNC` 大小写不敏感）与 `\\.\C:\…` 盘符形式；`\\.\pipe\…`、`\\?\Volume{…}`、`\\?\GLOBALROOT\…` 等设备/对象命名空间按能力边界 exit 2 拒绝，绝不剥成 CWD 相对路径。路径规范化只作用于路径参数，`tag` 的 KEY=VALUE 文本原样保留。
 - 2 GiB 文件上限（`Int` 32 位 + `@fs` 整文件 API）；聚合写命令在分配前做 Int64 估算。v0.4.0 起提供流式**解析**；`WavWriter` 是内存内增量接口。
