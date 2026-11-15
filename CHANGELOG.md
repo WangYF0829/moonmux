@@ -21,7 +21,7 @@
 
 ### Changed
 
-- 测试：native **475 → 480**（Windows；Linux CI 478）、wasm-gc/js **425 → 428**；`scripts/smoke.sh` 断言 **66 → 70**（新增子命令 `--help`、未知子命令帮助、tag 文本参数保真断言）。覆盖率 v0.9.5 实测：总 **82.53%**、库层 **91.82%**（3781/4118）；公开 API 文档覆盖 **133/133 = 100%**。
+- 测试：native **475 → 480**（Windows；Linux CI 478）、wasm-gc/js **425 → 428**；`scripts/smoke.sh` 断言 **66 → 70**（新增子命令 `--help`、未知子命令帮助、tag 文本参数保真断言）。覆盖率 v0.9.5 实测：本地总 **82.53%**、库层 **91.82%**（3781/4118）；CI Linux 总 **80.49%**、未覆盖行 687；公开 API 文档覆盖 **133/133 = 100%**。
 - 发布流程改为**可复现优先**：跟踪文本统一 UTF-8 无 BOM + LF；`RELEASING.md` 要求在 tag 的全新 checkout 上复跑 `moon package` 并比对 zip sha256（历史 v0.9.3/v0.9.4 的 CRLF/BOM 差异作为事实保留）。
 - `scripts/check_coverage.sh`：默认总覆盖率阈值 75 → **80**；测量前清理 target-dir 内旧 trace、报告前把仓库内其它位置的 `moonbit_coverage_*` 临时移出（trap 恢复），并检测 `Counts array length mismatch` / `obsolete coverage`（避免历史 trace 合并虚高）。
 - `scripts/gen_sbom.sh`：`moon tree` 输出中的构建机绝对路径脱敏为 `<repo>`；把 SBOM 归档到仓库内目录时不再把输出目录本身计入 `worktree_dirty_lines`；显式 `--zip` 优先于自动探测。

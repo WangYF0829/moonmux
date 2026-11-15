@@ -92,7 +92,7 @@ mdat → 按 chunk 切出样本（= Opus 包）
 |---|---|
 | 单元/白盒 | 本地 `moon test --deny-warn --target all` 实测：v0.9.5 native **480**（Windows；Linux CI **478**，差 2 项 Windows 专属用例）、wasm-gc **428**、js **428**（`wasm` 后端 0 个测试、不在 `supported_targets`）；上一版 v0.9.4 为 475/473/425。覆盖页/包/CRC/清单/转码/box/Mp4 往返与解封装/CLI 解析/WAV 全格式/流式页读取/gate v3，含真实 Ogg 文件的逐页 CRC 断言 |
 | 黑盒 | 各包 `*_public_test.mbt`（`for "test"` 导入，只使用公开 API），覆盖 ogg/wav/mp4/codec/manifest/pipeline 的主路径与错误路径 smoke 用例 |
-| 覆盖率 | **工具口径（`check_coverage.sh`，Windows 干净副本）总 82.87%（5210/6287，门禁 ≥80%）**；库层行覆盖率 **91.79%（3779/4117，门限 ≥88%）**；`coverage analyze` 未覆盖行 **635**（Windows）/ **662（CI Linux 实测）**，CI 阈值 780 + 20 = 800；CI Linux 覆盖率 job 实测总 **81.42%**（同样 ≥80%）；门禁脚本 `scripts/check_coverage.sh`（CI `coverage` job，`--total-threshold 80`；脚本内置 trace 隔离与混用告警，避免本地历史 trace 虚高） |
+| 覆盖率 | **工具口径（`check_coverage.sh`，v0.9.5 本地）总 82.53%（门禁 ≥80%）**；库层行覆盖率 **91.82%（3781/4118，门限 ≥88%）**；**CI Linux 实测总 80.49%、未覆盖行 687**（阈值 780 + 20 = 800；余量 0.49pp）；门禁脚本 `scripts/check_coverage.sh`（CI `coverage` job，`--total-threshold 80`；脚本内置 trace 隔离与混用告警，避免本地历史 trace 虚高） |
 | 公开 API 文档覆盖 | `scripts/check_api_docs.sh --threshold 95 --max-gap 0`（CI `check` job）：从 `.mbti` 解析 pub 符号并核对源码 `///` 覆盖；当前 **133/133 = 100%**（阈值 ≥95%、未文档符号 0） |
 | 合成流闭环 | 合成 OpusHead+OpusTags+音频包 → Ogg → remux → inspect 读回（`mp4/mp4_wbtest.mbt`） |
 | 外部对账 | `scripts/verify_mp4.sh`：真实样本 remux 后 ffprobe 断言编码/声道/采样率/时长，ffmpeg 解码无错 |

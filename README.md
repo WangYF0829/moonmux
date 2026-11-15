@@ -164,7 +164,7 @@ v0.4.0 新增库 API：`@ogg.PageReader` / `@ogg.for_each_page_chunked`（增量
 `mux` 还会把已有输出与实际读取的每个包/清单做身份比较，拦截目录外任意文件名的硬链接别名。
 写命令面向单写者：不要并发写同一个输出文件。
 
-**stdout / stderr 归属**：成功结果与 `verify` 的 findings 报告写 **stdout**；错误与用法信息写 **stderr**。`--json` 命令（`info --json` / `verify --json`）**只在数据错误（exit 1）时**把 `{"error":...}` 写到 stdout；**用法 / I-O / 能力边界错误（exit 2）stdout 恒为空**，错误只在 stderr（脚本判断请用退出码，不要假设 exit 2 时有 JSON）。**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav` / `chop`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（POSIX **70 项断言**；Linux 实测 70 PASS，Windows Git Bash 实测 68 PASS + 1 SKIP（FIFO 2 项合并跳过）；v0.9.3 基线 54 项、v0.9.4 发布时 66 项，后续补充 CLI 契约 / stdout-stderr 归属 / `--help`·`--version`/子命令帮助 / tag 文本参数保真等断言，覆盖往返、退出码、截断、清单异常、FIFO 与输出别名防护）。`verify --json` 的“不是合法 Ogg”也输出 `{"error":...}`；非选项类子命令遇到 `--xxx` 按未知选项退出 2，不会被当成路径。
+**stdout / stderr 归属**：成功结果与 `verify` 的 findings 报告写 **stdout**；错误与用法信息写 **stderr**。`--json` 命令（`info --json` / `verify --json`）**只在数据错误（exit 1）时**把 `{"error":...}` 写到 stdout；**用法 / I-O / 能力边界错误（exit 2）stdout 恒为空**，错误只在 stderr（脚本判断请用退出码，不要假设 exit 2 时有 JSON）。**只读命令对损坏文件保持宽容**：`info` / `dump` / `tags` 在文件有结构问题时尽量给出能读到的信息（`info` / `dump` 会提示「只解析到偏移 X」），退出码仍为 0；**会写产物的命令**（`demux` / `mux` / `cat` / `split` / `extract` / `tag` / `to-wav` / `chop`）在输入有 error 级结构问题、被截断或清单不符时拒绝执行并返回 1 —— 不产出半截文件。端到端检查见 `scripts/smoke.sh`（POSIX **70 项断言**；CI Linux 实测 69 PASS + 1 SKIP（ffprobe 未安装），Windows Git Bash 实测 67 PASS + 2 SKIP（FIFO 2 项合并跳过 + ffprobe）；v0.9.3 基线 54 项、v0.9.4 发布时 66 项，后续补充 CLI 契约 / stdout-stderr 归属 / `--help`·`--version`/子命令帮助 / tag 文本参数保真等断言，覆盖往返、退出码、截断、清单异常、FIFO 与输出别名防护）。`verify --json` 的“不是合法 Ogg”也输出 `{"error":...}`；非选项类子命令遇到 `--xxx` 按未知选项退出 2，不会被当成路径。
 
 ## 能力边界
 
@@ -239,7 +239,7 @@ CI 的 11 个 job 在每次 push / PR 执行下列门禁（`check` job 用 ubunt
 | 编译 / 格式 / 包信息 | `moon check --deny-warn`（含 `--target all --frozen`）、`moon fmt --check`、`moon info --frozen` | 0 error / 0 warning |
 | 测试矩阵 | `moon test --deny-warn --target all` | native **480/480（Windows）/ 478（Linux CI）**、wasm-gc **428/428**、js **428/428**（wasm 0 测试；上一版 v0.9.4 为 475/473/425） |
 | 公开 API 文档覆盖（D6） | `bash scripts/check_api_docs.sh --threshold 95 --max-gap 0`（`check` job，Linux） | **133/133 = 100%**（阈值 ≥95%、未文档符号 0） |
-| 覆盖率 | `moon coverage analyze`（未覆盖行 ≤ 780 + 20）+ `bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80`（`coverage` job） | **v0.9.5 实测：总 82.53%、库层 91.82%**（3781/4118）；上一版 v0.9.4 为总 82.87%（5210/6287）/ 91.79%（3779/4117）/ 未覆盖行 635。CI Linux 以 job 实测为准（v0.9.4 为 81.42% / 662 uncovered） |
+| 覆盖率 | `moon coverage analyze`（未覆盖行 ≤ 780 + 20）+ `bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80`（`coverage` job） | **v0.9.5 本地实测：总 82.53%、库层 91.82%**（3781/4118）；**CI Linux 实测：总 80.49%（≥80%，余量 0.49pp）、库层 91.82%、未覆盖行 687（< 800）**；上一版 v0.9.4 为总 82.87%（5210/6287）/ 91.79% / 未覆盖行 635 |
 | API 兼容性 | `bash scripts/check_api_diff.sh --target-all`（对上一发布 tag 的逐包 `.mbti` diff，并校验 native/wasm/wasm-gc/js 接口一致；0 = 仅新增/白名单，1 = 破坏性） | exit 0（本轮无破坏性变更） |
 | 包内容 / 供应链 | `check_package.sh`（清单/体积/worktree/密钥）、`check_pii.sh`（PII）、`gen_sbom.sh`（SBOM 归档） | exit 0 |
 | 性能 / 变异 / 端到端 | `bench.mjs --baseline`（阈值 + 4 ms 噪声下限 + 平台守卫）、`fuzz.mjs`（固定种子 400 次）、`smoke.sh`（70 项断言）、Windows smoke、mp4 ffprobe 对账 | 全部通过 |
@@ -452,7 +452,7 @@ source scripts/moonmux.bash   # 子命令与文件路径补全
 已可用：Ogg 容器读写（含多逻辑流的分组与交织写出、物理流链接与拆分、结构体检）、WAV 读写、
 Ogg → WAV 转码管线（Opus 与 Vorbis 均已实测）、**MP4/ISOBMFF 写入（Opus-in-MP4，`remux`）与解封装（`to-ogg`）**，
 `info` / `demux` / `mux` / `cat` / `split` / `extract` / `dump` / `tags` / `tag` / `seek` / `verify` / `to-wav` / `chop` / `remux` / `to-ogg` 十五个子命令，
-**480 个测试通过**（Windows x64 本地实测：native 480/480、【Linux CI native 478，差 2 项为 Windows 专属用例】、wasm-gc 428/428、js 428/428；`wasm` 后端 0 个测试、不在 `supported_targets`），覆盖率 **工具口径总 82.53%、库层行覆盖率 91.82%（3781/4118）**（v0.9.5 本地实测；CI Linux 以 job 实测为准；上一版 v0.9.4 为总 82.87% / 91.79%），**公开 API 文档覆盖 133/133 = 100%**（D6 门禁 ≥95%），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
+**480 个测试通过**（Windows x64 本地实测：native 480/480、【Linux CI native 478，差 2 项为 Windows 专属用例】、wasm-gc 428/428、js 428/428；`wasm` 后端 0 个测试、不在 `supported_targets`），覆盖率 **工具口径总 82.53%、库层行覆盖率 91.82%（3781/4118）**（v0.9.5 本地实测；**CI Linux 实测总 80.49%、未覆盖行 687**，余量 0.49pp；上一版 v0.9.4 为总 82.87% / 91.79%），**公开 API 文档覆盖 133/133 = 100%**（D6 门禁 ≥95%），并通过真实 Opus / Vorbis 文件的逐页 CRC、拆包—重封装往返验证、
 双逻辑流交织—还原往返验证、物理流链接—拆分往返验证（含流号冲突场景）、转码验证、Ogg→MP4 外部工具（ffprobe/ffmpeg）对账与 MP4→Ogg 逐包还原验证。
 
 工程配套：`moon check --deny-warn` 零警告、`moon fmt --check` 通过、`native` / `wasm-gc` / `js` 后端（覆盖矩阵见上文「支持矩阵」）；

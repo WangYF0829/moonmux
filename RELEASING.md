@@ -31,7 +31,7 @@
 - [ ] **API 文档覆盖门禁（D6）**：`bash scripts/check_api_docs.sh --threshold 95 --max-gap 0` → 退出码 0；
       当前 **133/133 = 100%** pub 符号有 `///`（阈值 ≥95%、未文档符号 0；登记例外时才放宽 `--max-gap 1`）。CI `check` job 已接线。
 - [ ] **覆盖率门禁**：`bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80` → 退出码 0；
-      v0.9.5 实测工具口径总覆盖率 **82.53%**（门限 ≥80%）、库层 **91.82%**（3781/4118，≥88%）；v0.9.4 发布基线为总 82.87%（5210/6287）、库层 91.79%、未覆盖行 635（Linux 662）。CI `coverage` job 已接线（阈值 80）。注意：`check_coverage.sh` 会先隔离仓库内其它位置的历史 trace（否则 `moon coverage report` 从项目根递归合并旧 trace 会虚高），并检测 `Counts array length mismatch` 告警。
+      当前 v0.9.5 本地实测工具口径总覆盖率 **82.53%**（门限 ≥80%）、库层 **91.82%**（3781/4118，≥88%）；CI Linux 实测总 **80.49%**、未覆盖行 687（均满足阈值，余量 0.49pp）；v0.9.4 发布基线为总 82.87%（5210/6287）、库层 91.79%、未覆盖行 635（Linux 662）。CI `coverage` job 已接线（阈值 80）。注意：`check_coverage.sh` 会先隔离仓库内其它位置的历史 trace（否则 `moon coverage report` 从项目根递归合并旧 trace 会虚高），并检测 `Counts array length mismatch` 告警。
 - [ ] **包内容门禁**：`bash scripts/check_package.sh --strict-repro` 退出码 0（`moon package --list` 与 `git ls-files` 差集、worktree 干净、
       文件数 / 体积基线、禁止路径、密钥模式、UTF-8 BOM / CRLF 可复现性检查）；同时人工确认无 `_build/`、`*.mbti`、`pkg.generated.mbti`、`*.log`、`*.zip`、`out/`、`tmp/`、`*.bak`。
 - [ ] **敏感信息 / PII 扫描**：`bash scripts/check_pii.sh`（手机号 / 邮箱 / 凭据正则）无命中；`git grep` 扫 `ghp_` / `sk-` / `AKIA` 无命中。
