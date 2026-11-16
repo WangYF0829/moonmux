@@ -31,7 +31,7 @@
 - [ ] **API 文档覆盖门禁（D6）**：`bash scripts/check_api_docs.sh --threshold 95 --max-gap 0` → 退出码 0；
       当前 **133/133 = 100%** pub 符号有 `///`（阈值 ≥95%、未文档符号 0；登记例外时才放宽 `--max-gap 1`）。CI `check` job 已接线。
 - [ ] **覆盖率门禁**：`bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80` → 退出码 0；
-      当前 v0.9.7 本地实测工具口径总覆盖率 **82.57%**（门限 ≥80%）、库层 **91.82%**（3781/4118，≥88%）；CI Linux v0.9.5 实测总 **80.49%**、未覆盖行 687（v0.9.7 以新 run 为准）；v0.9.5 发布基线为总 82.53%、库层 91.82%、CI Linux 80.49%/687；v0.9.4 为 82.87%（5210/6287）/91.79%/635。CI `coverage` job 已接线（阈值 80）。注意：`check_coverage.sh` 会先隔离仓库内其它位置的历史 trace（否则 `moon coverage report` 从项目根递归合并旧 trace 会虚高），并检测 `Counts array length mismatch` 告警。
+      当前 v0.9.7 本地实测工具口径总覆盖率 **82.57%**（门限 ≥80%）、库层 **91.82%**（3781/4118，≥88%）；CI Linux v0.9.7 实测总 **80.11%**、未覆盖行 697（余量 0.11pp）；v0.9.5 发布基线为总 82.53%、库层 91.82%、CI Linux 80.49%/687；v0.9.4 为 82.87%（5210/6287）/91.79%/635。CI `coverage` job 已接线（阈值 80）。注意：`check_coverage.sh` 会先隔离仓库内其它位置的历史 trace（否则 `moon coverage report` 从项目根递归合并旧 trace 会虚高），并检测 `Counts array length mismatch` 告警。
 - [ ] **包内容门禁**：`bash scripts/check_package.sh --strict-repro` 退出码 0（`moon package --list` 与 `git ls-files` 差集、worktree 干净、
       文件数 / 体积基线、禁止路径、密钥模式、UTF-8 BOM / CRLF 可复现性检查）；同时人工确认无 `_build/`、`*.mbti`、`pkg.generated.mbti`、`*.log`、`*.zip`、`out/`、`tmp/`、`*.bak`。
 - [ ] **敏感信息 / PII 扫描**：`bash scripts/check_pii.sh`（手机号 / 邮箱 / 凭据正则）无命中；`git grep` 扫 `ghp_` / `sk-` / `AKIA` 无命中。
@@ -159,11 +159,13 @@ moon deprecate WangYF0829/moonmux --undo
 | 偏差 | 影响 | 补偿 / 接受方式 |
 |---|---|---|
 | 单人维护者、无双人复核 | 无法满足「双人复核」 | §5 例外登记 + CI 门禁 + 检查单留档 + 发布后 24h 复测 |
+| 无 PR 流程 / 分支保护 | 仓库为单人直推（0 个 PR），无法提供「PR 必需检查不可跳过」的 PR 侧证据；当前权限下未启用分支保护 | 每次 push 都跑全量 CI（`paths-ignore` 已移除，文档也触发）；发布前 `preflight_release.sh` + 手工检查单补偿；作为单人项目例外登记 |
+| v0.9.6 CI workflow 无效（已修复） | v0.9.6 tag 的 `ci.yml` `on:` 段重复键，两次 run 在创建 job 前失败（run 83/84，0 jobs）；失败保留未删除 | v0.9.7 删除重复键并通过 12-job CI；发布记录加勘误；建议使用 0.9.7 |
 | GitHub Release 附件需人工上传 | 自动化流水线无法附带 zip / sha256 | 本检查单强制项；发布后立即核对附件与 body sha256 |
 | bench 跨平台不可直接比较 | Linux CI 与 Windows 基线的绝对耗时不同 | 平台守卫：平台不匹配只 WARN；CI 共享 runner 放宽到 50%，本地/专用 runner 用 10% |
 | bench 噪声（小操作 / I/O） | ~15–22 ms 操作受进程启动抖动影响；`demux` I/O 抖动 ±10 ms | 小操作绝对值下限 4 ms；基线取多轮 min 上界；`demux` 取 6 次测量上界 80.0 ms（见 `threshold_policy`） |
 | `moon publish --dry-run` 退出码语义（moon 0.1.20261012） | 409（已发布）/ 202（未发布）均可能非零退出 | 以服务器返回文本判定（§2）；CI `publish-dry-run` job 已按此接线 |
-| 覆盖率 CI 阈值余量 | Windows 未覆盖行 **635** ≤ 780；CI Linux 实测 **662** < 800，余量 ~138 行（Windows 总覆盖 82.87% / CI Linux 81.42%，门限 ≥80%） | qa 持续补测降低未覆盖行；新增防御分支须同步补测试 |
+| 覆盖率 CI 阈值余量 | 本地总 **82.57%** / 库层 91.82%；CI Linux 实测总 **80.11%**、未覆盖行 **697**（阈值 800）——**仅余 0.11pp** | qa 持续补测降低未覆盖行；新增防御分支须同步补测试；本版将该余量登记为最紧 SHOULD 风险 |
 | G1-B2 依赖维护性 = **DEGRADED** | 3/3 依赖近 12 个月有发布且未弃用、但 3/3 无 SECURITY.md、2/3 bus factor=1 且无接管预案；`moonvorbis` 有 `unsafe_get` 上游缺陷 | 已登记并给出退出预案（fork/替换/降级）与安全披露渠道评估，见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md)；KI-01 跟踪上游 issue；发布记录注明该状态 |
 | 工具链无法固定到具体版本 | installer 支持版本参数，但**固定版本下载 URL 全线 403**（latest 200），CI 只能跟随 latest | 维持「latest + 每个 job 记录 `moon version --all`」；发布记录固定工具链版本；结论与复验命令见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md) |
 | 历史发布包 PII（0.2.0–0.9.1） | 作者联系方式存在于不可撤回的历史版本与 git 历史 | 已接受风险并发布公告：[`docs/security/pii-advisory.md`](docs/security/pii-advisory.md) + [`docs/known-issues.md`](docs/known-issues.md) KI-03；当前版本已干净，`check_pii.sh` 纳入发布检查单 |
