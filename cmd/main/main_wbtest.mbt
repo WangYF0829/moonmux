@@ -1233,15 +1233,65 @@ test "normalize_path normalizes per platform" {
     assert_eq(normalize_path("A\\\\B\\\\C.OGG."), "a/b/c.ogg")
     assert_eq(normalize_path("C:\\\\Temp\\\\"), "c:/temp")
     assert_eq(normalize_path("dir/ "), "dir")
+    // 盘符根必须保留斜杠；否则 `C:\` 会被当成盘符相对路径 `c:`
+    assert_eq(normalize_path("C:\\\\"), "c:/")
+    // UNC 保留两个开头斜杠
+    assert_eq(
+      normalize_path("\\\\\\\\server\\\\share\\\\x"),
+      "//server/share/x",
+    )
   } else {
     // POSIX：反斜杠是普通文件名字符，大小写与尾随点/空格不折叠
     assert_eq(normalize_path("A\\\\B\\\\C.OGG."), "A\\\\B\\\\C.OGG.")
     assert_eq(normalize_path("C:\\\\Temp\\\\"), "C:\\\\Temp\\\\")
     assert_eq(normalize_path("dir/ "), "dir/ ")
   }
+  // 开头的 `/` 是绝对路径的一部分，不能被“重复斜杠折叠”吞掉
+  assert_eq(normalize_path("/x"), "/x")
+  assert_eq(normalize_path("//server/share/x"), "//server/share/x")
   assert_eq(normalize_path("./x//y/"), "x/y")
   assert_eq(normalize_path("a/./b"), "a/./b")
   assert_eq(normalize_path("."), ".")
+}
+
+///|
+/// Windows 根相对路径 `\Users\…` 必须补当前盘符，才能与 `C:\Users\…`
+/// 做同一文件比较；POSIX 的 `/x` 保持绝对路径。
+test "absolute_path keeps leading separator semantics" {
+  if windows_paths() {
+    let cwd = match @env.current_dir() {
+      Some(d) => d
+      None => ""
+    }
+    assert_true(cwd.length() >= 2)
+    let drive = cwd[0:2].to_owned()
+    assert_eq(
+      absolute_path("\\moonmux_abs_probe"),
+      absolute_path(drive + "\\\\moonmux_abs_probe"),
+    )
+  } else {
+    assert_eq(absolute_path("/moonmux_abs_probe"), "/moonmux_abs_probe")
+    assert_eq(absolute_path("//server/share/x"), "//server/share/x")
+  }
+}
+
+///|
+/// verbatim 前缀下的尾随点/空格名字不能被静默折叠成另一个文件。
+#cfg(platform="windows")
+test "verbatim alias components are rejected" {
+  assert_true(has_verbatim_alias_component("\\\\?\\C:\\tmp\\a.ogg."))
+  assert_true(has_verbatim_alias_component("\\\\?\\C:\\tmp\\a.ogg "))
+  assert_true(has_verbatim_alias_component("\\\\.\\C:\\tmp\\a.ogg."))
+  assert_false(has_verbatim_alias_component("\\\\?\\C:\\tmp\\a.ogg"))
+  assert_true(has_verbatim_alias_component("\\\\?\\C:\\tmp\\dir.\\a.ogg"))
+  assert_false(has_verbatim_alias_component("C:\\tmp\\a.ogg."))
+}
+
+///|
+/// POSIX 上没有 verbatim 语义。
+#cfg(not(platform="windows"))
+test "verbatim alias check is Windows-only" {
+  assert_false(has_verbatim_alias_component("\\\\?\\C:\\tmp\\a.ogg."))
 }
 
 ///|

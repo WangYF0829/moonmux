@@ -7,6 +7,21 @@
 
 ## [Unreleased]
 
+## [0.9.6] — 2026-11-16
+
+> 0.9.6 发布：修正 v0.9.5 发布制品中的文档/数字不一致，CI 覆盖文档推送，补回滚演练证据，并修复 Windows 根相对/verbatim 路径的包含检查与目标折叠；**无公开 API 变更**。发布记录见 [docs/releases/v0.9.6.md](docs/releases/v0.9.6.md)。
+
+### Fixed
+
+- **Windows 路径安全**：`normalize_path` 不再吞掉开头 `/`（此前 `/x` 与 `\Users\…` 会被当成 CWD 相对路径，`mux` 的「输出在输入目录内」检查可被绕过）；Windows 根相对路径补当前盘符后再比较；`C:\` 盘根保留尾斜杠；UNC 保留 `//server/share` 形状。`\\?\` / `\\.\` 中带尾随点/空格的 verbatim 组件按 exit 2 拒绝，避免剥前缀后静默读写另一个文件。
+- 修正 v0.9.5 发布制品（tag 包与 GitHub Release 正文）中的过期/错误数字：Linux CI native **479**（v0.9.5 制品原写 478，实际 v0.9.5 为 477；本版新增 2 个路径回归测试后为 479）、`THIRD_PARTY.md` 项目版本/依赖树（原仍写 0.9.3）、Windows smoke 的本机/CI 分解（本机 68 PASS + 1 SKIP、CI 67 PASS + 2 SKIP）、覆盖率与 API 文档覆盖数字、`docs/releases/v0.9.5.md` 的“发布后回填”占位。
+- v0.9.5 制品包文件数 113 → **114**；v0.9.6 新增本发布记录后为 **115** 文件；`check_package.sh` 基线保留 v0.9.5 的 114 文件 / 540,252 B 参考，并校验当前 115 文件在允许范围内。
+
+### Changed
+
+- CI `push` **不再用 `paths-ignore` 跳过 `**.md` / `LICENSE`**：README、CHANGELOG、LICENSE、docs 等都进入发布包，文档推送同样需要跑版本一致性、包内容与可复现性门禁。README/申报书中的“文档-only 不触发 CI”表述同步删除。
+- 新增 2 个路径回归测试（根相对/verbatim）：Windows native 480 → **482**、Linux CI 477 → **479**；wasm-gc/js 428 不变。\n- 发布流程新增/补强回滚演练证据：`moon deprecate WangYF0829/moonmux --dry-run --reason …` 实测输出（15 个历史版本逐条 “Would deprecate …”，exit 0）归档到 `_review/evidence/release/`。
+
 ## [0.9.5] — 2026-11-15
 
 > 0.9.5 发布：Windows 路径命名空间/子命令帮助、tag 文本参数保真、发布可复现性门禁、SECURITY/CONTRIBUTING、CI 文档与覆盖率门禁完善。发布记录见 [docs/releases/v0.9.5.md](docs/releases/v0.9.5.md)。
@@ -25,7 +40,7 @@
 - 发布流程改为**可复现优先**：跟踪文本统一 UTF-8 无 BOM + LF；`RELEASING.md` 要求在 tag 的全新 checkout 上复跑 `moon package` 并比对 zip sha256（历史 v0.9.3/v0.9.4 的 CRLF/BOM 差异作为事实保留）。
 - `scripts/check_coverage.sh`：默认总覆盖率阈值 75 → **80**；测量前清理 target-dir 内旧 trace、报告前把仓库内其它位置的 `moonbit_coverage_*` 临时移出（trap 恢复），并检测 `Counts array length mismatch` / `obsolete coverage`（避免历史 trace 合并虚高）。
 - `scripts/gen_sbom.sh`：`moon tree` 输出中的构建机绝对路径脱敏为 `<repo>`；把 SBOM 归档到仓库内目录时不再把输出目录本身计入 `worktree_dirty_lines`；显式 `--zip` 优先于自动探测。
-- `scripts/check_package.sh`：基线更新为 v0.9.4（111 文件 / 520,040 B）→ 当前 113 文件；修正输出中的版本标签与预期文件数说明。
+- `scripts/check_package.sh`：基线更新为 v0.9.4（111 文件 / 520,040 B）→ 当前 114 文件；修正输出中的版本标签与预期文件数说明。
 
 ### Fixed
 

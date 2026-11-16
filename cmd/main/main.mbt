@@ -610,6 +610,44 @@ fn has_unsupported_device_prefix(p : String) -> Bool {
 }
 
 ///|
+/// 判断 `\\?\` / `\\.\` 路径中是否有「尾随点/空格」的组件。
+///
+/// 这类名字只有在 verbatim 前缀下才有独立身份；一旦我们剥掉前缀再交给
+/// 传统 Win32 API，`foo.` 会被折叠成 `foo`，从而静默读写另一个文件。
+/// 对这种输入直接拒绝，而不是改变目标。
+fn has_verbatim_alias_component(p : String) -> Bool {
+  if !windows_paths() {
+    return false
+  }
+  if !(p.has_prefix("\\\\?\\") || p.has_prefix("\\\\.\\")) {
+    return false
+  }
+  let rest = p[4:].to_owned()
+  let mut cur = ""
+  let mut i = 0
+  while i <= rest.length() {
+    let ch = if i < rest.length() { rest.get_char(i) } else { Some('/') }
+    match ch {
+      Some(c) =>
+        if c == '/' || c == '\\' {
+          if cur != "" && cur != "." && cur != ".." {
+            let last = cur.get_char(cur.length() - 1)
+            if last == Some('.') || last == Some(' ') {
+              return true
+            }
+          }
+          cur = ""
+        } else {
+          cur = cur + c.to_string()
+        }
+      None => ()
+    }
+    i = i + 1
+  }
+  false
+}
+
+///|
 /// 规范化一个**路径参数**（文件或目录）：拒绝不支持的设备/扩展命名空间，
 /// 再剥离可安全解释的扩展长度前缀。
 ///
@@ -621,6 +659,13 @@ fn normalize_cli_path(p : String) -> String {
       "错误: 不支持的 Windows 设备/扩展命名空间路径（如 \\\\.\\pipe\\…、\\\\?\\Volume{…}）—— " +
       p +
       "\n  请使用普通盘符路径或 UNC 共享路径",
+    )
+  }
+  if has_verbatim_alias_component(p) {
+    fail(
+      "错误: 路径含尾随点/空格组件，剥离 \\\\?\\ 前缀后会被 Windows 折叠成另一个文件 —— " +
+      p +
+      "\n  请改用不带尾随点/空格的名称（本工具不支持 verbatim 路径语义）",
     )
   }
   strip_extended_prefix(p)
@@ -669,7 +714,12 @@ fn lower_char(c : Char) -> Char {
 /// 路径词法规范化：分隔符、大小写、重复斜杠、尾部斜杠、开头的 `./`。
 fn normalize_path(p : String) -> String {
   let sb = StringBuilder()
-  let mut last_slash = true
+  // 不能把开头的分隔符当成“重复斜杠”吞掉：`/x`（POSIX 绝对路径）与
+  // `\Users\…`（Windows 当前盘根相对）都依赖它。最多保留两个开头斜杠，
+  // 以保留 UNC `\\server\share` 的形状。
+  let mut last_slash = false
+  let mut leading_slashes = 0
+  let mut started = false
   let mut i = 0
   while i < p.length() {
     match p.get_char(i) {
@@ -681,13 +731,20 @@ fn normalize_path(p : String) -> String {
           c0
         }
         if c == '/' {
-          if !last_slash {
+          if !started {
+            leading_slashes = leading_slashes + 1
+            if leading_slashes <= 2 {
+              sb.write_char('/')
+            }
+            last_slash = true
+          } else if !last_slash {
             sb.write_char('/')
             last_slash = true
           }
         } else {
           sb.write_char(c)
           last_slash = false
+          started = true
         }
       }
       None => ()
@@ -706,6 +763,10 @@ fn normalize_path(p : String) -> String {
     }
   }
   while s.length() > 1 && s.get_char(s.length() - 1) == Some('/') {
+    // 盘符根 `C:\` 的斜杠是路径的一部分，不能删成 `c:`（会被当成盘符相对路径）
+    if windows_paths() && s.length() == 3 && s.get_char(1) == Some(':') {
+      break
+    }
     s = s[0:s.length() - 1].to_owned()
   }
   while s.length() >= 2 &&
@@ -798,6 +859,10 @@ fn collapse_path(p : String) -> String {
     i = i + 1
   }
   let mut out = if absolute { "/" } else { "" }
+  // 保留 UNC / 双斜杠开头（`\\server\share`），不要折叠成单斜杠
+  if p.length() >= 2 && p.get_char(0) == Some('/') && p.get_char(1) == Some('/') {
+    out = "//"
+  }
   let mut j = 0
   while j < segs.length() {
     if j > 0 {
@@ -813,6 +878,17 @@ fn collapse_path(p : String) -> String {
 /// 绝对化：相对路径用 PWD / CD 环境变量补前缀；拿不到就退回词法结果。
 fn absolute_path(p : String) -> String {
   let n = normalize_path(strip_extended_prefix(p))
+  // Windows 的 `\Users\…` 是「当前盘根相对」，不是 CWD 相对：补当前盘符，
+  // 否则 `\Users\x` 会与 `C:\Users\x` 被当成两个不同文件（包含检查可被绕过）。
+  if windows_paths() && n.has_prefix("/") && !n.has_prefix("//") {
+    let base = match @env.current_dir() {
+      Some(d) => d
+      None => ""
+    }
+    if base.length() >= 2 && base.get_char(1) == Some(':') {
+      return collapse_path(normalize_path(base[0:2].to_owned()) + n)
+    }
+  }
   if is_absolute_path(n) {
     return collapse_path(n)
   }
