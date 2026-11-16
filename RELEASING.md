@@ -2,7 +2,7 @@
 
 > 面向对象：moonmux 发布负责人 / 复核人。
 > 适用范围：mooncakes.io（`WangYF0829/moonmux`）与 GitHub Release。
-> 工具链基线：`moon 0.1.20261012` / `moonc 0.10.15`（v0.9.3 / v0.9.4 / v0.9.5 / v0.9.6 发布验证所用版本；每次发布以 `moon version --all` 实际输出为准并记入发布记录）。
+> 工具链基线：`moon 0.1.20261012` / `moonc 0.10.15`（v0.9.3 / v0.9.4 / v0.9.5 / v0.9.6 / v0.9.7 发布验证所用版本；每次发布以 `moon version --all` 实际输出为准并记入发布记录）。
 > 历史发布记录见 [`docs/releases/`](docs/releases/)。
 
 ## 0. 先记住三件事
@@ -22,7 +22,7 @@
       `docs/architecture.md` 版本行、CHANGELOG `[Unreleased]` 与顶部版本条目、`git describe --tags`（以脚本实际内容为准）。
 - [ ] **工作区干净**：`git status --porcelain` 为空；`git ls-files` 中无 `_build/`、`*.mbti`、`pkg.generated.mbti`、日志。
 - [ ] **质量门禁**：`moon check --deny-warn`、`moon fmt --check`、`moon test --deny-warn --target all`
-      （v0.9.6 实测：native **482/482**（Windows；Linux CI **479**，净差 3 项（Windows / POSIX 专属用例））、wasm-gc **428/428**、js **428/428**；覆盖率 v0.9.6 实测工具口径总 **82.57%**、库层 **91.82%**（3781/4118）；v0.9.5 发布基线为 480/477/428、82.53%/91.82%；v0.9.4 为 475/473/425、82.87%/91.79%）全部退出 0。
+      （v0.9.7 实测：native **482/482**（Windows；Linux CI **479**，净差 3 项（Windows / POSIX 专属用例））、wasm-gc **428/428**、js **428/428**；覆盖率 v0.9.7 实测工具口径总 **82.57%**、库层 **91.82%**（3781/4118）；v0.9.5 发布基线为 480/477/428、82.53%/91.82%；v0.9.4 为 475/473/425、82.87%/91.79%）全部退出 0。
 - [ ] **发布前一键预检**：`bash scripts/preflight_release.sh` → 退出码 0（PASS/FAIL 汇总表）；要求 **clean worktree**，
       发布演练/整改期可用 `--allow-dirty`；快速门禁用 `--skip-bench` / `--skip-fuzz` / `--skip-smoke`；
       覆盖：工具链记录 / worktree / 版本一致性 / 格式 / check / test all / api-diff / api-docs / 覆盖率（总 ≥80%）/ PII / 包内容 / SBOM / bench / fuzz / smoke。
@@ -31,7 +31,7 @@
 - [ ] **API 文档覆盖门禁（D6）**：`bash scripts/check_api_docs.sh --threshold 95 --max-gap 0` → 退出码 0；
       当前 **133/133 = 100%** pub 符号有 `///`（阈值 ≥95%、未文档符号 0；登记例外时才放宽 `--max-gap 1`）。CI `check` job 已接线。
 - [ ] **覆盖率门禁**：`bash scripts/check_coverage.sh --lib-threshold 88 --total-threshold 80` → 退出码 0；
-      当前 v0.9.6 本地实测工具口径总覆盖率 **82.57%**（门限 ≥80%）、库层 **91.82%**（3781/4118，≥88%）；CI Linux v0.9.5 实测总 **80.49%**、未覆盖行 687（v0.9.6 以新 run 为准）；v0.9.5 发布基线为总 82.53%、库层 91.82%、CI Linux 80.49%/687；v0.9.4 为 82.87%（5210/6287）/91.79%/635。CI `coverage` job 已接线（阈值 80）。注意：`check_coverage.sh` 会先隔离仓库内其它位置的历史 trace（否则 `moon coverage report` 从项目根递归合并旧 trace 会虚高），并检测 `Counts array length mismatch` 告警。
+      当前 v0.9.7 本地实测工具口径总覆盖率 **82.57%**（门限 ≥80%）、库层 **91.82%**（3781/4118，≥88%）；CI Linux v0.9.5 实测总 **80.49%**、未覆盖行 687（v0.9.7 以新 run 为准）；v0.9.5 发布基线为总 82.53%、库层 91.82%、CI Linux 80.49%/687；v0.9.4 为 82.87%（5210/6287）/91.79%/635。CI `coverage` job 已接线（阈值 80）。注意：`check_coverage.sh` 会先隔离仓库内其它位置的历史 trace（否则 `moon coverage report` 从项目根递归合并旧 trace 会虚高），并检测 `Counts array length mismatch` 告警。
 - [ ] **包内容门禁**：`bash scripts/check_package.sh --strict-repro` 退出码 0（`moon package --list` 与 `git ls-files` 差集、worktree 干净、
       文件数 / 体积基线、禁止路径、密钥模式、UTF-8 BOM / CRLF 可复现性检查）；同时人工确认无 `_build/`、`*.mbti`、`pkg.generated.mbti`、`*.log`、`*.zip`、`out/`、`tmp/`、`*.bak`。
 - [ ] **敏感信息 / PII 扫描**：`bash scripts/check_pii.sh`（手机号 / 邮箱 / 凭据正则）无命中；`git grep` 扫 `ghp_` / `sk-` / `AKIA` 无命中。

@@ -95,7 +95,7 @@ if [ ! -x "$BIN" ]; then
 fi
 
 echo "== 0. 版本与输出类型防护 =="
-check_stdout 0 "moonmux 0.9.6" "version 与模块版本一致（0.9.6）" "$BIN" version
+check_stdout 0 "moonmux 0.9.7" "version 与模块版本一致（0.9.7）" "$BIN" version
 "$BIN" extract testdata/opus_sample.opus 1 "$TMP" >/dev/null 2>&1
 [ $? -eq 2 ]; check $? "目录作为输出路径被拒绝（2）"
 
@@ -128,9 +128,9 @@ check_error_streams 2 "多余参数 → 2（不被静默忽略）" "$BIN" info t
 check_error_streams 2 "缺必需参数 → 2" "$BIN" demux testdata/opus_sample.opus
 check_error_has 2 "用法: moonmux demux" "未知选项的用法提示落到子命令" "$BIN" demux --json a.ogg b
 check_stdout 0 "用法:" "help 成功并把用法写到 stdout" "$BIN" help
-check_stdout 0 "moonmux 0.9.6" "version 输出到 stdout" "$BIN" version
+check_stdout 0 "moonmux 0.9.7" "version 输出到 stdout" "$BIN" version
 check_stdout 0 "用法:" "--help 别名等同 help" "$BIN" --help
-check_stdout 0 "moonmux 0.9.6" "--version 别名等同 version" "$BIN" --version
+check_stdout 0 "moonmux 0.9.7" "--version 别名等同 version" "$BIN" --version
 check_stdout 0 "用法: moonmux info" "子命令 --help 打印该命令用法" "$BIN" info --help
 check_error_streams 2 "未知子命令 + --help 仍按用法错误（2）" "$BIN" frobnicate --help
 

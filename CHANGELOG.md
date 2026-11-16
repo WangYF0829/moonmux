@@ -7,8 +7,19 @@
 
 ## [Unreleased]
 
+## [0.9.7] — 2026-11-16
+
+> 0.9.7 发布：修复 v0.9.6 tag 的 `.github/workflows/ci.yml` `on:` 段重复键（GitHub 在创建 job 前判 workflow 无效，run 83/84 失败），恢复全量 CI/安装/覆盖率门禁。**无库行为变更**。发布记录见 [docs/releases/v0.9.7.md](docs/releases/v0.9.7.md)。
+
+### Fixed
+
+- `ci.yml` 删除重复的 `pull_request` / `workflow_dispatch` 键；`actionlint` 0 error。v0.9.6 tag 的制品与记录保留（不可修改），本版作为可验证的修复版。
+- 发布记录链：v0.9.6 记录加勘误指向本版；发布包 115 → **116** 文件（新增本版发布记录）。
+
 ## [0.9.6] — 2026-11-16
 
+> **勘误**：v0.9.6 tag 的 CI workflow 含重复键，构建在创建 job 前失败；已由 v0.9.7 修复（无库行为变更）。v0.9.6 制品保留作为历史记录。
+>
 > 0.9.6 发布：修正 v0.9.5 发布制品中的文档/数字不一致，CI 覆盖文档推送，补回滚演练证据，并修复 Windows 根相对/verbatim 路径的包含检查与目标折叠；**无公开 API 变更**。发布记录见 [docs/releases/v0.9.6.md](docs/releases/v0.9.6.md)。
 
 ### Fixed
