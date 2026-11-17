@@ -19,6 +19,8 @@
 
 ## [0.9.7] — 2026-11-16
 
+> **勘误（2026-11-17）**：moonc `0.10.21` 将 `size_hint` 弃用，0.9.7 在最新工具链 `--deny-warn` 下失败；已由 [0.9.8] 改为 `capacity=` 修复。
+>
 > 0.9.7 发布：修复 v0.9.6 tag 的 `.github/workflows/ci.yml` `on:` 段重复键（GitHub 在创建 job 前判 workflow 无效，run 83/84 失败），恢复全量 CI/安装/覆盖率门禁。**无库行为变更**。发布记录见 [docs/releases/v0.9.7.md](docs/releases/v0.9.7.md)。
 
 ### Fixed
