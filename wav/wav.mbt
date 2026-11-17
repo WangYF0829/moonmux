@@ -264,7 +264,7 @@ fn fourcc_text(data : Bytes, offset : Int32) -> String {
 ///|
 /// 拷贝字节切片 `[start, end)`。
 fn wav_slice(data : Bytes, start : Int32, end : Int32) -> Bytes {
-  let out = Buffer(size_hint=end - start)
+  let out = Buffer(capacity=end - start)
   let mut i = start
   while i < end {
     out.write_byte(data[i])
@@ -404,7 +404,7 @@ pub fn encode_wav(format : WavFormat, data : Bytes) -> Bytes {
   // 预分配恰好大小：默认的倍增扩容会在峰值时同时持有旧块与新块，
   // 对几十 MB 的 PCM 意味着多出一份完整副本。
   let pad = data.length() % 2
-  let buf = Buffer(size_hint=44 + data.length() + pad)
+  let buf = Buffer(capacity=44 + data.length() + pad)
   // "RIFF"
   buf.write_byte((0x52 : Byte))
   buf.write_byte((0x49 : Byte))
@@ -521,7 +521,7 @@ pub fn encode_wav_ex(
   let fact_frames = data.length() / block_align
   let fact_bytes = if needs_fact { 12 } else { 0 }
   let pad = data.length() % 2
-  let buf = Buffer(size_hint=68 + fact_bytes + data.length() + pad)
+  let buf = Buffer(capacity=68 + fact_bytes + data.length() + pad)
   // "RIFF"
   buf.write_byte((0x52 : Byte))
   buf.write_byte((0x49 : Byte))
@@ -791,7 +791,7 @@ fn encode_wav_layout(
     8 +
     data.length() +
     pad
-  let buf = Buffer(size_hint=total)
+  let buf = Buffer(capacity=total)
   // "RIFF" + 文件长度-8（"WAVE" 起算）
   buf.write_byte((0x52 : Byte))
   buf.write_byte((0x49 : Byte))
@@ -851,7 +851,7 @@ fn encode_wav_layout(
       }
   }
   if needs_fact {
-    let fact_payload = Buffer(size_hint=4)
+    let fact_payload = Buffer(capacity=4)
     fact_payload.write_uint_le(
       (data.length() / block_align).reinterpret_as_uint(),
     )

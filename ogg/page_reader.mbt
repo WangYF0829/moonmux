@@ -68,7 +68,7 @@ fn append_bytes(a : Bytes, b : Bytes) -> Bytes {
   if b.length() == 0 {
     return a
   }
-  let out = Buffer(size_hint=a.length() + b.length())
+  let out = Buffer(capacity=a.length() + b.length())
   out.write_bytes(a.exact_view())
   out.write_bytes(b.exact_view())
   out.to_bytes()
@@ -80,7 +80,7 @@ fn slice_bytes(data : Bytes, start : Int32, end : Int32) -> Bytes {
   if start == 0 && end == data.length() {
     return data
   }
-  let out = Buffer(size_hint=end - start)
+  let out = Buffer(capacity=end - start)
   let mut i = start
   while i < end {
     out.write_byte(data[i])

@@ -247,7 +247,7 @@ pub fn serialize_pages(pages : Array[Page]) -> Bytes {
   for page in pages {
     total = total + 27 + page.segments.length() + page.payload.length()
   }
-  let buf = Buffer(size_hint=total)
+  let buf = Buffer(capacity=total)
   for page in pages {
     write_capture(buf)
     write_body(buf, page, page.expected_crc())

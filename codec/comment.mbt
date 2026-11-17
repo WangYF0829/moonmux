@@ -307,7 +307,7 @@ pub fn encode_comment_preserving(
   if !keep_suffix {
     return Ok(encoded)
   }
-  let buf = Buffer(size_hint=encoded.length() + original.length() - end)
+  let buf = Buffer(capacity=encoded.length() + original.length() - end)
   buf.write_bytes(encoded.exact_view())
   buf.write_bytes(original[end:original.length()])
   Ok(buf.to_bytes())

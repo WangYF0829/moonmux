@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+## [0.9.8] — 2026-11-17
+
+> 0.9.8 发布：MoonBit 2026-11-17 工具链将 `Buffer` / `StringBuilder` 的 `size_hint` 弃用（`--deny-warn` 下报错），全量改为 `capacity`（33 处 / 9 个文件）；最新工具链下 `moon check/test --target all` 恢复全绿。**无公开 API / 库行为变更**。发布记录见 [docs/releases/v0.9.8.md](docs/releases/v0.9.8.md)。
+
+### Fixed
+
+- 工具链兼容：`size_hint=` → `capacity=`（`codec/comment.mbt`、`manifest/manifest.mbt`、`mp4/box.mbt`、`mp4/demux.mbt`、`mp4/write.mbt`、`ogg/page_reader.mbt`、`ogg/stream.mbt`、`pipeline/pipeline.mbt`、`wav/wav.mbt`）。
+- 发布包 116 → **117** 文件（新增本版发布记录）。
+- 工具链基线更新为 moon `0.1.20261117` / moonc `0.10.21`；旧工具链（0.1.20261012）可能不识别 `capacity=`。
+
 ## [0.9.7] — 2026-11-16
 
 > 0.9.7 发布：修复 v0.9.6 tag 的 `.github/workflows/ci.yml` `on:` 段重复键（GitHub 在创建 job 前判 workflow 无效，run 83/84 失败），恢复全量 CI/安装/覆盖率门禁。**无库行为变更**。发布记录见 [docs/releases/v0.9.7.md](docs/releases/v0.9.7.md)。

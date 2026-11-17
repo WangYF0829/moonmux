@@ -721,7 +721,7 @@ pub fn ogg_to_wav_pages_bits(
   // 预分配：避免 Buffer 反复倍增时同时持有新旧两块内存。
   // 但估算值来自输入（不可全信），预分配封顶 16 MiB，其余按需增长。
   let hint = if estimated > 16777216L { 16777216L } else { estimated }
-  let buf = Buffer(size_hint=hint.to_int())
+  let buf = Buffer(capacity=hint.to_int())
   let mut channels = 0
   let mut sample_rate = 0
   let mut seg = 0

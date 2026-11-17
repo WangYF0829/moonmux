@@ -12,7 +12,7 @@
 #      *.zip、*.bak、*.pem、*.key、.env、*.wasm、*.exe、*.dll）。
 #   4) 发布文件内容不得命中密钥模式（ghp_/gho_/ghu_/ghs_/github_pat_/sk-/AKIA/PRIVATE KEY）。
 #   5) 文件数与 zip 体积在基线范围内（v0.9.5 已发布：114 文件 / 540,252 B；
-#      当前 v0.9.7 新增发布记录，预期 116 文件；单文件不超过 1 MiB）。
+#      当前 v0.9.8 新增发布记录，预期 117 文件；单文件不超过 1 MiB）。
 #   6) 可复现性卫生：发布文本文件不得含 UTF-8 BOM / CRLF（否则同一 commit 从
 #      标准 checkout 打包与作者工作区打包的 zip 字节不同；--strict-repro 时判 FAIL）。
 #
@@ -223,7 +223,7 @@ echo
 echo "[5/5] 基线检查"
 BASELINE_FILES_REFERENCE=114      # v0.9.5 已发布包文件数（Release zip 114 条目）
 BASELINE_ZIP_BYTES_REFERENCE=540252  # v0.9.5 已发布 zip 体积（sha256 9ab2329c…2030）
-BASELINE_FILES_HINT_AFTER_FIX=116 # v0.9.7 当前工作区预期文件数（新增 docs/releases/v0.9.7.md）
+BASELINE_FILES_HINT_AFTER_FIX=117 # v0.9.8 当前工作区预期文件数（新增 docs/releases/v0.9.8.md）
 PACKAGE_MIN_FILES="${PACKAGE_MIN_FILES:-80}"
 PACKAGE_MAX_FILES="${PACKAGE_MAX_FILES:-120}"
 PACKAGE_MIN_ZIP_BYTES="${PACKAGE_MIN_ZIP_BYTES:-300000}"

@@ -1,9 +1,9 @@
 # 已知问题与残余风险（Known Issues）
 
-> 本文件汇总 moonmux v0.9.7 当前仍存在的已知问题与**已登记的风险接受**，供使用者、发布负责人与后续维护者查阅。
+> 本文件汇总 moonmux v0.9.8 当前仍存在的已知问题与**已登记的风险接受**，供使用者、发布负责人与后续维护者查阅。
 > 每一项都给出：影响、现有缓解、跟踪状态、负责人建议。相关背景见 [`README.md`](../README.md)（能力边界）、
 > [`docs/architecture.md`](architecture.md)（不变量与已知边界）、[`CHANGELOG.md`](../CHANGELOG.md)、
-> [`RELEASING.md`](../RELEASING.md)（发布检查单）与 [`docs/releases/v0.9.7.md`](releases/v0.9.7.md) / [`docs/releases/v0.9.6.md`](releases/v0.9.6.md)（发布记录）。
+> [`RELEASING.md`](../RELEASING.md)（发布检查单）与 [`docs/releases/v0.9.8.md`](releases/v0.9.8.md) / [`docs/releases/v0.9.7.md`](releases/v0.9.7.md)（发布记录）。
 > 安全类（历史 PII）另见 [`docs/security/pii-advisory.md`](security/pii-advisory.md)。
 
 ## 索引
@@ -59,7 +59,7 @@
 
 环境
 - moonvorbis 0.1.4（mooncakes 最新）；MoonBit moon 0.1.20261012 / moonc 0.10.15。
-- 下游：moonmux v0.9.7（delegate 到 pipeline/），用于复现与对照。
+- 下游：moonmux v0.9.8（delegate 到 pipeline/），用于复现与对照。
 
 问题
 1. 解码器内部多处使用 `unsafe_get`（约 51 处，集中于 ogg_page/vorbis_comment/vorbis_info/vorbis_setup 等），
@@ -110,13 +110,13 @@
 ## KI-03：历史发布包 PII（0.2.0–0.9.1，不可撤回）
 
 **现状**：`项目申报书.md` 在 v0.9.2 之前包含作者手机号与 QQ 邮箱；该文件随 mooncakes 发布包 0.2.0–0.9.1 永久发布，
-git 历史亦保留（73/85 个 commit 的文件内容含该 PII；v0.9.2 的 `af8033e` 起移除；当前树与 v0.9.3 / v0.9.4 / v0.9.5 / v0.9.6 / v0.9.7 发布包已干净）。
+git 历史亦保留（73/85 个 commit 的文件内容含该 PII；v0.9.2 的 `af8033e` 起移除；当前树与 v0.9.3 / v0.9.4 / v0.9.5 / v0.9.6 / v0.9.7 / v0.9.8 发布包已干净）。
 mooncakes 不支持删除/撤回单个版本，`moon deprecate` 为全模块弃用（代价过大），因此**作为已接受风险登记**。
 
 **影响**：作者个人联系方式在旧版本包与 git 历史中公开可检索；不涉及凭据/第三方数据；不代表当前版本存在问题。
 
 **现有缓解**：v0.9.2 起已清除；发布检查单强制 `bash scripts/check_pii.sh`（当前树 0 命中才允许发布）；
-历史模式仅作审计留档（预期非 0）；发布记录 `docs/releases/v0.9.7.md`（及 v0.9.6/v0.9.5/v0.9.4/v0.9.3 记录）已登记风险接受。
+历史模式仅作审计留档（预期非 0）；发布记录 `docs/releases/v0.9.8.md`（及 v0.9.7/v0.9.6/v0.9.5/v0.9.4/v0.9.3 记录）已登记风险接受。
 
 **跟踪状态**：风险接受（不重写历史、不 deprecate 全模块）。完整事实、影响面、不可撤回约束与门禁见
 [`docs/security/pii-advisory.md`](security/pii-advisory.md)。负责人建议：项目维护者（风险接受决策）+ 发布负责人（执行门禁）。

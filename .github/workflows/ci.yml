@@ -454,17 +454,17 @@ jobs:
 
       - name: Verify clean-project install
         env:
-          MOONMUX_INSTALL_VERSION: "0.9.7"
+          MOONMUX_INSTALL_VERSION: "0.9.8"
         run: |
           # 版本 bump 提交可能先于发布到达：轮询等待 mooncakes 出现该版本
           for i in $(seq 1 30); do
             if bash scripts/install_check.sh; then
               exit 0
             fi
-            echo "等待 mooncakes 上的 0.9.7（第 $i 次，最多 30 次）"
+            echo "等待 mooncakes 上的 0.9.8（第 $i 次，最多 30 次）"
             sleep 5
           done
-          echo "mooncakes 上仍未出现可安装的 0.9.7"
+          echo "mooncakes 上仍未出现可安装的 0.9.8"
           exit 1
 
   # 发布预检：只在"打包 + 解包 + 干净工程 check"层面验证，不会真实上传。

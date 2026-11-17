@@ -56,7 +56,7 @@ fn push_fourcc(buf : Buffer, s : String) -> Unit {
 ///|
 /// 构造一个普通 box：size + fourcc + payload。
 fn box(fourcc : String, payload : Bytes) -> Bytes {
-  let out = Buffer(size_hint=8 + payload.length())
+  let out = Buffer(capacity=8 + payload.length())
   push_u32_be(out, 8 + payload.length())
   push_fourcc(out, fourcc)
   out.write_bytes(payload.exact_view())
@@ -71,7 +71,7 @@ fn full_box(
   flags : Int32,
   payload : Bytes,
 ) -> Bytes {
-  let body = Buffer(size_hint=4 + payload.length())
+  let body = Buffer(capacity=4 + payload.length())
   push_u8(body, version)
   push_u24_be(body, flags)
   body.write_bytes(payload.exact_view())
@@ -85,7 +85,7 @@ fn concat(parts : Array[Bytes]) -> Bytes {
   for p in parts {
     n = n + p.length()
   }
-  let out = Buffer(size_hint=n)
+  let out = Buffer(capacity=n)
   for p in parts {
     out.write_bytes(p.exact_view())
   }
@@ -95,7 +95,7 @@ fn concat(parts : Array[Bytes]) -> Bytes {
 ///|
 /// 把一组 Int 按大端 u32 序列化（用于 entry_count 之后的小数组）。
 fn u32_array(values : Array[Int32]) -> Bytes {
-  let out = Buffer(size_hint=values.length() * 4)
+  let out = Buffer(capacity=values.length() * 4)
   for v in values {
     push_u32_be(out, v)
   }

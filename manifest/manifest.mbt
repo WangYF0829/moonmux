@@ -364,7 +364,7 @@ pub fn render(
   // 逐行字符串拼接是 O(n²)：10 万个包会产生约 10 万次整串复制。
   // 用 StringBuilder 预分配（每行最多 21 字节："-" + 19 位数字 + 换行）。
   // 平均一行约 6 字节（5–6 位数字 + 换行）；按 21 字节预分配会多占约 3 倍。
-  let sb = StringBuilder(size_hint=64 + granules.length() * 10)
+  let sb = StringBuilder(capacity=64 + granules.length() * 10)
   push_str(sb, "# moonmux manifest v1\n# granulepos\n# serial=")
   push_str(sb, serial.to_string())
   push_str(sb, "\n# packets=")

@@ -74,7 +74,7 @@ fn push_u32_le(buf : Buffer, v : Int32) -> Unit {
 ///|
 /// 拷贝字节切片 `[start, end)`。
 fn demux_slice(data : Bytes, start : Int32, end : Int32) -> Bytes {
-  let out = Buffer(size_hint=end - start)
+  let out = Buffer(capacity=end - start)
   let mut i = start
   while i < end {
     out.write_byte(data[i])
@@ -444,7 +444,7 @@ fn parse_dops(data : Bytes, dops : BoxRef) -> Result[OpusConfig, String] {
 fn encode_opus_head(config : OpusConfig) -> Bytes {
   // family=0：19 字节固定头；family≠0：再加 StreamCount/CoupledCount/Mapping(C)，
   // 即 21+C 字节（RFC 7845 §5.1.1）。少写这两个字节会让映射表整体前移。
-  let buf = Buffer(size_hint=21 + config.mapping.length())
+  let buf = Buffer(capacity=21 + config.mapping.length())
   buf.write_bytes(b"OpusHead".exact_view())
   push_u8(buf, 1) // 版本
   push_u8(buf, config.channels)
@@ -466,7 +466,7 @@ fn encode_opus_head(config : OpusConfig) -> Bytes {
 /// 输出用的最小 OpusTags：magic + vendor("moonmux") + 0 条注释。
 fn encode_min_opus_tags() -> Bytes {
   let vendor = b"moonmux"
-  let buf = Buffer(size_hint=8 + 4 + vendor.length() + 4)
+  let buf = Buffer(capacity=8 + 4 + vendor.length() + 4)
   buf.write_bytes(b"OpusTags".exact_view())
   push_u32_le(buf, vendor.length())
   buf.write_bytes(vendor.exact_view())

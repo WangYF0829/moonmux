@@ -30,7 +30,7 @@ fn le32_at(data : Bytes, offset : Int32) -> Int32 {
 ///|
 /// ftyp：主品牌、次版本、兼容品牌列表。
 fn ftyp_box(major : String, minor : Int32, brands : Array[String]) -> Bytes {
-  let body = Buffer(size_hint=8 + brands.length() * 4)
+  let body = Buffer(capacity=8 + brands.length() * 4)
   push_fourcc(body, major)
   push_u32_be(body, minor)
   for b in brands {
@@ -55,7 +55,7 @@ fn identity_matrix(buf : Buffer) -> Unit {
 ///|
 /// mvhd：媒体时间轴（movie timescale）与总时长。
 fn mvhd_box(timescale : Int32, duration : Int32) -> Bytes {
-  let body = Buffer(size_hint=100)
+  let body = Buffer(capacity=100)
   push_u32_be(body, 0) // creation_time
   push_u32_be(body, 0) // modification_time
   push_u32_be(body, timescale)
@@ -78,7 +78,7 @@ fn mvhd_box(timescale : Int32, duration : Int32) -> Bytes {
 ///|
 /// tkhd：轨道头（时长用 movie timescale；音频轨 volume 1.0）。
 fn tkhd_box(track_id : Int32, duration : Int32) -> Bytes {
-  let body = Buffer(size_hint=90)
+  let body = Buffer(capacity=90)
   push_u32_be(body, 0) // creation_time
   push_u32_be(body, 0) // modification_time
   push_u32_be(body, track_id)
@@ -102,7 +102,7 @@ fn tkhd_box(track_id : Int32, duration : Int32) -> Bytes {
 /// Opus-in-ISOBMFF 要求用 edit list 跳过 pre-skip；没有它，严格播放器会
 /// 把 priming 也播出来（开头多几毫秒静音/杂音），ffprobe 的容器时长也会偏大。
 fn edts_box(pre_skip : Int32, content_samples : Int32) -> Bytes {
-  let body = Buffer(size_hint=12)
+  let body = Buffer(capacity=12)
   push_u32_be(body, 1) // entry_count
   let seg_duration = ((content_samples.to_int64() * 1000L + 47999L) / 48000L).to_int()
   push_u32_be(body, seg_duration) // segment_duration（movie timescale = 1000）
@@ -126,13 +126,13 @@ fn roll_group_boxes(pre_skip : Int32, sample_count : Int32) -> Bytes {
   } else {
     -pre_skip
   }
-  let sgpd_body = Buffer(size_hint=14)
+  let sgpd_body = Buffer(capacity=14)
   push_fourcc(sgpd_body, "roll")
   push_u32_be(sgpd_body, 2) // default_sample_description_index? 不：version1 下是 default_length
   push_u32_be(sgpd_body, 1) // entry_count
   push_u16_be(sgpd_body, roll & 0xFFFF) // roll_distance（int16，负值 = 需要 pre-roll）
   let sgpd = full_box("sgpd", 1, 0, sgpd_body.to_bytes())
-  let sbgp_body = Buffer(size_hint=16)
+  let sbgp_body = Buffer(capacity=16)
   push_fourcc(sbgp_body, "roll")
   push_u32_be(sbgp_body, 1) // entry_count
   push_u32_be(sbgp_body, sample_count)
@@ -144,7 +144,7 @@ fn roll_group_boxes(pre_skip : Int32, sample_count : Int32) -> Bytes {
 ///|
 /// mdhd：媒体头（媒体时间轴与媒体时长）。
 fn mdhd_box(timescale : Int32, duration : Int32) -> Bytes {
-  let body = Buffer(size_hint=24)
+  let body = Buffer(capacity=24)
   push_u32_be(body, 0) // creation_time
   push_u32_be(body, 0) // modification_time
   push_u32_be(body, timescale)
@@ -157,7 +157,7 @@ fn mdhd_box(timescale : Int32, duration : Int32) -> Bytes {
 ///|
 /// hdlr：处理器类型（音频为 "soun"）。
 fn hdlr_box(handler : String, name : String) -> Bytes {
-  let body = Buffer(size_hint=24 + name.length())
+  let body = Buffer(capacity=24 + name.length())
   push_u32_be(body, 0) // pre_defined
   push_fourcc(body, handler)
   push_u32_be(body, 0) // reserved
@@ -178,7 +178,7 @@ fn hdlr_box(handler : String, name : String) -> Bytes {
 ///|
 /// smhd：声音媒体头（balance 0）。
 fn smhd_box() -> Bytes {
-  let body = Buffer(size_hint=4)
+  let body = Buffer(capacity=4)
   push_u16_be(body, 0) // balance
   push_u16_be(body, 0) // reserved
   full_box("smhd", 0, 0, body.to_bytes())
@@ -205,7 +205,7 @@ fn dops_box(opus_head : Bytes) -> Bytes {
   let pre_skip = le16_at(opus_head, 10)
   let input_rate = le32_at(opus_head, 12)
   let family = opus_head[18].to_int()
-  let body = Buffer(size_hint=16 + channels)
+  let body = Buffer(capacity=16 + channels)
   push_u8(body, 0) // version
   push_u8(body, channels)
   push_u16_be(body, pre_skip)
@@ -228,7 +228,7 @@ fn dops_box(opus_head : Bytes) -> Bytes {
 /// Opus 音频样本条目（AudioSampleEntry + dOps）。
 fn opus_sample_entry(opus_head : Bytes) -> Bytes {
   let channels = opus_head[9].to_int()
-  let body = Buffer(size_hint=64)
+  let body = Buffer(capacity=64)
   // reserved(6) + data_reference_index(2)
   push_u16_be(body, 0)
   push_u16_be(body, 0)
@@ -259,7 +259,7 @@ fn stsd_box(opus_head : Bytes) -> Bytes {
 ///|
 /// stts：解码时间表（run-length 压缩后的 (样本数, 每样本时长)）。
 fn stts_box(runs : Array[(Int32, Int32)]) -> Bytes {
-  let body = Buffer(size_hint=8 + runs.length() * 8)
+  let body = Buffer(capacity=8 + runs.length() * 8)
   push_u32_be(body, runs.length())
   for r in runs {
     let (count, delta) = r
@@ -272,7 +272,7 @@ fn stts_box(runs : Array[(Int32, Int32)]) -> Bytes {
 ///|
 /// stsc：样本到 chunk 的映射（单 chunk 装全部样本）。
 fn stsc_box(sample_count : Int32) -> Bytes {
-  let body = Buffer(size_hint=20)
+  let body = Buffer(capacity=20)
   push_u32_be(body, 1) // entry_count
   push_u32_be(body, 1) // first_chunk
   push_u32_be(body, sample_count) // samples_per_chunk
@@ -283,7 +283,7 @@ fn stsc_box(sample_count : Int32) -> Bytes {
 ///|
 /// stsz：逐样本大小（sample_size 为 0 时逐个列出）。
 fn stsz_box(sizes : Array[Int32]) -> Bytes {
-  let body = Buffer(size_hint=12 + sizes.length() * 4)
+  let body = Buffer(capacity=12 + sizes.length() * 4)
   push_u32_be(body, 0) // sample_size（0 = 逐样本给出）
   push_u32_be(body, sizes.length())
   for s in sizes {
@@ -295,7 +295,7 @@ fn stsz_box(sizes : Array[Int32]) -> Bytes {
 ///|
 /// stco：chunk 偏移（单 chunk）。
 fn stco_box(offset : Int32) -> Bytes {
-  let body = Buffer(size_hint=8)
+  let body = Buffer(capacity=8)
   push_u32_be(body, 1) // entry_count
   push_u32_be(body, offset)
   full_box("stco", 0, 0, body.to_bytes())
