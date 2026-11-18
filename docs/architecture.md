@@ -116,7 +116,7 @@ mdat → 按 chunk 切出样本（= Opus 包）
 - 基准与变异测试走 Node 脚本（可复现、无第三方依赖）；bench 已接入**本地基线 + 阈值 + 平台守卫 + 小操作噪声下限（4 ms）**（`scripts/bench-baseline.json`，默认 10% / CI 共享 runner 50%，`demux` I/O 密集取 6 次测量上界 80 ms，跨平台仅 WARN），变异测试仍无 libFuzzer/AFL 覆盖率引导。
 - **真实 Vorbis 解码慢是已知限制**：`testdata/vorbis_sample.ogg` 在 debug native 下 to-wav 约 **92.6 s**（依赖解码器 O(n²) IMDCT + Huffman 逐 bit 线性扫表；release/Linux 未实测）；CPU 双预算 debug 上限约 **18 ms/字节**，真实样本已接近硬约束；本项目只能做放大比预算、不能加速，长文件建议先 `split`；内存预算上界模型与真实峰值可能因 allocator / 环境浮动（已留 2 倍余量）。
 - 备份/别名检查的内存：`@fs` 没有 stat/inode/rename API，覆盖已有输出时需把旧文件整体读入内存做内容比较，峰值约为旧文件大小 + 新输出；无法流式比较或原子替换。
-- **依赖维护性与已知问题**：依赖维护性评估（G1-B2 = **DEGRADED**：3/3 依赖近 12 个月有发布且未弃用、3/3 无 SECURITY.md、2/3 bus factor=1）与退出预案、工具链 pin 结论见 [`docs/dependency-assessment.md`](dependency-assessment.md)；KI-01..05（含 `moonvorbis` 上游 issue 草稿）见 [`docs/known-issues.md`](known-issues.md)；历史发布包 PII 风险接受见 [`docs/security/pii-advisory.md`](security/pii-advisory.md)。
+- **依赖维护性与已知问题**：依赖维护性评估（G1-B2 = **DEGRADED**：3/3 依赖近 12 个月有发布且未弃用、3/3 无 SECURITY.md、2/3 bus factor=1）与退出预案、工具链 pin 结论见 [`docs/dependency-assessment.md`](dependency-assessment.md)；KI-01..05（含 `moonvorbis` 上游 issue 草稿）见 [`docs/known-issues.md`](known-issues.md)；**上游依赖导致的风险总表 R-UP-01..05（含工具链滚动）**见同文件「上游依赖导致的风险」一节，明确 G1-M06 仍为风险接受、上游 issue 尚未提交；历史发布包 PII 风险接受见 [`docs/security/pii-advisory.md`](security/pii-advisory.md)。
 - **发布可复现性**：发布前把跟踪的文本文件规范化为 UTF-8 无 BOM + LF，并用 `bash scripts/check_package.sh --strict-repro` 验证；同一 tag 的标准 `git checkout` 与作者工作区应生成相同 zip sha256。历史 v0.9.3/v0.9.4 发布包保留了工作区 CRLF/BOM 字节（v0.9.3：371,067 B vs 标准 checkout 370,958 B），其不可复现性作为历史事实记录，新流程不再沿用。
 - 下一期候选：无。容器层读写、MP4 写/解封装、WAV 全格式/块保真/流式写、基准与变异测试均已落地；明确不做 Vorbis-in-MP4 与多音轨 MP4。
 

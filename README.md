@@ -193,6 +193,22 @@ v0.4.0 新增库 API：`@ogg.PageReader` / `@ogg.for_each_page_chunked`（增量
 | `extract` 幂等重跑 | 需显式 `--force`，且只允许幂等覆盖 | 默认拒绝“输出与输入内容相同”的别名；`--force` 仍要求已有输出与待写内容相同（或待写内容就是整个输入文件），不再允许覆盖不同内容——硬链接/别名截断多流源文件会被拒绝 |
 | 覆盖/别名检查的内存 | 无 `stat`/inode API | 覆盖已有输出时把旧文件整体读入内存做内容比较（峰值约旧文件 + 新输出）；不能流式比较或原子替换 |
 
+### 上游依赖导致的风险（非 moonmux 代码缺陷）
+
+以下风险根因在第三方包或 MoonBit 工具链，**不能通过修改 moonmux 自身代码完全消除**；完整边界、映射与关闭条件见
+[`docs/known-issues.md`](docs/known-issues.md) 的「上游依赖导致的风险」一节。
+
+| 上游 | 风险 | 状态 / moonmux 侧缓解 |
+|---|---|---|
+| `LL728/moonvorbis@0.1.4` | 内部 `unsafe_get` / 缺统一 bit-budget；不可信 Vorbis 可能越界读、panic 或资源放大（R-UP-01） | 上游无修复版本；gate v3 + 内存/CPU 双预算缓解；**G1-M06 严格口径 FAIL（风险接受）**；不建议直接处理不可信输入 |
+| `LL728/moonopus@0.2.2` | Opus payload 只校验 TOC，不校验码流内容（R-UP-02） | 信任边界约束；KI-02 |
+| MoonBit 工具链 latest | 滚动更新可能引入破坏性变更；2026-11-17 `size_hint` 弃用使 0.9.7 编译失败（R-UP-03） | 0.9.8 已改 `capacity=` 修复；无法 pin 版本，每次 latest 更新重跑全量门禁 |
+| `moonbitlang/x@0.5.5` | 上游 API/ABI 变化（R-UP-05） | 精确 pin + CI 回归；低风险 |
+| 3 个直接依赖的维护性 | 3/3 无 `SECURITY.md`，2/3 bus factor=1（R-UP-04） | G1-B2 = DEGRADED；fork/vendor 退出预案 |
+
+**明确声明**：上述风险不是 moonmux 源码中的漏洞；本项目**不宣称已通过 G1-M06**。上游 issue **尚未提交**
+（草稿见 `docs/known-issues.md` KI-01），因此 R-UP-01 是「已缓解、未上游修复、未正式上报」，不能标记为已解决。
+
 内存量级（实测，19 MB / 300 段输入）：`info` 约 2.5×、`verify` 约 2.6×、`cat`/`mux` 约 3.5×；
 `to-wav` 还要叠加解码器的 Double PCM（约 4–5× 输出）。所有命令整文件读入，没有流式写接口。
 

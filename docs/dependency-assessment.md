@@ -7,6 +7,9 @@
 > 方法：`moon view`（mooncakes 元数据，2026-11-13）＋ 本地注册表索引 `created_at` 逐版本核对 ＋ GitHub REST API
 > （repo / contributors / commits / releases / SECURITY.md / security-advisories，2026-11-13，未认证配额 60/60 起抓取）。
 > 原始证据：`_review/evidence/r3-supply-*.{json,log}`、`r3-supply-mooncakes.log`、`r3-supply-release-cadence.log`。
+> **上游风险汇总**：本文件只评估依赖维护性；由第三方包 / MoonBit 工具链根因导致的**安全与兼容风险**
+> （R-UP-01..05，含 moonvorbis `unsafe_get`、moonopus payload、工具链滚动、依赖维护性）已集中写明于
+> [`docs/known-issues.md`](known-issues.md) 的「上游依赖导致的风险」一节；本文件不重复安全结论。
 
 ## 1. 依赖与角色
 

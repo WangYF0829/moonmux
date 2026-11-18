@@ -167,6 +167,7 @@ moon deprecate WangYF0829/moonmux --undo
 | `moon publish --dry-run` 退出码语义（moon 0.1.20261012） | 409（已发布）/ 202（未发布）均可能非零退出 | 以服务器返回文本判定（§2）；CI `publish-dry-run` job 已按此接线 |
 | 覆盖率 CI 阈值余量 | 本地总 **82.57%** / 库层 91.82%；CI Linux 实测总 **80.11%**、未覆盖行 **697**（阈值 800）——**仅余 0.11pp** | qa 持续补测降低未覆盖行；新增防御分支须同步补测试；本版将该余量登记为最紧 SHOULD 风险 |
 | G1-B2 依赖维护性 = **DEGRADED** | 3/3 依赖近 12 个月有发布且未弃用、但 3/3 无 SECURITY.md、2/3 bus factor=1 且无接管预案；`moonvorbis` 有 `unsafe_get` 上游缺陷 | 已登记并给出退出预案（fork/替换/降级）与安全披露渠道评估，见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md)；KI-01 跟踪上游 issue；发布记录注明该状态 |
+| 上游依赖导致的风险（总表） | `moonvorbis` / `moonopus` / MoonBit 工具链 / `moonbitlang/x` 的根因风险，moonmux 无法在自身代码内完全修复 | **完整表 R-UP-01..05、边界声明、关闭条件与“上游 issue 尚未提交”状态**见 [`docs/known-issues.md`](docs/known-issues.md)「上游依赖导致的风险」；发布记录必须引用该节，不得宣称 G1-M06 已通过 |
 | 工具链无法固定到具体版本 | installer 支持版本参数，但**固定版本下载 URL 全线 403**（latest 200），CI 只能跟随 latest | 维持「latest + 每个 job 记录 `moon version --all`」；发布记录固定工具链版本；结论与复验命令见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md) |
 | 历史发布包 PII（0.2.0–0.9.1） | 作者联系方式存在于不可撤回的历史版本与 git 历史 | 已接受风险并发布公告：[`docs/security/pii-advisory.md`](docs/security/pii-advisory.md) + [`docs/known-issues.md`](docs/known-issues.md) KI-03；当前版本已干净，`check_pii.sh` 纳入发布检查单 |
 | 真实 Vorbis 解码慢（依赖缺陷） | debug native 下 `testdata/vorbis_sample.ogg` to-wav 约 92.6 s（O(n²) IMDCT + Huffman 逐 bit 线性扫表）；release/Linux 未实测 | 属依赖解码器真实慢，非预算误拒；长文件建议 `split`；预算只做放大比拒绝 |

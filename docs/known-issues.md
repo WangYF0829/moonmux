@@ -22,6 +22,38 @@
 
 ---
 
+## 上游依赖导致的风险（非 moonmux 代码缺陷）
+
+> 这一节把所有**根因在第三方包 / MoonBit 工具链**、moonmux 无法在自身源码内完全修复的风险集中写明。
+> 它们不是 moonmux 自身代码的缺陷；moonmux 只能在调用边界做校验、预算、隔离和文档声明。
+> **严格按 G1-M06 / G1-05，本项目仍为「风险接受（严格口径 FAIL）」，不宣称已关闭。**
+
+| ID | 上游来源 | 风险 | 严重度 | 状态 / 映射 |
+|---|---|---|---|---|
+| R-UP-01 | `LL728/moonvorbis@0.1.4`（mooncakes 最新，2026-10-17 后无新版） | 内部约 51 处 `unsafe_get`，setup/码流解析缺少统一 bit-budget；不可信 Vorbis 输入可能越界读、panic 或 CPU/内存放大 | 中高 | **开放**；上游无修复版本；KI-01 / G1-M06 |
+| R-UP-02 | `LL728/moonopus@0.2.2` | Opus 音频 payload 只校验 TOC，不校验码流内容；健壮性依赖上游解码器 | 中 | 已登记（信任边界）；KI-02 |
+| R-UP-03 | MoonBit 工具链（`moon`/`moonc` 跟随 latest） | 滚动更新可能引入破坏性变更；2026-11-17 的 `size_hint` 弃用使 v0.9.7 在 `--deny-warn` 下编译失败（run 107），v0.9.8 改为 `capacity=` 修复 | 中 | 已发生并修复；仍无法 pin 版本（固定版本 URL 全线 403） |
+| R-UP-04 | `LL728/moonvorbis` / `LL728/moonopus` / `moonbitlang/x` | 3/3 无 `SECURITY.md` 披露渠道，2/3 bus factor=1；上游维护性不足 | 中 | G1-B2 = **DEGRADED**；退出预案 fork/vendor |
+| R-UP-05 | `moonbitlang/x@0.5.5` | 上游 API/ABI 或行为变化可能影响 Ogg 页/流辅助；当前精确 pin + CI 覆盖 | 低 | 已登记；升级需回归 |
+
+**边界声明**
+
+- **根因归属**：R-UP-01/02 的越界/资源风险位于 `moonvorbis` / `moonopus` 内部，不在 moonmux 的容器读写层；
+  `to-wav` 的 Vorbis/Opus 解码路径只是调用方。
+- **moonmux 侧缓解（不能替代上游修复）**：解码前 gate v3（逐 codebook 位预算、floor/residue/mapping 交叉校验、
+  lookup 表/除零/溢出检查）、内存上界与 CPU 双预算、`MOONMUX_MAX_PCM_MB`、失败不产出半成品；
+  详见 KI-01 与 [`README.md`](../README.md)「能力边界」。
+- **明确不做过度承诺**：即使 gate v3 能挡住已知 PoC，也不能保证覆盖 `moonvorbis` 内部所有 `unsafe_get` 路径；
+  对不可信输入仍建议独立进程 + 资源限额隔离。
+- **上游 issue 状态**：**尚未提交**（截至 2026-11-18）。可直接粘贴的草稿见 KI-01；提交需要维护者账号和最终措辞复核。
+  因此 R-UP-01 目前是「已缓解、未上游修复、未正式上报」三项并存，不能标记为已解决。
+- **关闭条件**：上游发布修复版本并升级回归，或 moonmux fork/vendor 并对 `unsafe_get`/bit-budget 做完整补丁并经红队回归；
+  在此之前 G1-M06 只能风险接受。
+- **工具链风险的特殊性**：R-UP-03 已实际发生过一次（v0.9.7 → v0.9.8）；CI 每个 job 记录 `moon version --all`，
+  但无法锁定版本，因此每次 latest 更新后都需要重新跑全量门禁。
+
+---
+
 ## KI-01：`moonvorbis@0.1.4` 的 `unsafe_get` / 缺 bit-budget（依赖层，未修复）
 
 **现状**

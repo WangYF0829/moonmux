@@ -55,6 +55,22 @@ MoonBit 生态在 1.0 前不承诺公开 API 稳定；安全修复按 `RELEASING
 - Opus 音频 payload 只校验 TOC，不校验码流内容；健壮性依赖 `LL728/moonopus`（KI-02）。
 - 历史发布包（0.2.0–0.9.1）含作者旧联系方式，不可撤回，已按风险接受登记（KI-03）。
 
+### 上游依赖导致的风险（非 moonmux 代码缺陷）
+
+以下风险的根因在第三方包或 MoonBit 工具链，**不能通过修改 moonmux 自身代码完全消除**；
+完整清单、边界声明与关闭条件见 [`docs/known-issues.md`](docs/known-issues.md) 的「上游依赖导致的风险」一节。
+
+| 上游 | 风险 | 状态 |
+|---|---|---|
+| `LL728/moonvorbis@0.1.4` | `unsafe_get` / 缺 bit-budget；不可信 Vorbis 可能越界读或资源放大 | 开放；无上游修复；gate v3 缓解；**G1-M06 严格口径 FAIL（风险接受）** |
+| `LL728/moonopus@0.2.2` | Opus payload 只校验 TOC，不校验码流内容 | 信任边界约束；KI-02 |
+| MoonBit 工具链 latest | 滚动更新可能引入破坏性变更（2026-11-17 `size_hint` 弃用使 0.9.7 编译失败） | 0.9.8 已适配；无法 pin 版本，持续复验 |
+| `moonbitlang/x@0.5.5` | 上游 API/ABI 变化 | 精确 pin + CI 回归；低风险 |
+
+**明确声明**：上述风险不是 moonmux 源码中的漏洞；本项目不宣称已通过 G1-M06。上游 issue **尚未提交**
+（草稿见 `docs/known-issues.md` KI-01），因此 R-UP-01 的状态是「已缓解、未上游修复、未正式上报」。
+在不可信输入场景，仍应使用独立进程和资源限额隔离 `to-wav`。
+
 ## 安全默认值
 
 - CLI 写命令在写盘前做完整性与预算校验，失败不产出半成品；
