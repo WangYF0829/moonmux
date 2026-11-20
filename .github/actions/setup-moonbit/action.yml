@@ -58,13 +58,21 @@ runs:
           -o "$tmp/toolchain.tar.gz"
         echo "${{ inputs.linux_sha256 }}  $tmp/toolchain.tar.gz" | sha256sum -c -
         tar -xzf "$tmp/toolchain.tar.gz" -C "$HOME/.moon"
+        chmod +x "$HOME/.moon/bin/"*
         curl -fsSL --retry 3 --retry-delay 2 \
           "$base/moonbit-core-${{ inputs.version }}-universal.zip" \
           -o "$tmp/core.zip"
         echo "${{ inputs.core_sha256 }}  $tmp/core.zip" | sha256sum -c -
         mkdir -p "$HOME/.moon/lib"
+        rm -rf "$HOME/.moon/lib/core"
         unzip -q "$tmp/core.zip" -d "$HOME/.moon/lib"
         rm -rf "$tmp"
+        # Official installer builds the core bundles before use; replicate it.
+        (
+          cd "$HOME/.moon/lib/core"
+          PATH="$HOME/.moon/bin:$PATH" moon bundle --warn-list -a --all
+          PATH="$HOME/.moon/bin:$PATH" moon bundle --warn-list -a --target wasm-gc --quiet
+        )
         echo "$BIN" >> "$GITHUB_PATH"
         "$BIN/moon" version --all
         "$BIN/moon" version --all | grep -q 'moon 0.1.20261117'
@@ -110,6 +118,18 @@ runs:
         }
         New-Item -ItemType Directory -Force (Join-Path $root 'lib') | Out-Null
         Expand-Archive $coreTmp -DestinationPath (Join-Path $root 'lib') -Force
+
+        # Official installer builds the core bundles before use; replicate it.
+        $coreDir = Join-Path $root 'lib\core'
+        Push-Location $coreDir
+        $oldPath = $env:PATH
+        $env:PATH = "$bin;$env:PATH"
+        & $moon bundle --warn-list -a --all
+        if ($LASTEXITCODE -ne 0) { throw "moon bundle --all failed: $LASTEXITCODE" }
+        & $moon bundle --warn-list -a --target wasm-gc --quiet
+        if ($LASTEXITCODE -ne 0) { throw "moon bundle wasm-gc failed: $LASTEXITCODE" }
+        $env:PATH = $oldPath
+        Pop-Location
 
         $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         & $moon version --all
