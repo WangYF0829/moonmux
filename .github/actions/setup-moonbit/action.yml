@@ -1,0 +1,119 @@
+name: Setup pinned MoonBit
+description: >
+  Install a pinned MoonBit toolchain archived from the official release build
+  (moon 0.1.20261117 / moonc 0.10.21+06da1ed44). Downloads are verified against
+  SHA-256 values committed in this repository. Fails closed: it never silently
+  falls back to `latest`.
+
+inputs:
+  tag:
+    description: Release tag path on chawyehsu/moonbit-binaries (URL-encoded +)
+    required: false
+    default: "v0.10.21%2B06da1ed44"
+  version:
+    description: Release version used in asset filenames
+    required: false
+    default: "v0.10.21+06da1ed44"
+  windows_sha256:
+    required: false
+    default: "941b6596813861350d43e2fc92b4444f562f2b5589b07c1b82e5c62f07f47239"
+  linux_sha256:
+    required: false
+    default: "32f74e33538911313acba366d4a06e7678296aa7737945f678ff1fbc7f9f7f82"
+  core_sha256:
+    required: false
+    default: "9dee22c988998e41c6b39dfeacca3f354d6ac9da2159afd9f9d9853bcad1cc36"
+
+runs:
+  using: composite
+  steps:
+    - name: Cache pinned toolchain
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.moon/bin
+          ~/.moon/lib
+          ~/.moon/include
+        key: moonbit-${{ runner.os }}-${{ inputs.version }}
+
+    - name: Install pinned toolchain (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        BIN="$HOME/.moon/bin"
+        if [ -x "$BIN/moon" ] && "$BIN/moon" version --all 2>/dev/null | grep -q 'moon 0.1.20261117' \
+           && "$BIN/moon" version --all 2>/dev/null | grep -q 'v0.10.21+06da1ed44'; then
+          echo "$BIN" >> "$GITHUB_PATH"
+          echo "using cached pinned MoonBit: $("$BIN/moon" version --all | head -1)"
+          exit 0
+        fi
+
+        mkdir -p "$HOME/.moon"
+        rm -rf "$HOME/.moon/bin" "$HOME/.moon/lib" "$HOME/.moon/include"
+        base="https://github.com/chawyehsu/moonbit-binaries/releases/download/${{ inputs.tag }}"
+        tmp="$(mktemp -d)"
+        curl -fsSL --retry 3 --retry-delay 2 \
+          "$base/moonbit-${{ inputs.version }}-x86_64-unknown-linux.tar.gz" \
+          -o "$tmp/toolchain.tar.gz"
+        echo "${{ inputs.linux_sha256 }}  $tmp/toolchain.tar.gz" | sha256sum -c -
+        tar -xzf "$tmp/toolchain.tar.gz" -C "$HOME/.moon"
+        curl -fsSL --retry 3 --retry-delay 2 \
+          "$base/moonbit-core-${{ inputs.version }}-universal.zip" \
+          -o "$tmp/core.zip"
+        echo "${{ inputs.core_sha256 }}  $tmp/core.zip" | sha256sum -c -
+        mkdir -p "$HOME/.moon/lib"
+        unzip -q "$tmp/core.zip" -d "$HOME/.moon/lib"
+        rm -rf "$tmp"
+        echo "$BIN" >> "$GITHUB_PATH"
+        "$BIN/moon" version --all
+        "$BIN/moon" version --all | grep -q 'moon 0.1.20261117'
+        "$BIN/moon" version --all | grep -q 'v0.10.21+06da1ed44'
+
+    - name: Install pinned toolchain (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $bin = Join-Path $env:USERPROFILE '.moon\bin'
+        $moon = Join-Path $bin 'moon.exe'
+        if (Test-Path $moon) {
+          $v = & $moon version --all 2>&1 | Out-String
+          if ($v -match 'moon 0\.1\.20261117' -and $v -match 'v0\.10\.21\+06da1ed44') {
+            $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            Write-Output "using cached pinned MoonBit: $(($v -split "`n")[0])"
+            exit 0
+          }
+        }
+
+        $root = Join-Path $env:USERPROFILE '.moon'
+        New-Item -ItemType Directory -Force $root | Out-Null
+        foreach ($d in @('bin','lib','include')) {
+          $p = Join-Path $root $d
+          if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+        }
+        $base = 'https://github.com/chawyehsu/moonbit-binaries/releases/download/${{ inputs.tag }}'
+        $tmp = Join-Path $env:RUNNER_TEMP 'moonbit-toolchain.zip'
+        curl.exe -fsSL --retry 3 --retry-delay 2 "$base/moonbit-${{ inputs.version }}-x86_64-pc-windows.zip" -o $tmp
+        if ($LASTEXITCODE -ne 0) { throw "download toolchain failed" }
+        $hash = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+        if ($hash -ne '${{ inputs.windows_sha256 }}') {
+          throw "toolchain sha256 mismatch: $hash"
+        }
+        Expand-Archive $tmp -DestinationPath $root -Force
+
+        $coreTmp = Join-Path $env:RUNNER_TEMP 'moonbit-core.zip'
+        curl.exe -fsSL --retry 3 --retry-delay 2 "$base/moonbit-core-${{ inputs.version }}-universal.zip" -o $coreTmp
+        if ($LASTEXITCODE -ne 0) { throw "download core failed" }
+        $coreHash = (Get-FileHash $coreTmp -Algorithm SHA256).Hash.ToLower()
+        if ($coreHash -ne '${{ inputs.core_sha256 }}') {
+          throw "core sha256 mismatch: $coreHash"
+        }
+        New-Item -ItemType Directory -Force (Join-Path $root 'lib') | Out-Null
+        Expand-Archive $coreTmp -DestinationPath (Join-Path $root 'lib') -Force
+
+        $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        & $moon version --all
+        $v = & $moon version --all 2>&1 | Out-String
+        if ($v -notmatch 'moon 0\.1\.20261117' -or $v -notmatch 'v0\.10\.21\+06da1ed44') {
+          throw "unexpected pinned toolchain: $v"
+        }
