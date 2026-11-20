@@ -5,6 +5,11 @@
 
 ///|
 fn main {
+  run()
+}
+
+///|
+fn run() -> Unit {
   let path = "testdata/opus_sample.opus"
   let data = @fs.read_file_to_bytes(path) catch {
     IOError(msg) => {

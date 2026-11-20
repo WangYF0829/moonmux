@@ -5,6 +5,11 @@
 
 ///|
 fn main {
+  run()
+}
+
+///|
+fn run() -> Unit {
   let format : @wav.WavFormat = {
     channels: 1,
     sample_rate: 8000,
