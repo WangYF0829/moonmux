@@ -60,24 +60,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install MoonBit (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
-
-      # Windows 用官方 powershell 安装脚本；安装后断言 moon.exe 存在，
-      # 否则失败会变成下一步的 "command not found"，难以定位。
-      - name: Install MoonBit (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          irm https://cli.moonbitlang.com/install/powershell.ps1 | iex
-          $bin = Join-Path $env:USERPROFILE '.moon\bin'
-          if (-not (Test-Path (Join-Path $bin 'moon.exe'))) {
-            throw "moon.exe not found under $bin"
-          }
-          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Toolchain version
         shell: bash
@@ -223,10 +206,7 @@ jobs:
         with:
           fetch-depth: 0 # 需要完整 tag 历史才能定位上一发布 tag 并导出基线树
 
-      - name: Install MoonBit
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Toolchain version
         shell: bash
@@ -283,10 +263,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install MoonBit
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Toolchain version
         run: moon version --all
@@ -344,10 +321,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install MoonBit
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Update package index
         run: moon update
@@ -380,10 +354,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install MoonBit
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Toolchain version
         run: moon version --all
@@ -412,10 +383,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install MoonBit
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Install ffmpeg (ffprobe)
         run: |
@@ -444,10 +412,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install MoonBit
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Update package index
         run: moon update
@@ -477,10 +442,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install MoonBit
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Toolchain version
         run: moon version --all
@@ -535,10 +497,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install MoonBit
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Toolchain version
         shell: bash
@@ -582,10 +541,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install MoonBit
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Update package index
         run: moon update
@@ -611,15 +567,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install MoonBit (Windows)
-        shell: pwsh
-        run: |
-          irm https://cli.moonbitlang.com/install/powershell.ps1 | iex
-          $bin = Join-Path $env:USERPROFILE '.moon\bin'
-          if (-not (Test-Path (Join-Path $bin 'moon.exe'))) {
-            throw "moon.exe not found under $bin"
-          }
-          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - uses: ./.github/actions/setup-moonbit
 
       - name: Toolchain version
         run: moon version --all
