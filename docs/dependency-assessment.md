@@ -80,9 +80,12 @@
 - moonvorbis 另有未修复的 `unsafe_get`/缺 bit-budget 依赖缺陷（G1-M06 已登记降级）。
 - 缓解与风险接受见 §5；不因 B2 降级而阻塞发布（属依赖侧外部条件，已用隔离/固定版本/gate 缓解并登记）。
 
-## 4. 工具链 pin 可行性（结论：机制存在，但上游拒绝固定版本 → 当前不可可靠 pin）
+## 4. 工具链 pin（已实施：官方 CDN 不可 pin，改用归档构建 + SHA-256 校验）
 
-目的：判断 CI 能否把 MoonBit 工具链固定到发布基线 `moon 0.1.20261012`，从而消除"latest 漂移"。
+目的：把 CI 的 MoonBit 工具链固定到精确版本，消除 `latest` 漂移。
+结论先行：**官方 CDN 仍只保留 `latest`（固定版本 URL 403），因此不能直接用官方安装器 pin；但已通过第三方归档的官方构建 + 仓库内 SHA-256 实现可验证的 pin。**
+
+当前固定版本：**moon `0.1.20261117` / moonc `v0.10.21+06da1ed44` / moonrun `0.1.20261117`**。
 
 ### 4.1 安装脚本取证（源码已抓取：`_review/evidence/r3-supply-install-unix.sh`、`r3-supply-install-powershell.ps1`）
 
@@ -108,30 +111,32 @@
 
 原始输出：`_review/evidence/r3-supply-toolchain-head.log` / `.json`（6 个固定版本 URL 全部 403，4 个 latest URL 全部 200）。
 
-### 4.3 结论与补偿
+### 4.3 已实施的 pin 方案（2026-11-20）
 
-**结论：安装器支持版本选择，但上游只保留 `latest` 产物（固定版本 403），CI 无法可靠 pin 到 `0.1.20261012`。**
-维持现状（latest + 版本记录 + 可复现/校验和补偿），并保留本结论作为"已知偏差"登记：
-- 每个 job 打印 `moon version --all`（CI 已有），发布记录/`docs/releases/*.md` 记录实际工具链；
-- 发布制品用 `sha256` + mooncakes `metadata.checksum` 互证（[`scripts/gen_sbom.sh`](../scripts/gen_sbom.sh) 归档）；
-- 同 commit + 同工具链重建可比对（首轮供应链审查已验证 v0.9.3 发布包可复现，注意 CRLF 口径见 [`RELEASING.md`](../RELEASING.md)）；
-- 若未来上游开放固定版本，CI 只需：
+- **来源**：`chawyehsu/moonbit-binaries` 的 release `v0.10.21+06da1ed44`（该仓库专门归档 MoonBit 官方每次构建；资产为官方 toolchain / core 的再发布）。
+- **固定资产**：
+  - Windows：`moonbit-v0.10.21+06da1ed44-x86_64-pc-windows.zip`，sha256 `941b6596…7239`；
+  - Linux：`moonbit-v0.10.21+06da1ed44-x86_64-unknown-linux.tar.gz`，sha256 `32f74e33…7f82`；
+  - core：`moonbit-core-v0.10.21+06da1ed44-universal.zip`，sha256 `9dee22c9…cc36`。
+- **实现**：`.github/actions/setup-moonbit/action.yml`
+  - 先查 `~/.moon/{bin,lib,include}` 缓存，并校验 `moon version --all` 精确匹配；
+  - 未命中则下载归档，`sha256sum`/`Get-FileHash` 对仓库内固定值校验，解压到 `~/.moon`；
+  - 复刻官方安装器的 **core bundle** 步骤（`moon bundle --warn-list -a --all` + `--target wasm-gc --quiet`）；
+  - **fail closed**：下载/校验/版本任一失败直接报错，不会静默回退到 `latest`。
+- **CI 接线**：`.github/workflows/ci.yml` 的 11 个 job 定义（12 个运行 job）全部改用该 action；新增 `toolchain-pin-check` 工作流在 ubuntu + windows 双平台验证。
+- **实测**：pin check run [`44760450403`](https://github.com/WangYF0829/moonmux/actions/runs/44760450403) 双平台 success；CI run [`44760933782`](https://github.com/WangYF0829/moonmux/actions/runs/44760933782) 12/12 success。
+- **更新流程**：选择新的归档 release → 记录三个 sha256 → 更新 action 输入 → 跑 `toolchain-pin-check` → 全量 CI → 更新发布记录/本文件。
 
-```yaml
-# .github/workflows/ci.yml（未来上游放开固定版本后）
-env:
-  MOONBIT_INSTALL_VERSION: "0.1.20261012"   # unix.sh 也可用位置参数传版本
-steps:
-  - name: Install MoonBit (Unix)
-    run: curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-  - name: Install MoonBit (Windows)
-    shell: pwsh
-    run: irm https://cli.moonbitlang.com/install/powershell.ps1 | iex   # 仅读 MOONBIT_INSTALL_VERSION
-  - name: Verify pinned toolchain
-    run: moon version --all   # 并断言包含 0.1.20261012；不匹配则失败
-```
+### 4.4 残余风险与边界
 
-> 备注：上游未公开固定版本保留策略/校验方式；本次 403 与 `RELEASING.md`/`ci.yml` 注释中"旧版本 URL 403"的历史一致。
+- 归档是**第三方再发布**，不是 MoonBit 官方签名渠道；仓库内 SHA-256 只能保证“下载到的字节与首次固定值一致”，不能替代官方签名/来源证明。
+- 归档若被删除/不可访问，CI 会 **fail closed**（不是退回 latest）；届时需要重新归档/更新校验和。
+- GitHub Actions cache 只是加速，不是事实源；缓存未命中时仍按固定下载 + SHA-256 重建。
+- 官方 CDN 的固定版本 403 仍然存在；若未来官方开放固定版本，可把 action 的下载源换回官方 URL，校验逻辑不变。
+
+### 4.5 历史记录（官方 CDN 不可 pin 的原始取证）
+
+以下 4.1/4.2 保留为 2026-11-13 的事实记录，说明为什么需要第三方归档：
 
 ## 5. 风险登记
 

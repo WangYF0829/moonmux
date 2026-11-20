@@ -32,7 +32,7 @@
 |---|---|---|---|---|
 | R-UP-01 | `LL728/moonvorbis@0.1.4`（mooncakes 最新，2026-10-17 后无新版） | 内部约 51 处 `unsafe_get`，setup/码流解析缺少统一 bit-budget；不可信 Vorbis 输入可能越界读、panic 或 CPU/内存放大 | 中高 | **开放**；上游无修复版本；KI-01 / G1-M06 |
 | R-UP-02 | `LL728/moonopus@0.2.2` | Opus 音频 payload 只校验 TOC，不校验码流内容；健壮性依赖上游解码器 | 中 | 已登记（信任边界）；KI-02 |
-| R-UP-03 | MoonBit 工具链（`moon`/`moonc` 跟随 latest） | 滚动更新可能引入破坏性变更；2026-11-17 的 `size_hint` 弃用使 v0.9.7 在 `--deny-warn` 下编译失败（run 107），v0.9.8 改为 `capacity=` 修复 | 中 | 已发生并修复；仍无法 pin 版本（固定版本 URL 全线 403） |
+| R-UP-03 | MoonBit 工具链 | 滚动更新可能引入破坏性变更；2026-11-17 的 `size_hint` 弃用使 v0.9.7 在 `--deny-warn` 下编译失败（run 107），v0.9.8 改为 `capacity=` 修复 | 中 | 已修复，并已通过第三方归档 + SHA-256 **pin 到 `0.1.20261117`**；残留第三方归档信任/可用性（见 dependency-assessment §4） |
 | R-UP-04 | `LL728/moonvorbis` / `LL728/moonopus` / `moonbitlang/x` | 3/3 无 `SECURITY.md` 披露渠道，2/3 bus factor=1；上游维护性不足 | 中 | G1-B2 = **DEGRADED**；退出预案 fork/vendor |
 | R-UP-05 | `moonbitlang/x@0.5.5` | 上游 API/ABI 或行为变化可能影响 Ogg 页/流辅助；当前精确 pin + CI 覆盖 | 低 | 已登记；升级需回归 |
 
@@ -49,8 +49,8 @@
   因此 R-UP-01 目前是「已缓解、未上游修复、未正式上报」三项并存，不能标记为已解决。
 - **关闭条件**：上游发布修复版本并升级回归，或 moonmux fork/vendor 并对 `unsafe_get`/bit-budget 做完整补丁并经红队回归；
   在此之前 G1-M06 只能风险接受。
-- **工具链风险的特殊性**：R-UP-03 已实际发生过一次（v0.9.7 → v0.9.8）；CI 每个 job 记录 `moon version --all`，
-  但无法锁定版本，因此每次 latest 更新后都需要重新跑全量门禁。
+- **工具链风险的特殊性**：R-UP-03 已实际发生过一次（v0.9.7 → v0.9.8）；2026-11-20 起 CI 通过第三方归档 + SHA-256
+  pin 到 `0.1.20261117`，不再跟随 latest；残留风险转为归档来源/可用性，而不是“无法 pin”。
 
 ---
 

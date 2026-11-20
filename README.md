@@ -203,7 +203,7 @@ v0.4.0 新增库 API：`@ogg.PageReader` / `@ogg.for_each_page_chunked`（增量
 |---|---|---|
 | `LL728/moonvorbis@0.1.4` | 内部 `unsafe_get` / 缺统一 bit-budget；不可信 Vorbis 可能越界读、panic 或资源放大（R-UP-01） | 上游无修复版本；gate v3 + 内存/CPU 双预算缓解；**G1-M06 严格口径 FAIL（风险接受）**；不建议直接处理不可信输入 |
 | `LL728/moonopus@0.2.2` | Opus payload 只校验 TOC，不校验码流内容（R-UP-02） | 信任边界约束；KI-02 |
-| MoonBit 工具链 latest | 滚动更新可能引入破坏性变更；2026-11-17 `size_hint` 弃用使 0.9.7 编译失败（R-UP-03） | 0.9.8 已改 `capacity=` 修复；无法 pin 版本，每次 latest 更新重跑全量门禁 |
+| MoonBit 工具链 latest | 滚动更新可能引入破坏性变更；2026-11-17 `size_hint` 弃用使 0.9.7 编译失败（R-UP-03） | 0.9.8 已改 `capacity=` 修复；**已通过第三方归档 + SHA-256 pin 到 `0.1.20261117`**；残留归档信任/可用性 |
 | `moonbitlang/x@0.5.5` | 上游 API/ABI 变化（R-UP-05） | 精确 pin + CI 回归；低风险 |
 | 3 个直接依赖的维护性 | 3/3 无 `SECURITY.md`，2/3 bus factor=1（R-UP-04） | G1-B2 = DEGRADED；fork/vendor 退出预案 |
 
@@ -247,7 +247,7 @@ moon test
 - **`supported_targets`**：`moon.mod` 声明 `native` / `wasm-gc` / `js`（以此字段为唯一事实源；上表与之对齐）。
 - `wasm`（legacy）：本地 `--target all` 下 **0 个测试用例（未验证）**，不在 `supported_targets` 中，不应视为已支持。
 - **OS**：CI 常规矩阵为 `ubuntu-latest` + `windows-latest`；macOS 未验证。
-- **工具链**：CI 跟随 mooncakes 官方 latest（每个 job 记录 `moon version --all`）；v0.9.8 发布验证使用 moon `0.1.20261117` / moonc `0.10.21`；v0.9.4–v0.9.7 使用 moon `0.1.20261012` / moonc `0.10.15`（见 [docs/releases/v0.9.8.md](docs/releases/v0.9.8.md)）。工具链固定版本的可行性已评估：installer 支持版本参数，但**固定版本下载 URL 全线 403、latest 200**，故维持「latest + 版本记录」（详见 [docs/dependency-assessment.md](docs/dependency-assessment.md)）。
+- **工具链**：CI 使用 **pinned** `moon 0.1.20261117` / `moonc 0.10.21`（`.github/actions/setup-moonbit`，第三方归档 + 仓库内 SHA-256；不再跟随 latest）；v0.9.4–v0.9.7 使用 moon `0.1.20261012` / moonc `0.10.15`（见 [docs/releases/v0.9.8.md](docs/releases/v0.9.8.md)）。官方 CDN 的固定版本下载 URL 仍全线 403，故 pin 依赖归档；详见 [docs/dependency-assessment.md](docs/dependency-assessment.md) §4。
 - `supported_targets` 字段与上表不一致时视为缺陷。
 
 ## 质量门禁

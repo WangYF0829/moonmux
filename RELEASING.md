@@ -2,7 +2,7 @@
 
 > 面向对象：moonmux 发布负责人 / 复核人。
 > 适用范围：mooncakes.io（`WangYF0829/moonmux`）与 GitHub Release。
-> 工具链基线：`moon 0.1.20261012` / `moonc 0.10.15`（v0.9.3–v0.9.7 使用 moon 0.1.20261012；v0.9.8 使用 0.1.20261117（发布验证所用版本）；每次发布以 `moon version --all` 实际输出为准并记入发布记录）。
+> 工具链基线：`moon 0.1.20261117` / `moonc 0.10.21`（CI 通过 `.github/actions/setup-moonbit` pin 到该版本；v0.9.4–v0.9.7 使用 moon 0.1.20261012；每次发布以 `moon version --all` 实际输出为准并记入发布记录）。
 > 历史发布记录见 [`docs/releases/`](docs/releases/)。
 
 ## 0. 先记住三件事
@@ -168,7 +168,7 @@ moon deprecate WangYF0829/moonmux --undo
 | 覆盖率 CI 阈值余量 | 本地总 **82.57%** / 库层 91.82%；CI Linux 实测总 **80.11%**、未覆盖行 **697**（阈值 800）——**仅余 0.11pp** | qa 持续补测降低未覆盖行；新增防御分支须同步补测试；本版将该余量登记为最紧 SHOULD 风险 |
 | G1-B2 依赖维护性 = **DEGRADED** | 3/3 依赖近 12 个月有发布且未弃用、但 3/3 无 SECURITY.md、2/3 bus factor=1 且无接管预案；`moonvorbis` 有 `unsafe_get` 上游缺陷 | 已登记并给出退出预案（fork/替换/降级）与安全披露渠道评估，见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md)；KI-01 跟踪上游 issue；发布记录注明该状态 |
 | 上游依赖导致的风险（总表） | `moonvorbis` / `moonopus` / MoonBit 工具链 / `moonbitlang/x` 的根因风险，moonmux 无法在自身代码内完全修复 | **完整表 R-UP-01..05、边界声明、关闭条件与“上游 issue 尚未提交”状态**见 [`docs/known-issues.md`](docs/known-issues.md)「上游依赖导致的风险」；发布记录必须引用该节，不得宣称 G1-M06 已通过 |
-| 工具链无法固定到具体版本 | installer 支持版本参数，但**固定版本下载 URL 全线 403**（latest 200），CI 只能跟随 latest | 维持「latest + 每个 job 记录 `moon version --all`」；发布记录固定工具链版本；结论与复验命令见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md) |
+| 工具链 pin 依赖第三方归档 | 官方固定版本 URL 全线 403；CI 改用 `chawyehsu/moonbit-binaries` 归档的官方构建，并以仓库内 SHA-256 校验 | **已 pin `0.1.20261117`**（`.github/actions/setup-moonbit`，fail-closed，不回落 latest）；残留归档来源/可用性风险；结论与复验命令见 [`docs/dependency-assessment.md`](docs/dependency-assessment.md) §4 |
 | 历史发布包 PII（0.2.0–0.9.1） | 作者联系方式存在于不可撤回的历史版本与 git 历史 | 已接受风险并发布公告：[`docs/security/pii-advisory.md`](docs/security/pii-advisory.md) + [`docs/known-issues.md`](docs/known-issues.md) KI-03；当前版本已干净，`check_pii.sh` 纳入发布检查单 |
 | 真实 Vorbis 解码慢（依赖缺陷） | debug native 下 `testdata/vorbis_sample.ogg` to-wav 约 92.6 s（O(n²) IMDCT + Huffman 逐 bit 线性扫表）；release/Linux 未实测 | 属依赖解码器真实慢，非预算误拒；长文件建议 `split`；预算只做放大比拒绝 |
 | `to-wav` 残余风险 | ① Huffman 码长表有效性由解码器判定；② floor1 `x` 序等语义不在 gate 覆盖；③ 内存模型为上界估算；④ **CPU 双预算 debug 上限约 18 ms/字节**（真实样本 92.6 s 接近硬约束；余量 IMDCT ×1.43 / Huffman ×1.49），高码长 + 多符号合法流可能被误拒；⑤ 依赖 `moonvorbis` 的 `unsafe_get` | README 能力边界声明「不建议直接处理不可信输入」；gate v3 已修复 RT4-01（6,511 B PoC exit 1 / 0.87 s）并回归 RT3 19 组、此前 75 组红队 PoC；后续可细化 Huffman 成本或推动依赖 O(1) 查表 |
