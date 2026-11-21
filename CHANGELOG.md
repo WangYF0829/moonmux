@@ -58,7 +58,8 @@
 ### Changed
 
 - CI `push` **不再用 `paths-ignore` 跳过 `**.md` / `LICENSE`**：README、CHANGELOG、LICENSE、docs 等都进入发布包，文档推送同样需要跑版本一致性、包内容与可复现性门禁。README/申报书中的“文档-only 不触发 CI”表述同步删除。
-- 新增 2 个路径回归测试（根相对/verbatim）：Windows native 480 → **482**、Linux CI 477 → **479**；wasm-gc/js 428 不变。\n- 发布流程新增/补强回滚演练证据：`moon deprecate WangYF0829/moonmux --dry-run --reason …` 实测输出（15 个历史版本逐条 “Would deprecate …”，exit 0）归档到 `_review/evidence/release/`。
+- 新增 2 个路径回归测试（根相对/verbatim）：Windows native 480 → **482**、Linux CI 477 → **479**；wasm-gc/js 428 不变。
+- 发布流程新增/补强回滚演练证据：`moon deprecate WangYF0829/moonmux --dry-run --reason …` 实测输出（15 个历史版本逐条 “Would deprecate …”，exit 0）归档到 `_review/evidence/release/`。
 
 ## [0.9.5] — 2026-11-15
 
@@ -178,7 +179,7 @@
   `moon package --list` 白名单门禁（只允许仓库内的源码/文档/测试数据进包），覆盖率阈值 730→780
   （容差 20，上限 800）；fuzz 增加 stderr panic 检测；修复 smoke 在 Windows Git Bash
   下使用 `/tmp` 导致原生 `@fs` 无法建目录的回归（优先进 `_build/smoke.*`）。
-- **隐私**：项目申报书移除个人手机号/邮箱，改为仓库 Issue 联系方式。
+- **隐私**：项目申报书移除个人联系方式，改为仓库 Issue 联系方式。
 
 ### 测试
 - Windows native **369/369**、wasm-gc **344/344**、`moon check --deny-warn` 零警告；
@@ -224,7 +225,7 @@
   restore/commit/备份删除失败不再静默；`looks_like_packet_member` 收紧 8.3 短名。
 - **POSIX**：反斜杠不再当分隔符、`C:foo` 不再被误当作绝对路径。
 - **manifest**：拒绝重复 `serial/packets/chain` 头字段。
-- **CI/工程**：checkout 固定到 v4.2.2 SHA、每个 job 记录工具链版本（官方安装脚本对旧版本 URL 返回 403，暂无法 pin）；文档-only 推送跳过 CI；
+- **CI/工程**：checkout 固定到 v4.2.2 SHA、每个 job 记录工具链版本（官方安装脚本对旧版本 URL 返回 403，暂无法 pin；**2026-11-20 已通过第三方归档 + SHA-256 pin 到 `0.1.20261117`**）；文档-only 推送跳过 CI；
   `install` job 轮询等待 mooncakes 发布；新增 Windows smoke job 与版本一致性断言脚本；
   install_check 去掉 Python 依赖、smoke/安装脚本 `mktemp` 可移植；bench/fuzz 使用
   唯一临时目录、区分启动失败与超时、fuzz 覆盖 remux。

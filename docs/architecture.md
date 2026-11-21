@@ -100,7 +100,7 @@ mdat → 按 chunk 切出样本（= Opus 包）
 | 可安装性 | `scripts/install_check.sh`：干净工程 `moon add` → 调用公开 API → 运行 |
 | 性能基准 | `scripts/bench.mjs`（release native，端到端计时，含进程启动；`--runs 5 --batches 2` 多批次采样）；本地基线 `scripts/bench-baseline.json` + `--baseline` / `--fail-over` 阈值（默认 10%；**小操作 <50 ms 用 4 ms 绝对噪声下限**；`demux` 为 I/O 密集取 6 次测量上界 80 ms；平台不匹配只 WARN 的平台守卫）；CI `bench` job 用共享 runner 放宽到 50% 作粗粒度回归告警 |
 | 变异测试 | `scripts/fuzz.mjs`（真实样本 × 6 类变异，断言退出码 0/1/2、无超时/崩溃；CI `fuzz` job 固定种子 400 次）+ 各包 `*_fuzz_wbtest.mbt` 确定性用例 |
-| 门禁 | CI **11 个 job**：`check`（check/fmt/info/test × 2 OS + `--target all` + **API 文档覆盖 100%** + 版本一致性 + 包清单 / worktree / 生成物 / 密钥）、`api-diff`（上一发布 tag 的 `.mbti` diff，**已对 `--target-all` 各后端接口**）、`coverage`（未覆盖行 ≤ 780+20 + **库层 ≥88% / 总 ≥80%** 门限）、`native`（smoke）、`examples`（三示例实跑）、`mp4`（ffprobe）、`install`（等待发布并复测）、`publish-dry-run`（不真实发布）、`bench`（基线阈值）、`fuzz`、`smoke-windows` |
+| 门禁 | CI **12 个运行 job**：`check`（check/fmt/info/test × 2 OS + `--target all` + **API 文档覆盖 100%** + 版本一致性 + 包清单 / worktree / 生成物 / 密钥）、`api-diff`（上一发布 tag 的 `.mbti` diff，**已对 `--target-all` 各后端接口**）、`coverage`（未覆盖行 ≤ 780+20 + **库层 ≥88% / 总 ≥80%** 门限）、`native`（smoke）、`examples`（三示例实跑）、`mp4`（ffprobe）、`install`（等待发布并复测）、`publish-dry-run`（不真实发布）、`bench`（基线阈值）、`fuzz`、`smoke-windows` |
 | 发布前预检 | `scripts/preflight_release.sh`：一键串跑 worktree / 版本 / 格式 / check / test all / api-diff / api-docs / 覆盖率（总 ≥80%）/ PII / 包内容 / SBOM / bench / fuzz / smoke，输出 PASS/FAIL 汇总；支持 `--allow-dirty`、`--skip-bench` / `--skip-fuzz` / `--skip-smoke`、`--total-threshold` / `--lib-threshold` |
 | 安装抽样 | [`docs/releases/v0.9.3-install-sampling.md`](releases/v0.9.3-install-sampling.md)：G1-01 冷装抽样 **30/30 = 100%**（≥99%），附加 3 次删除 `.mooncakes` 重解析后合计 **33/33**，中位 **1980 ms**；局限：工程级冷装、Windows x64 |
 

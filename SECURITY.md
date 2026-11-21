@@ -64,7 +64,7 @@ MoonBit 生态在 1.0 前不承诺公开 API 稳定；安全修复按 `RELEASING
 |---|---|---|
 | `LL728/moonvorbis@0.1.4` | `unsafe_get` / 缺 bit-budget；不可信 Vorbis 可能越界读或资源放大 | 开放；无上游修复；gate v3 缓解；**G1-M06 严格口径 FAIL（风险接受）** |
 | `LL728/moonopus@0.2.2` | Opus payload 只校验 TOC，不校验码流内容 | 信任边界约束；KI-02 |
-| MoonBit 工具链 latest | 滚动更新可能引入破坏性变更（2026-11-17 `size_hint` 弃用使 0.9.7 编译失败） | 0.9.8 已适配；无法 pin 版本，持续复验 |
+| MoonBit 工具链 latest | 滚动更新可能引入破坏性变更（2026-11-17 `size_hint` 弃用使 0.9.7 编译失败） | 0.9.8 已适配；**已通过第三方归档 + SHA-256 pin 到 `0.1.20261117`**；残留归档信任/可用性 |
 | `moonbitlang/x@0.5.5` | 上游 API/ABI 变化 | 精确 pin + CI 回归；低风险 |
 
 **明确声明**：上述风险不是 moonmux 源码中的漏洞；本项目不宣称已通过 G1-M06。上游 issue **尚未提交**
